@@ -1,0 +1,65 @@
+{
+  "name": "dsh-wechat-media",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Personal WeChat for DeepSeek Harness (dsh): QR-code login over Tencent's iLink channel, one DSH conversation per contact or group, and two-way text, image, video, document and archive transfer",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "wechat",
+    "weixin",
+    "ilink",
+    "clawbot",
+    "bridge",
+    "media"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wjh-ux/dsh-wechat-media.git"
+  },
+  "homepage": "https://github.com/wjh-ux/dsh-wechat-media#readme",
+  "bugs": {
+    "url": "https://github.com/wjh-ux/dsh-wechat-media/issues"
+  },
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "ilink.js",
+    "login.js",
+    "media.js",
+    "state.js",
+    "vendor/qrcode-generator.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-store",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
