@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # The package has no dependencies and no build step: the suites are plain
+      # node scripts, each printing "N passed, M failed" and exiting non-zero.
+      - name: Run every suite
+        run: |
+          set -e
+          for suite in test/*.test.mjs; do
+            echo "== $suite"
+            node "$suite"
+          done
