@@ -227,6 +227,12 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       clearTimeout(waiting.timer);
       pending.delete(key);
       waiting.resolve(outcome);
+      // Confirm in the chat. Reported from real use: answering and then hearing
+      // nothing back is indistinguishable from being ignored.
+      const confirmation = outcome === "allowed-once" ? "✅ 已批准，本次操作继续。" : "🚫 已拒绝，本次操作已取消。";
+      Promise.resolve()
+        .then(() => notify?.(waiting.account, chatId, confirmation))
+        .catch(() => {});
       return true;
     },
 
@@ -256,7 +262,8 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
           pending.delete(key);
           resolve(undefined);
         }, Math.max(1, Number(limit) || timeoutMs));
-        pending.set(key, { resolve, timer, requestedAt: Date.now() });
+        // The account is kept so the answer can be confirmed in the same chat.
+        pending.set(key, { resolve, timer, requestedAt: Date.now(), account });
         // The requester may cancel while we wait (turn aborted, session closed).
         request?.signal?.addEventListener?.("abort", () => {
           clearTimeout(timer);
