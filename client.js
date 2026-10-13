@@ -129,6 +129,7 @@ window.__ModuleLoader__.load({
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           blockedCount: "blocked",
           testApproval: "Test approval",
+          testApprovalHint: "Opens a small page that sends the approval prompt (this browser does not deliver the card's POST).",
           working: "Working…",
           testApprovalSending: "Sending the approval prompt…",
           testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here).",
@@ -173,6 +174,7 @@ window.__ModuleLoader__.load({
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
+          testApprovalHint: "会打开一个小页面来发送审批提示（这个浏览器不会把卡片的 POST 送到插件）。",
           working: "处理中…",
           testApprovalSending: "正在发送审批提示…",
           testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（也可以在卡片上取消）。",
@@ -321,27 +323,6 @@ window.__ModuleLoader__.load({
          * the same path a real approval takes on the WeChat side, so it verifies
          * the round trip without needing a sensitive tool call first.
          */
-        async function runApprovalSelfTest() {
-          setBusy(true);
-          setFailed(false);
-          setMessage(t("testApprovalSending", "Sending the approval prompt…"));
-          try {
-            const result = await api("/test-approval", { method: "POST", body: {} });
-            if (result.sent) {
-              setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here)."));
-            } else if (result.reason === "pending") {
-              setMessage(t("testApprovalPending", "An approval is already waiting in this chat - answer it in WeChat, or cancel it here."));
-            } else {
-              setFailed(true);
-              setMessage(`${t("testApprovalFailed", "The prompt could not be sent")}: ${result.error ?? "?"}`);
-            }
-          } catch (problem) {
-            setFailed(true);
-            setMessage(String(problem?.message ?? problem));
-          } finally {
-            setBusy(false);
-          }
-        }
 
         const accounts = snapshot?.accounts ?? [];
         const pairedCount = accounts.length;
@@ -410,10 +391,17 @@ window.__ModuleLoader__.load({
           h("div", { key: "contacts", className: "dswxCard" }, [
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("contacts", "Contacts & groups")),
-              h("button", { key: "test", type: "button", className: "dswxBtn", disabled: busy, onClick: runApprovalSelfTest },
-                busy ? t("working", "Working…")
-                  : (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳"
-                    : t("testApproval", "Test approval")),
+              // A link, not a fetch: in the reporter's browser a POST from the card
+              // never reached the plugin (no entry in /state.recentRoutes) while the
+              // same URL fetched as GET worked every time. This opens that page.
+              h("a", {
+                key: "test",
+                className: "dswxBtn",
+                href: `${BASE}/send-test-approval`,
+                target: "_blank",
+                rel: "noreferrer",
+                title: t("testApprovalHint", "Opens a small page that sends the approval prompt"),
+              }, (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳" : t("testApproval", "Test approval")),
               h("label", { key: "l", className: "dswxMeta" }, [
                 h("input", {
                   key: "c",
