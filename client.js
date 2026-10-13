@@ -116,6 +116,21 @@ window.__ModuleLoader__.load({
           offline: "not running",
           error: "error",
           chats: "conversations",
+          contacts: "Contacts & groups",
+          contactsEmpty: "Nobody has written to it yet.",
+          allowed: "Allowed",
+          blocked: "Ignored",
+          undecided: "Undecided",
+          allow: "Allow",
+          block: "Ignore",
+          clearDecision: "Clear",
+          requireAllowlist: "Only accept allowlisted chats",
+          allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
+          approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
+          testApproval: "Test approval",
+          testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s).",
+          approvalAnswer: "Answer received",
+          approvalNoAnswer: "No answer within the timeout - a real request would fall back to the GUI the same way.",
           scanHint: "Scan with WeChat on your phone. Scanning a different WeChat account adds it as another account; the same account just refreshes its login. Credentials stay on this machine, so restarting dsh needs no new scan.",
           refresh: "Refresh",
         },
@@ -139,6 +154,21 @@ window.__ModuleLoader__.load({
           offline: "未运行",
           error: "异常",
           chats: "个会话",
+          contacts: "联系人 / 群",
+          contactsEmpty: "还没有人给它发过消息。",
+          allowed: "已允许",
+          blocked: "已忽略",
+          undecided: "未决定",
+          allow: "允许",
+          block: "忽略",
+          clearDecision: "清除",
+          requireAllowlist: "只接收白名单内的联系人与群",
+          allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
+          approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
+          testApproval: "测试审批",
+          testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（最多等 120 秒）。",
+          approvalAnswer: "已收到答复",
+          approvalNoAnswer: "超时没等到答复 —— 真实审批也会这样回落到 GUI。",
           scanHint: "用手机微信扫码。扫**不同的微信号**就是再加一个账号；扫同一个号只是刷新登录。凭证保存在本机，重启 dsh 不需要重扫。",
           refresh: "刷新",
         },
@@ -229,8 +259,69 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Allow, ignore, or clear the decision for one chat. */
+        async function decide(accountId, chatId, allowed) {
+          setBusy(true);
+          try {
+            await api("/peers", { method: "POST", body: { accountId, chatId, allowed } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function setAllowlist(requireAllowlist) {
+          setBusy(true);
+          try {
+            await api("/prefs", { method: "POST", body: { requireAllowlist } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+        /**
+         * Send the approval prompt to WeChat and wait for the 1/2 answer. This is
+         * the same path a real approval takes on the WeChat side, so it verifies
+         * the round trip without needing a sensitive tool call first.
+         */
+        async function runApprovalSelfTest() {
+          setBusy(true);
+          setFailed(false);
+          setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s)."));
+          try {
+            const result = await api("/test-approval", { method: "POST", body: {} });
+            if (result.answered) {
+              setMessage(`${t("approvalAnswer", "Answer received")}: ${result.outcome}`);
+            } else {
+              setFailed(true);
+              setMessage(t("approvalNoAnswer", "No answer within the timeout - a real request would fall back to the GUI the same way."));
+            }
+          } catch (problem) {
+            setFailed(true);
+            setMessage(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         const accounts = snapshot?.accounts ?? [];
         const pairedCount = accounts.length;
+
+        /** Every chat the bridge has seen, flattened for the allowlist panel. */
+        const peerRows = [];
+        for (const [accountId, chats] of Object.entries(snapshot?.peers ?? {})) {
+          for (const [chatId, peer] of Object.entries(chats ?? {})) {
+            peerRows.push({ accountId, chatId, ...peer });
+          }
+        }
+        const decisionLabel = (peer) =>
+          peer?.allowed === true ? t("allowed", "Allowed")
+            : peer?.allowed === false ? t("blocked", "Ignored")
+              : t("undecided", "Undecided");
 
         const status = pairedCount === 0
           ? t("empty", "No WeChat account is paired yet.")
@@ -280,6 +371,47 @@ window.__ModuleLoader__.load({
               h("button", { type: "button", className: "dswxBtn", disabled: busy, onClick: () => unpair(account.accountId) }, t("logout", "Unpair")),
             ]),
           ])),
+
+          h("div", { key: "contacts", className: "dswxCard" }, [
+            h("div", { key: "head", className: "dswxRow" }, [
+              h("strong", { key: "t" }, t("contacts", "Contacts & groups")),
+              h("button", { key: "test", type: "button", className: "dswxBtn", disabled: busy, onClick: runApprovalSelfTest },
+                t("testApproval", "Test approval")),
+              h("label", { key: "l", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  checked: Boolean(snapshot?.prefs?.requireAllowlist),
+                  disabled: busy,
+                  onChange: (event) => setAllowlist(event.target.checked),
+                }),
+                " " + t("requireAllowlist", "Only accept allowlisted chats"),
+              ]),
+            ]),
+            peerRows.length === 0
+              ? h("p", { key: "none", className: "dswxMeta" }, t("contactsEmpty", "Nobody has written to it yet."))
+              : null,
+            // Turning the switch on while no chat is allowed mutes everyone,
+            // including the person holding the phone - say so instead of letting
+            // them wonder why the bot went quiet.
+            snapshot?.prefs?.requireAllowlist && peerRows.every((peer) => peer.allowed !== true)
+              ? h("p", { key: "warn", className: "dswxMsg dswxErr" }, t("allowlistWarning", "The allowlist is on: any chat that is not set to Allowed - including your own - is ignored silently."))
+              : null,
+            ...peerRows.map((peer) => h("div", { key: `${peer.accountId}|${peer.chatId}`, className: "dswxAccount" }, [
+              h("div", { key: "l1", className: "dswxRow" }, [
+                h("span", { key: "n", className: "dswxName" }, peer.name ?? peer.chatId),
+                h("span", { key: "k", className: "dswxMeta" }, peer.kind === "group" ? "群 / group" : "私聊 / direct"),
+                h("span", { key: "d", className: "dswxMeta" }, decisionLabel(peer)),
+              ]),
+              h("div", { key: "l2", className: "dswxMeta" }, peer.chatId),
+              h("div", { key: "l3", className: "dswxRow" }, [
+                h("button", { key: "a", type: "button", className: "dswxBtn", disabled: busy, onClick: () => decide(peer.accountId, peer.chatId, true) }, t("allow", "Allow")),
+                h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: () => decide(peer.accountId, peer.chatId, false) }, t("block", "Ignore")),
+                h("button", { key: "c", type: "button", className: "dswxBtn", disabled: busy, onClick: () => decide(peer.accountId, peer.chatId, null) }, t("clearDecision", "Clear")),
+              ]),
+            ])),
+            h("p", { key: "approval", className: "dswxHint" }, t("approvalHint", "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.")),
+          ]),
 
           pending ? h("div", { key: "qr", className: "dswxQr" }, [
             pending.hasQr
