@@ -129,6 +129,8 @@ window.__ModuleLoader__.load({
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           blockedCount: "blocked",
           testApproval: "Test approval",
+          working: "Working…",
+          testApprovalSending: "Sending the approval prompt…",
           testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here).",
           lastApproval: "Last approval",
           testApprovalPending: "An approval is already waiting in this chat - answer it in WeChat, or cancel it here.",
@@ -171,6 +173,8 @@ window.__ModuleLoader__.load({
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
+          working: "处理中…",
+          testApprovalSending: "正在发送审批提示…",
           testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（也可以在卡片上取消）。",
           lastApproval: "最近一次审批",
           testApprovalPending: "这条对话已有一条审批在等待 —— 请在微信回 1/2，或在卡片上取消。",
@@ -212,6 +216,14 @@ window.__ModuleLoader__.load({
           const timer = setInterval(refresh, POLL_MS);
           return () => clearInterval(timer);
         }, [refresh]);
+
+        // Safety net: every button is disabled while `busy` is true, so one stuck
+        // request would make the whole card look dead. Release it automatically.
+        react.useEffect(() => {
+          if (!busy) return undefined;
+          const timer = setTimeout(() => setBusy(false), 30000);
+          return () => clearTimeout(timer);
+        }, [busy]);
 
         const pending = snapshot?.logins?.find((login) => login.phase === "pending" || login.phase === "redirect" || login.phase === "replace");
 
@@ -312,7 +324,7 @@ window.__ModuleLoader__.load({
         async function runApprovalSelfTest() {
           setBusy(true);
           setFailed(false);
-          setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s)."));
+          setMessage(t("testApprovalSending", "Sending the approval prompt…"));
           try {
             const result = await api("/test-approval", { method: "POST", body: {} });
             if (result.sent) {
@@ -399,7 +411,9 @@ window.__ModuleLoader__.load({
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("contacts", "Contacts & groups")),
               h("button", { key: "test", type: "button", className: "dswxBtn", disabled: busy, onClick: runApprovalSelfTest },
-                t("testApproval", "Test approval")),
+                busy ? t("working", "Working…")
+                  : (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳"
+                    : t("testApproval", "Test approval")),
               h("label", { key: "l", className: "dswxMeta" }, [
                 h("input", {
                   key: "c",
