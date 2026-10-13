@@ -127,6 +127,10 @@ window.__ModuleLoader__.load({
           requireAllowlist: "Only accept allowlisted chats",
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
+          inboxLabel: "Inbound files are saved in",
+          inboxPlaceholder: "absolute path, e.g. D:\\wechat-files",
+          save: "Save",
+          inboxFormHint: "Saving opens the control panel; use the back button there to return.",
           blockedCount: "blocked",
           testApproval: "Test approval",
           testApprovalUrl: "or open this URL",
@@ -174,6 +178,10 @@ window.__ModuleLoader__.load({
           requireAllowlist: "只接收白名单内的联系人与群",
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
+          inboxLabel: "微信收到的文件保存在",
+          inboxPlaceholder: "绝对路径，例如 D:\\wechat-files",
+          save: "保存",
+          inboxFormHint: "保存会打开控制面板页面，保存完用那里的「返回 DSH」按钮回来。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
           testApprovalUrl: "或直接打开这个网址",
@@ -513,8 +521,18 @@ window.__ModuleLoader__.load({
           ]) : null,
 
           error ? h("p", { key: "err", className: "dswxMsg dswxErr" }, error) : null,
+          h("div", { key: "inbox", className: "dswxHint" }, [
+            h("p", { key: "t" }, `${t("inboxLabel", "Inbound files are saved in")}: ${snapshot?.inboxRoot ?? "…"}`),
+            // A real form submit (a navigation) rather than a fetch, so it works even
+            // in browsers where the card's requests never reach the plugin.
+            h("form", { key: "f", action: `${BASE}/panel`, method: "get", className: "dswxRow" }, [
+              h("input", { key: "i", className: "dswxInput", name: "inboxDir", placeholder: t("inboxPlaceholder", "absolute path, e.g. D:\\wechat-files") }),
+              h("button", { key: "b", type: "submit", className: "dswxBtn" }, t("save", "Save")),
+            ]),
+            h("p", { key: "h", className: "dswxMeta" }, t("inboxFormHint", "Saving opens the control panel; use the back button there to return.")),
+          ]),
           snapshot?.inboxRoot
-            ? h("p", { key: "inbox", className: "dswxHint" }, `微信收到的文件保存在 ${snapshot.inboxRoot}`)
+            ? null
             : null,
         ]);
       }
