@@ -192,5 +192,23 @@ await test("an answer is confirmed in the chat", async () => {
     assert.equal(notify.sent[1].chatId, "chat-a", "the confirmation goes to the asking chat");
   }
 });
+await test("pending questions are listed and can be cancelled from DSH", async () => {
+  const notify = recorder();
+  const bridge = createApprovalBridge({ notify, timeoutMs: 5000 });
+  const waiting = bridge.ask(account, "chat-a", request(), { accountId: "acct-one" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const list = bridge.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].chatId, "chat-a");
+  assert.equal(list[0].accountId, "acct-one");
+  assert.equal(list[0].toolName, "pwsh");
+  assert.ok(list[0].waitedMs >= 0);
+  assert.equal(bridge.cancel("acct-one", "chat-a"), true);
+  assert.equal(await waiting, undefined, "cancelling means 'ask someone else', so the GUI takes over");
+  assert.equal(bridge.pending.size, 0);
+  assert.equal(bridge.cancel("acct-one", "chat-a"), false, "cancelling twice is a no-op");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(notify.sent.length, 2, "the chat is told the approval was cancelled in DSH");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
