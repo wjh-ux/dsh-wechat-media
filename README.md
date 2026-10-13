@@ -68,7 +68,11 @@ configurable, and the change takes effect without a restart:
 1. **From the card** - the field under *Inbound files are saved in* submits a plain GET form (a navigation, not a
    fetch), so it works even in browsers where the card's requests never reach the plugin.
 2. **From the control panel** - `/dsh-wechat-media/panel` has the same field and a *restore default* button.
-3. **From the plugin config** - `inboxDir: "D:\\wechat-files"` in the plugin options, used when no runtime
+3. **With the system folder dialog** - *Browse… / 浏览…* (card and control panel) or
+   `GET /dsh-wechat-media/pick-folder` opens Windows' own picker on the desktop and saves the choice. A browser
+   cannot hand over an absolute path (a directory input only exposes relative names), which is why the dialog is
+   opened by the host (`powershell -STA`) rather than in the page.
+4. **From the plugin config** - `inboxDir: "D:\\wechat-files"` in the plugin options, used when no runtime
    preference is set.
 
 The order is preference (card/panel) → config → `$DSH_HOME/wechat-inbox`. Only an absolute path is accepted: a
