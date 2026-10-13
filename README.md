@@ -161,8 +161,8 @@ token will collide.
 
 ## License / 许可
 
-MIT — see [LICENSE](./LICENSE). The vendored QR encoder keeps its own MIT notice in
-`vendor/qrcode-generator.mjs`.
+MIT — see [LICENSE](./LICENSE). The vendored QR encoder and the ported protocol client keep their own
+notices, listed in [THIRD-PARTY.md](./THIRD-PARTY.md).
 
 WeChat and Weixin are trademarks of Tencent. This project is unofficial and is not affiliated with Tencent
 or DeepSeek.
