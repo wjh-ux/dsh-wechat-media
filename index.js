@@ -235,9 +235,13 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
      * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
      *   "no answer" - the caller must delegate so the GUI still gets its prompt.
      */
-    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs } = {}) {
+    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs, accountId } = {}) {
       if (typeof notify !== "function") return undefined;
-      const key = keyOf(account?.accountId ?? account?.botId, chatId);
+      // Key by the id the *inbound* path uses (the monitor's account id), never by
+      // whatever the account record happens to call itself: a botId/accountId
+      // mismatch left a "1"/"2" reply unmatched, so it reached the agent as an
+      // ordinary message instead of answering the approval. Found live, not by test.
+      const key = keyOf(accountId ?? account?.accountId ?? account?.botId, chatId);
       // One question per chat at a time: a second one makes "1"/"2" ambiguous.
       if (pending.has(key)) return undefined;
       try {
@@ -281,7 +285,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
         const account = await loadAccount?.(conversation.accountId);
         if (!account?.token) return next();
         // Undefined means "ask someone else": the GUI's own prompt stays intact.
-        return (await bridge.ask(account, conversation.chatId, request)) ?? next();
+        return (await bridge.ask(account, conversation.chatId, request, { accountId: conversation.accountId })) ?? next();
       } catch (error) {
         logger?.warn?.("[dsh-wechat-media] approval bridge failed: %s", error?.message ?? error);
         return next();
@@ -1167,7 +1171,7 @@ export function apply(ctx, config = {}) {
           const outcome = await approvals.ask(account, chatId, {
             toolName: body.toolName ?? "dsh-wechat-media self-test",
             reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
-          }, { timeoutMs });
+          }, { timeoutMs, accountId });
           json(res, 200, { ok: true, accountId, chatId, answered: Boolean(outcome), outcome: outcome ?? null });
         },
       },
