@@ -130,6 +130,7 @@ window.__ModuleLoader__.load({
           blockedCount: "blocked",
           testApproval: "Test approval",
           testApprovalUrl: "or open this URL",
+          openPanel: "Control panel",
           testApprovalHint: "Opens a small page that sends the approval prompt (this browser does not deliver the card's POST).",
           working: "Working…",
           testApprovalSending: "Sending the approval prompt…",
@@ -176,6 +177,7 @@ window.__ModuleLoader__.load({
           blockedCount: "已拦截",
           testApproval: "测试审批",
           testApprovalUrl: "或直接打开这个网址",
+          openPanel: "控制面板",
           testApprovalHint: "会打开一个小页面来发送审批提示（这个浏览器不会把卡片的 POST 送到插件）。",
           working: "处理中…",
           testApprovalSending: "正在发送审批提示…",
@@ -423,12 +425,13 @@ window.__ModuleLoader__.load({
               // Fetched as GET on purpose: in the reporter's browser every POST from
               // the card was swallowed before reaching the plugin, while GETs always
               // worked. The route answers JSON for GET now, so no new tab is needed.
-              h("button", { key: "test", type: "button", className: "dswxBtn", disabled: busy, onClick: runApprovalSelfTest },
-                busy ? t("working", "Working…")
-                  : (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳"
-                    : t("testApproval", "Test approval")),
-              h("span", { key: "url", className: "dswxMeta" },
-                t("testApprovalUrl", "or open this URL") + ": " + `${BASE}/send-test-approval`),
+              // Plain links on purpose: in the reporter's browser the card's fetch
+              // never reached the plugin, while navigation did. Same window, so no
+              // popup blocker can interfere; use the browser's back button to return.
+              h("a", { key: "test", className: "dswxBtn", href: `${BASE}/send-test-approval`, style: { cursor: "pointer" } },
+                t("testApproval", "Test approval")),
+              h("a", { key: "panel", className: "dswxBtn", href: `${BASE}/panel`, style: { cursor: "pointer" } },
+                t("openPanel", "Control panel")),
               h("label", { key: "l", className: "dswxMeta" }, [
                 h("input", {
                   key: "c",
