@@ -130,6 +130,7 @@ window.__ModuleLoader__.load({
           inboxLabel: "Inbound files are saved in",
           inboxPlaceholder: "absolute path, e.g. D:\\wechat-files",
           save: "Save",
+          browse: "Browse…",
           inboxFormHint: "Saving opens the control panel; use the back button there to return.",
           blockedCount: "blocked",
           testApproval: "Test approval",
@@ -181,6 +182,7 @@ window.__ModuleLoader__.load({
           inboxLabel: "微信收到的文件保存在",
           inboxPlaceholder: "绝对路径，例如 D:\\wechat-files",
           save: "保存",
+          browse: "浏览…",
           inboxFormHint: "保存会打开控制面板页面，保存完用那里的「返回 DSH」按钮回来。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
@@ -528,6 +530,7 @@ window.__ModuleLoader__.load({
             h("form", { key: "f", action: `${BASE}/panel`, method: "get", className: "dswxRow" }, [
               h("input", { key: "i", className: "dswxInput", name: "inboxDir", placeholder: t("inboxPlaceholder", "absolute path, e.g. D:\\wechat-files") }),
               h("button", { key: "b", type: "submit", className: "dswxBtn" }, t("save", "Save")),
+              h("a", { key: "p", className: "dswxBtn", href: `${BASE}/pick-folder`, style: { cursor: "pointer" } }, t("browse", "Browse…")),
             ]),
             h("p", { key: "h", className: "dswxMeta" }, t("inboxFormHint", "Saving opens the control panel; use the back button there to return.")),
           ]),
