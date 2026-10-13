@@ -641,6 +641,15 @@ export function apply(ctx, config = {}) {
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
   const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0 };
+  /**
+   * The last few control-route calls, so "I clicked and nothing happened" can be
+   * answered from the server side: did the request arrive, and what did it do?
+   */
+  const routeLog = [];
+  function noteRoute(path, info = {}) {
+    routeLog.push({ path, at: new Date().toISOString(), ...info });
+    if (routeLog.length > 20) routeLog.shift();
+  }
   const approvals = createApprovalBridge({
     notify: (account, chatId, text) => sendText(account, chatId, text, { typing: false }),
     timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
@@ -1067,6 +1076,7 @@ export function apply(ctx, config = {}) {
             counters: { ...counters },
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
+            recentRoutes: [...routeLog],
             lastInbound: Object.fromEntries(lastInbound.entries()),
             accounts: accounts.map((account) => {
               const control = monitors.get(account.accountId);
@@ -1267,6 +1277,7 @@ export function apply(ctx, config = {}) {
               (error) => done({ sent: false, error: String(error?.message ?? error) }),
             );
           });
+          noteRoute("/test-approval", { chatId, sent: send.sent === true, error: send.error ?? null });
           json(res, 200, {
             ok: send.sent === true,
             accountId,
@@ -1298,6 +1309,7 @@ export function apply(ctx, config = {}) {
             || Object.keys(routes[accountId] ?? {})[0];
           if (!chatId) return json(res, 400, { error: "no chat yet: write to the bot once or pass chatId" });
           const envelope = syntheticInbound({ chatId, text: body.text, fromUserId: body.fromUserId });
+          noteRoute("/debug/inbound", { chatId, text: String(body.text ?? "").slice(0, 40) });
           await handleInbound(accountId, envelope);
           const after = await state.loadRoutes();
           json(res, 200, {
@@ -1311,6 +1323,7 @@ export function apply(ctx, config = {}) {
             counters: { ...counters },
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
+            recentRoutes: [...routeLog],
           });
         },
       },
@@ -1327,6 +1340,7 @@ export function apply(ctx, config = {}) {
           const chatId = String(body.chatId ?? "") || approvals.list()[0]?.chatId || "";
           if (!chatId) return json(res, 400, { error: "no approval is pending" });
           const cancelled = approvals.cancel(accountId, chatId);
+          noteRoute("/approvals/cancel", { chatId, cancelled });
           json(res, 200, { ok: true, cancelled, approvals: approvals.list() });
         },
       },
