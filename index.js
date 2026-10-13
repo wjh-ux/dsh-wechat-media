@@ -179,6 +179,101 @@ export function formatApprovalPrompt(request = {}, { maxArgumentChars = 400 } = 
 export function noteBlocked(peer, now = new Date().toISOString()) {
   return { blockedCount: (Number(peer?.blockedCount) || 0) + 1, blockedAt: now };
 }
+
+/**
+ * The approval bridge: ask the human in WeChat, wait for a 1/2 answer, and never
+ * swallow a request that could not be answered.
+ *
+ * It lives outside `apply` with its dependencies injected so every decision is
+ * testable without WeChat, a harness or a real clock: `notify` sends the prompt,
+ * `consume` feeds a reply in, and `respond` is the `approval/request` handler.
+ */
+export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}) {
+  /** `accountId|chatId -> { resolve, timer }`; one question per chat at a time. */
+  const pending = new Map();
+  const keyOf = (accountId, chatId) => `${accountId}|${chatId}`;
+
+  const bridge = {
+    pending,
+
+    /**
+     * Feed an inbound message to the bridge.
+     * @returns {boolean} true when it answered a pending request, so the caller
+     *   must not also forward it to the agent as an ordinary turn.
+     */
+    consume(accountId, chatId, text) {
+      const key = keyOf(accountId, chatId);
+      const waiting = pending.get(key);
+      if (!waiting) return false;
+      const outcome = parseApprovalReply(text);
+      if (!outcome) return false;
+      clearTimeout(waiting.timer);
+      pending.delete(key);
+      waiting.resolve(outcome);
+      return true;
+    },
+
+    /**
+     * Ask and wait.
+     * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
+     *   "no answer" - the caller must delegate so the GUI still gets its prompt.
+     */
+    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs } = {}) {
+      if (typeof notify !== "function") return undefined;
+      const key = keyOf(account?.accountId ?? account?.botId, chatId);
+      // One question per chat at a time: a second one makes "1"/"2" ambiguous.
+      if (pending.has(key)) return undefined;
+      try {
+        await notify(account, chatId, formatApprovalPrompt(request));
+      } catch (error) {
+        // No outbound path (window closed): let the GUI handle the request.
+        logger?.warn?.("[dsh-wechat-media] approval prompt could not be sent: %s", error?.message ?? error);
+        return undefined;
+      }
+      const answer = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(key);
+          resolve(undefined);
+        }, Math.max(1, Number(limit) || timeoutMs));
+        pending.set(key, { resolve, timer, requestedAt: Date.now() });
+        // The requester may cancel while we wait (turn aborted, session closed).
+        request?.signal?.addEventListener?.("abort", () => {
+          clearTimeout(timer);
+          pending.delete(key);
+          resolve(undefined);
+        }, { once: true });
+      });
+      if (!answer) {
+        // Say so in the chat: the GUI prompt appearing out of nowhere would
+        // otherwise look like the bridge ignored the answer.
+        try {
+          await notify(account, chatId, "⌛ 微信里没等到批复，这次转由 GUI 处理。");
+        } catch {
+          // The window may have closed in the meantime; the GUI still has it.
+        }
+      }
+      return answer;
+    },
+
+    /** The `approval/request` listener body. */
+    async respond(request, next, { ignore = false, findConversation, loadAccount } = {}) {
+      try {
+        if (ignore) return next();
+        const conversation = await findConversation?.(String(request?.agent?.session?.id ?? ""));
+        if (!conversation) return next(); // not a WeChat-driven session
+        const account = await loadAccount?.(conversation.accountId);
+        if (!account?.token) return next();
+        // Undefined means "ask someone else": the GUI's own prompt stays intact.
+        return (await bridge.ask(account, conversation.chatId, request)) ?? next();
+      } catch (error) {
+        logger?.warn?.("[dsh-wechat-media] approval bridge failed: %s", error?.message ?? error);
+        return next();
+      }
+    },
+  };
+
+  return bridge;
+}
 /** One short, readable block of the tool arguments (object, string or nothing). */
 function formatArguments(args, maxChars) {
   if (args === undefined || args === null) return "";
@@ -463,14 +558,13 @@ export function apply(ctx, config = {}) {
 
   // ── approvals asked over WeChat ───────────────────────────────────────────
 
-  /**
-   * `chatId key -> { resolve, timer }` for one approval awaiting a WeChat reply.
-   * One pending request per chat keeps the numbering unambiguous.
-   */
-  const pendingApprovals = new Map();
-  /** How long a WeChat approval prompt waits before falling back to the GUI. */
-  const approvalTimeoutMs = Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000;
-  const approvalKey = (accountId, chatId) => `${accountId}|${chatId}`;
+  const approvals = createApprovalBridge({
+    notify: (account, chatId, text) => sendText(account, chatId, text, { typing: false }),
+    timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
+    logger: ctx.logger,
+  });
+  /** The inbound pipeline's name for "did this message answer a pending request?". */
+  const consumeApprovalReply = approvals.consume;
 
   /**
    * Which WeChat chat (if any) owns a DSH session: the in-memory map first, then
@@ -493,74 +587,12 @@ export function apply(ctx, config = {}) {
     return undefined;
   }
 
-  /**
-   * Consume a WeChat reply that answers a pending approval.
-   * @returns {boolean} true when the message was the answer and must not be
-   *   forwarded to the agent as an ordinary turn.
-   */
-  function consumeApprovalReply(accountId, chatId, text) {
-    const key = approvalKey(accountId, chatId);
-    const pending = pendingApprovals.get(key);
-    if (!pending) return false;
-    const outcome = parseApprovalReply(text);
-    if (!outcome) return false;
-    clearTimeout(pending.timer);
-    pendingApprovals.delete(key);
-    pending.resolve(outcome);
-    return true;
-  }
-
-  /**
-   * Ask the human in WeChat and wait for 1/2.
-   * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
-   *   "no answer" - the caller must delegate so the GUI still gets its prompt.
-   */
-  async function askWechatApproval(account, chatId, request, { timeoutMs = approvalTimeoutMs } = {}) {
-    const key = approvalKey(account.accountId ?? account.botId, chatId);
-    // One question per chat at a time: a second one would make "1"/"2" ambiguous.
-    if (pendingApprovals.has(key)) return undefined;
-    try {
-      await sendText(account, chatId, formatApprovalPrompt(request), { typing: false });
-    } catch (error) {
-      // No outbound path (window closed): let the GUI handle the request.
-      ctx.logger?.warn?.("[dsh-wechat-media] approval prompt could not be sent: %s", error?.message ?? error);
-      return undefined;
-    }
-    const answer = await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pendingApprovals.delete(key);
-        resolve(undefined);
-      }, timeoutMs);
-      pendingApprovals.set(key, { resolve, timer, requestedAt: Date.now() });
-      // The requester may cancel while we wait (turn aborted, session closed).
-      request?.signal?.addEventListener?.("abort", () => {
-        clearTimeout(timer);
-        pendingApprovals.delete(key);
-        resolve(undefined);
-      }, { once: true });
-    });
-    if (!answer) {
-      await sendText(account, chatId, "⌛ 微信里没等到批复，这次转由 GUI 处理。", { typing: false }).catch(() => {});
-    }
-    return answer;
-  }
-
   ctx.inject(["approval"], (approvalCtx) => {
-    approvalCtx.on("approval/request", async (request, next) => {
-      try {
-        const conversation = await findConversation(String(request?.agent?.session?.id ?? ""));
-        if (!conversation) return next();
-        if (config.approval === "ignore") return next();
-        const account = await state.loadAccount(conversation.accountId);
-        if (!account?.token) return next();
-        const outcome = await askWechatApproval(account, conversation.chatId, request);
-        // Undefined means "ask someone else": the GUI's own prompt stays intact.
-        return outcome ?? next();
-      } catch (error) {
-        ctx.logger?.warn?.("[dsh-wechat-media] approval bridge failed: %s", error?.message ?? error);
-        return next();
-      }
-    });
+    approvalCtx.on("approval/request", (request, next) => approvals.respond(request, next, {
+      ignore: config.approval === "ignore",
+      findConversation,
+      loadAccount: (accountId) => state.loadAccount(accountId),
+    }));
   });
 
   // ── inbound ───────────────────────────────────────────────────────────────
@@ -1098,11 +1130,11 @@ export function apply(ctx, config = {}) {
             || lastInbound.get(accountId)?.chatId
             || Object.keys(routes[accountId] ?? {})[0];
           if (!chatId) return json(res, 400, { error: "no chat to ask: write to the bot first" });
-          if (pendingApprovals.has(approvalKey(accountId, chatId))) {
+          if (approvals.pending.has(`${accountId}|${chatId}`)) {
             return json(res, 409, { error: "an approval is already pending for this chat" });
           }
           const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
-          const outcome = await askWechatApproval(account, chatId, {
+          const outcome = await approvals.ask(account, chatId, {
             toolName: body.toolName ?? "dsh-wechat-media self-test",
             reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
           }, { timeoutMs });
