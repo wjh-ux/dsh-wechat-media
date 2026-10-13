@@ -213,6 +213,35 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
   const bridge = {
     pending,
 
+    /** What is waiting right now: shown in the card and used for diagnostics. */
+    list() {
+      return [...pending.entries()].map(([key, waiting]) => ({
+        key,
+        accountId: waiting.accountId,
+        chatId: waiting.chatId,
+        toolName: waiting.toolName,
+        requestedAt: new Date(waiting.requestedAt).toISOString(),
+        waitedMs: Date.now() - waiting.requestedAt,
+      }));
+    },
+
+    /**
+     * Give up on a pending question (a mis-clicked approval should not have to wait
+     * for the timeout). Undefined means "ask someone else", so the GUI takes over.
+     */
+    cancel(accountId, chatId) {
+      const key = keyOf(accountId, chatId);
+      const waiting = pending.get(key);
+      if (!waiting) return false;
+      clearTimeout(waiting.timer);
+      pending.delete(key);
+      waiting.resolve(undefined);
+      Promise.resolve()
+        .then(() => notify?.(waiting.account, chatId, "🚫 已在 DSH 里取消这次审批，转由 GUI 处理。"))
+        .catch(() => {});
+      return true;
+    },
+
     /**
      * Feed an inbound message to the bridge.
      * @returns {boolean} true when it answered a pending request, so the caller
@@ -257,13 +286,17 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
         logger?.warn?.("[dsh-wechat-media] approval prompt could not be sent: %s", error?.message ?? error);
         return undefined;
       }
+      // Only a real timeout gets the "no answer" notice: a cancel from DSH and an
+      // aborted turn have their own (or no) message, and two notices contradict.
+      let timedOut = false;
       const answer = await new Promise((resolve) => {
         const timer = setTimeout(() => {
+          timedOut = true;
           pending.delete(key);
           resolve(undefined);
         }, Math.max(1, Number(limit) || timeoutMs));
         // The account is kept so the answer can be confirmed in the same chat.
-        pending.set(key, { resolve, timer, requestedAt: Date.now(), account });
+        pending.set(key, { resolve, timer, requestedAt: Date.now(), account, accountId: accountId ?? account?.accountId ?? account?.botId, chatId, toolName: request?.toolName });
         // The requester may cancel while we wait (turn aborted, session closed).
         request?.signal?.addEventListener?.("abort", () => {
           clearTimeout(timer);
@@ -271,7 +304,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
           resolve(undefined);
         }, { once: true });
       });
-      if (!answer) {
+      if (!answer && timedOut) {
         // Say so in the chat: the GUI prompt appearing out of nowhere would
         // otherwise look like the bridge ignored the answer.
         try {
@@ -1015,6 +1048,7 @@ export function apply(ctx, config = {}) {
             prefs,
             peers: await state.loadPeers(),
             counters: { ...counters },
+            approvals: approvals.list(),
             lastInbound: Object.fromEntries(lastInbound.entries()),
             accounts: accounts.map((account) => {
               const control = monitors.get(account.accountId);
@@ -1225,7 +1259,24 @@ export function apply(ctx, config = {}) {
             route: after[accountId]?.[chatId] ?? null,
             peer: (await state.loadPeers())[accountId]?.[chatId] ?? null,
             counters: { ...counters },
+            approvals: approvals.list(),
           });
+        },
+      },
+      {
+        // Cancel a question that is waiting in WeChat (a mis-click should not have to
+        // wait for the timeout); the requester then falls back to the GUI prompt.
+        kind: "exact",
+        path: "/dsh-wechat-media/approvals/cancel",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readBody(req);
+          const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
+          const chatId = String(body.chatId ?? "") || approvals.list()[0]?.chatId || "";
+          if (!chatId) return json(res, 400, { error: "no approval is pending" });
+          const cancelled = approvals.cancel(accountId, chatId);
+          json(res, 200, { ok: true, cancelled, approvals: approvals.list() });
         },
       },
     ];
