@@ -96,5 +96,36 @@ test("the card renders in both views", () => {
   assert.equal(summary?.type, "span");
 });
 
+test("adding another account is always offered", () => {
+  // Regression guard: the add button used to switch to a "pair again" label once
+  // an account existed, which hid the fact that a second account can be added.
+  assert.match(code, /t\("addAccount"/);
+  assert.match(code, /t\("rescanAccount"/);
+  assert.ok(!/t\("rescan"/.test(code), "the old ambiguous label must be gone");
+  assert.ok(
+    !/pairedCount === 0\s*\?\s*t\("addAccount"/.test(code),
+    "the add button must not be conditional on having no accounts yet",
+  );
+  assert.match(code, /t\("logout"/);
+  for (const key of ["addAccount", "rescanAccount", "pairingNow"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+});
+
+test("a pairing attempt can be cancelled", () => {
+  // A QR shown by mistake must be dismissible without waiting for it to expire.
+  assert.match(code, /\/login\/\$\{loginId\}\/cancel|login\/\$\{pending\.id\}\/cancel|\/cancel/);
+  assert.match(code, /t\("cancel"/);
+  for (const key of ["cancel"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  // The host side has to offer the route the card calls.
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /action === "cancel"/, "index.js must handle the cancel action");
+  assert.match(host, /logins\.cancel\(/, "index.js must cancel the login session");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
