@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { allowDecision, chunkText, formatApprovalPrompt, noteBlocked, parseApprovalReply } from "../index.js";
+import { allowDecision, chunkText, formatApprovalPrompt, noteBlocked, parseApprovalReply, syntheticInbound } from "../index.js";
 
 let passed = 0;
 let failed = 0;
@@ -105,6 +105,17 @@ test("dropped messages are counted so the silence is visible", () => {
   assert.deepEqual(noteBlocked({ blockedCount: 4 }, "T2"), { blockedCount: 5, blockedAt: "T2" });
   // A corrupted counter must not produce NaN in the UI.
   assert.equal(noteBlocked({ blockedCount: "oops" }).blockedCount, 1);
+});
+test("a synthetic inbound looks like the platform's envelope", () => {
+  const direct = syntheticInbound({ chatId: "wxid_a", text: "hello" });
+  assert.equal(direct.message_type, 1);
+  assert.equal(direct.from_user_id, "wxid_a");
+  assert.equal(direct.session_id, "wxid_a");
+  assert.equal(direct.group_id, undefined, "a direct chat must not claim a group");
+  assert.equal(direct.item_list[0].text_item.text, "hello");
+  const room = syntheticInbound({ chatId: "123@chatroom", text: "hi", fromUserId: "wxid_b" });
+  assert.equal(room.group_id, "123@chatroom");
+  assert.equal(room.from_user_id, "wxid_b");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
