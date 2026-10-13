@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.9
+
+- **The test suite is platform-neutral again.** `test/inbox.test.mjs` asserted on a Windows drive path
+  (`D:\wechat-files`), which is not absolute on Linux, so CI failed for v0.2.7 and v0.2.8 even though the code was
+  fine. The assertions now build their absolute paths with `path.join(tmpdir(), …)` and the one Windows-only case
+  is guarded by `process.platform === "win32"`. No runtime change (100 tests, green on Linux and Windows).
+
 ## 0.2.8
 
 - **Pick the inbox directory with the system folder dialog.** A new *Browse… / 浏览…* action (card and control
