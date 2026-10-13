@@ -558,6 +558,11 @@ export function apply(ctx, config = {}) {
 
   // ── approvals asked over WeChat ───────────────────────────────────────────
 
+  /**
+   * Visible counters. Silently dropping a message, or answering it, must be
+   * observable from GET /state - otherwise "did it work?" means log archaeology.
+   */
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0 };
   const approvals = createApprovalBridge({
     notify: (account, chatId, text) => sendText(account, chatId, text, { typing: false }),
     timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
@@ -610,6 +615,7 @@ export function apply(ctx, config = {}) {
     }
     // Our own outbound messages echo back through the same stream.
     if (message?.message_type === 2) return;
+    counters.received += 1;
 
     const identity = describeEnvelope(message);
     if (!identity.chatId) return;
@@ -652,11 +658,15 @@ export function apply(ctx, config = {}) {
     const verdict = await classifyInbound({ accountId, message, text, state, consumeApproval: consumeApprovalReply });
     if (verdict.action === "ignore") {
       ctx.logger?.info?.("[dsh-wechat-media] ignored message from %s (%s)", chatId, verdict.reason);
+      counters.blocked += 1;
       // Keep the drop countable so the card can show it.
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       return;
     }
-    if (verdict.action === "answer") return; // already handed to the waiting requester
+    if (verdict.action === "answer") {
+      counters.answered += 1;
+      return; // already handed to the waiting requester
+    }
 
     const lines = [];
     if (text) lines.push(text);
@@ -676,6 +686,7 @@ export function apply(ctx, config = {}) {
     }
     if (lines.length === 0) return;
 
+    counters.forwarded += 1;
     const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
     const prompt = `[微信 ${peerName} ${chatId}]\n${lines.join("\n\n")}`;
     const message2 = await userMessage(prompt);
@@ -963,6 +974,8 @@ export function apply(ctx, config = {}) {
             inboxRoot: inboxRoot(dshHome),
             prefs,
             peers: await state.loadPeers(),
+            counters: { ...counters },
+            lastInbound: Object.fromEntries(lastInbound.entries()),
             accounts: accounts.map((account) => {
               const control = monitors.get(account.accountId);
               return {
