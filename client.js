@@ -129,6 +129,7 @@ window.__ModuleLoader__.load({
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           blockedCount: "blocked",
           testApproval: "Test approval",
+          testApprovalUrl: "or open this URL",
           testApprovalHint: "Opens a small page that sends the approval prompt (this browser does not deliver the card's POST).",
           working: "Working…",
           testApprovalSending: "Sending the approval prompt…",
@@ -174,6 +175,7 @@ window.__ModuleLoader__.load({
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
+          testApprovalUrl: "或直接打开这个网址",
           testApprovalHint: "会打开一个小页面来发送审批提示（这个浏览器不会把卡片的 POST 送到插件）。",
           working: "处理中…",
           testApprovalSending: "正在发送审批提示…",
@@ -400,8 +402,11 @@ window.__ModuleLoader__.load({
                 href: `${BASE}/send-test-approval`,
                 target: "_blank",
                 rel: "noreferrer",
+                style: { cursor: "pointer" },
                 title: t("testApprovalHint", "Opens a small page that sends the approval prompt"),
               }, (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳" : t("testApproval", "Test approval")),
+              h("span", { key: "url", className: "dswxMeta" },
+                t("testApprovalUrl", "or open this URL") + ": " + `${BASE}/send-test-approval`),
               h("label", { key: "l", className: "dswxMeta" }, [
                 h("input", {
                   key: "c",
