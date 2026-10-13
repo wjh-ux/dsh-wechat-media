@@ -178,5 +178,19 @@ await test("a reply is matched even when the account record names itself differe
   assert.equal(bridge.consume("b775a478733a-im-bot", "chat-a", "1"), true, "the monitor's id must match the pending key");
   assert.equal(await waiting, "allowed-once");
 });
+await test("an answer is confirmed in the chat", async () => {
+  for (const [reply, expected] of [["1", /批准/], ["2", /拒绝/]]) {
+    const notify = recorder();
+    const bridge = createApprovalBridge({ notify, timeoutMs: 500 });
+    const waiting = bridge.ask(account, "chat-a", request(), { accountId: "acct-one" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(bridge.consume("acct-one", "chat-a", reply), true);
+    await waiting;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(notify.sent.length, 2, `"${reply}" must be confirmed`);
+    assert.match(notify.sent[1].text, expected);
+    assert.equal(notify.sent[1].chatId, "chat-a", "the confirmation goes to the asking chat");
+  }
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
