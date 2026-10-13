@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.7
+
+- **The inbox directory is configurable.** Inbound media used to always land in `$DSH_HOME/wechat-inbox`; now a
+  runtime preference wins over the plugin config (`inboxDir`), which wins over that default. Set it from the card
+  (a plain GET form, so it works even where the card's fetches do not reach the plugin) or from the control panel
+  (`/dsh-wechat-media/panel`). An absolute path is required; an empty value restores the default. `resolveInboxDir`
+  is exported and tested: a relative path is refused rather than resolved somewhere surprising, and the day/chat
+  layout and the size cap are unchanged. `/state` reports `inboxRoot` plus `inboxRootDefault` and
+  `inboxRootConfig`, so the effective value is always visible.
+- New suite `test/inbox.test.mjs` (98 tests total).
+
 ## 0.2.6
 
 Fixes and diagnostics that all came out of real use.
