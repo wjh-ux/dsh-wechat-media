@@ -99,13 +99,15 @@ window.__ModuleLoader__.load({
         en: {
           title: "WeChat bridge",
           empty: "No WeChat account is paired yet.",
-          addAccount: "Pair an account (QR code)",
-          rescan: "Pair again",
+          addAccount: "Add an account (QR code)",
+          rescanAccount: "Pair again",
+          pairingNow: "Waiting for the scan…",
           logout: "Unpair",
           scanning: "Waiting for the scan…",
           scanned: "Scanned - confirm on your phone",
           needCode: "Enter the digits shown on your phone",
           submitCode: "Submit",
+          cancel: "Cancel",
           cancelled: "Cancelled",
           expired: "QR expired - a fresh one is coming",
           paired: "Paired",
@@ -114,19 +116,21 @@ window.__ModuleLoader__.load({
           offline: "not running",
           error: "error",
           chats: "conversations",
-          scanHint: "Scan with WeChat on your phone. The login is kept on this machine, so restarting dsh does not need a new scan.",
+          scanHint: "Scan with WeChat on your phone. Scanning a different WeChat account adds it as another account; the same account just refreshes its login. Credentials stay on this machine, so restarting dsh needs no new scan.",
           refresh: "Refresh",
         },
         zh: {
           title: "微信桥接",
           empty: "还没有配对的微信账号。",
-          addAccount: "配对账号（扫码）",
-          rescan: "重新扫码",
+          addAccount: "添加账号（扫码）",
+          rescanAccount: "重新扫码",
+          pairingNow: "等待扫码…",
           logout: "解除绑定",
           scanning: "等待扫码…",
           scanned: "已扫码 —— 请在手机上确认",
           needCode: "请输入手机上显示的数字",
           submitCode: "提交",
+          cancel: "取消",
           cancelled: "已取消",
           expired: "二维码过期，正在换新的",
           paired: "配对成功",
@@ -135,7 +139,7 @@ window.__ModuleLoader__.load({
           offline: "未运行",
           error: "异常",
           chats: "个会话",
-          scanHint: "用手机微信扫码。登录凭证保存在本机，所以重启 dsh 不需要重新扫码。",
+          scanHint: "用手机微信扫码。扫**不同的微信号**就是再加一个账号；扫同一个号只是刷新登录。凭证保存在本机，重启 dsh 不需要重扫。",
           refresh: "刷新",
         },
       }), "dsh-wechat-media locale");
@@ -211,12 +215,26 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Stop a pairing attempt the user did not mean to start. */
+        async function cancelPairing(loginId) {
+          setBusy(true);
+          try {
+            await api(`/login/${loginId}/cancel`, { method: "POST", body: {} });
+            setCode("");
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         const accounts = snapshot?.accounts ?? [];
         const pairedCount = accounts.length;
 
         const status = pairedCount === 0
           ? t("empty", "No WeChat account is paired yet.")
-          : `${pairedCount} × 微信`;
+          : `${pairedCount} 个账号 / account(s)`;
 
         if (props?.view === "summary") return h("span", null, status);
 
@@ -241,8 +259,8 @@ window.__ModuleLoader__.load({
           h("div", { key: "head", className: "dswxRow" }, [
             h("strong", { key: "t" }, t("title", "WeChat bridge")),
             h("span", { key: "s", className: "dswxMeta" }, status),
-            h("button", { key: "add", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: startPairing },
-              pairedCount === 0 ? t("addAccount", "Pair an account (QR code)") : t("rescan", "Pair again")),
+            h("button", { key: "add", type: "button", className: "dswxBtn dswxPrimary", disabled: busy || Boolean(pending), onClick: startPairing },
+              pending ? t("pairingNow", "Waiting for the scan…") : t("addAccount", "Add an account (QR code)")),
             h("button", { key: "r", type: "button", className: "dswxBtn", disabled: busy, onClick: refresh }, t("refresh", "Refresh")),
           ]),
 
@@ -258,6 +276,7 @@ window.__ModuleLoader__.load({
             ]),
             h("div", { className: "dswxMeta" }, `${account.accountId} · ${(account.chats ?? []).length} ${t("chats", "conversations")}`),
             h("div", { className: "dswxRow" }, [
+              h("button", { type: "button", className: "dswxBtn", disabled: busy || Boolean(pending), onClick: startPairing }, t("rescanAccount", "Pair again")),
               h("button", { type: "button", className: "dswxBtn", disabled: busy, onClick: () => unpair(account.accountId) }, t("logout", "Unpair")),
             ]),
           ])),
@@ -268,6 +287,10 @@ window.__ModuleLoader__.load({
               : h("div", { key: "noimg", className: "dswxMeta" }, t("scanning", "Waiting for the scan…")),
             h("div", { key: "side", className: "dswxCard" }, [
               h("p", { key: "state", className: "dswxMsg" }, loginText(pending)),
+              h("div", { key: "actions", className: "dswxRow" }, [
+                h("button", { key: "cancel", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelPairing(pending.id) },
+                  t("cancel", "Cancel")),
+              ]),
               pending.verifyCodeNeeded
                 ? h("div", { key: "code", className: "dswxRow" }, [
                     h("input", {
