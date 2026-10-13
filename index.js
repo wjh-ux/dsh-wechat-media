@@ -80,6 +80,130 @@ async function importHarnessPlugin(ctx, specifier) {
   return chunks.filter(Boolean);
 }
 
+/**
+ * Decide whether an inbound chat may reach the agent.
+ *
+ * `requireAllowlist: false` keeps the bridge open to anyone who writes to the bot
+ * (the default, because a freshly paired account would otherwise look broken);
+ * turning it on restricts traffic to chats the user marked as allowed.
+ *
+ * @returns {{ accepted: boolean, reason: "open" | "allowlisted" | "blocked" | "not-listed" }}
+ */
+export function allowDecision({ peer, prefs } = {}) {
+  if (!prefs?.requireAllowlist) return { accepted: true, reason: "open" };
+  if (peer?.allowed === true) return { accepted: true, reason: "allowlisted" };
+  if (peer?.allowed === false) return { accepted: false, reason: "blocked" };
+  return { accepted: false, reason: "not-listed" };
+}
+
+/**
+ * Identify the chat an inbound message belongs to.
+ *
+ * Which envelope field addresses a chat matters for *sending* back: a direct
+ * message carries the sender in `from_user_id`, while a group message may carry
+ * the group in `group_id` or in `session_id`. The live diagnostic line in
+ * `handleInbound` prints all of them so the platform can settle the question.
+ *
+ * @returns {{ chatId: string, groupId?: string, sessionChat?: string, isGroup: boolean, peerName: string }}
+ */
+export function describeEnvelope(message = {}) {
+  const groupId = message?.group_id ? String(message.group_id) : undefined;
+  const sessionChat = message?.session_id ? String(message.session_id) : undefined;
+  const fromUserId = message?.from_user_id ? String(message.from_user_id) : undefined;
+  const chatId = groupId || sessionChat || fromUserId || "";
+  return {
+    chatId,
+    groupId,
+    sessionChat,
+    fromUserId,
+    isGroup: Boolean(groupId) || /@chatroom$/.test(chatId),
+    peerName: String(message?.from_user_name ?? message?.from_user_id ?? chatId),
+  };
+}
+
+/**
+ * Decide what an inbound message means, before anything is downloaded or
+ * forwarded. Dependencies are injected so the whole decision is testable without
+ * a network, a WeChat account or a harness:
+ *
+ * @param {object} options
+ * @param {string} options.accountId
+ * @param {object} options.message    the raw envelope
+ * @param {string} options.text       the message's text, already extracted
+ * @param {import('./state.js').WechatState} options.state
+ * @param {(accountId: string, chatId: string, text: string) => boolean} [options.consumeApproval]
+ * @returns {Promise<{ action: "ignore" | "answer" | "forward", reason: string } & ReturnType<typeof describeEnvelope> & { text: string }>}
+ */
+export async function classifyInbound({ accountId, message, text, state, consumeApproval }) {
+  const identity = describeEnvelope(message);
+  const base = { ...identity, text };
+  if (!identity.chatId) return { ...base, action: "ignore", reason: "no-chat-id" };
+
+  const prefs = await state.loadPrefs();
+  const decided = allowDecision({ peer: await state.getPeer(accountId, identity.chatId), prefs });
+  if (!decided.accepted) return { ...base, action: "ignore", reason: decided.reason };
+
+  // "1"/"2" answers a pending approval; it must not become a turn of its own.
+  if (text && typeof consumeApproval === "function" && consumeApproval(accountId, identity.chatId, text)) {
+    return { ...base, action: "answer", reason: "approval-answer" };
+  }
+  // Keep the acceptance reason: "open" is the everyday case, "allowlisted" tells
+  // a reader of the log that the allowlist let this chat through.
+  return { ...base, action: "forward", reason: decided.reason === "open" ? "ok" : decided.reason };
+}
+/**
+ * Render an approval request as the WeChat prompt. The arguments matter as much
+ * as the tool name: "工具：pwsh" alone does not tell anyone what they are about
+ * to allow.
+ *
+ * @param {{toolName?: string, reason?: string, displayReason?: string, arguments?: unknown}} request
+ * @returns {string} the message body sent to WeChat
+ */
+export function formatApprovalPrompt(request = {}, { maxArgumentChars = 400 } = {}) {
+  const lines = ["⚠️ 需要你批准一次操作（远程审批）", `工具：${request?.toolName ?? "?"}`];
+  const reason = request?.displayReason || request?.reason;
+  if (reason) lines.push(`原因：${reason}`);
+  const preview = formatArguments(request?.arguments, maxArgumentChars);
+  if (preview) lines.push("参数：", preview);
+  lines.push("", "回 1 = 批准一次 · 回 2 = 拒绝");
+  return lines.join("\n");
+}
+
+/** One short, readable block of the tool arguments (object, string or nothing). */
+function formatArguments(args, maxChars) {
+  if (args === undefined || args === null) return "";
+  let text;
+  try {
+    text = typeof args === "string" ? args : JSON.stringify(args, null, 2);
+  } catch {
+    return "";
+  }
+  if (!text || text === "{}" || text === '""') return "";
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…（已截断）` : text;
+}
+/**
+ * Read a WeChat reply as an approval answer: the numbered shortcut the prompt
+ * advertises, plus the words people actually type, in both languages. Anything
+ * else is an ordinary message.
+ *
+ * @returns {"allowed-once" | "rejected" | undefined}
+ */
+export function parseApprovalReply(text) {
+  const normalized = String(text ?? "").trim().toLowerCase().replace(/^\//, "").trim();
+  if (!normalized) return undefined;
+  // English is matched exactly: "yes please do it" is a sentence, not an answer.
+  if (["1", "y", "yeah", "yep", "yes", "ok", "okay", "sure", "allow", "allowed", "approve", "approved", "go ahead"].includes(normalized)) {
+    return "allowed-once";
+  }
+  if (["2", "n", "nah", "nope", "no", "no thanks", "deny", "reject", "rejected", "cancel", "dont", "don't"].includes(normalized)) {
+    return "rejected";
+  }
+  // Chinese reads naturally as a prefix: 同意/批准一次/拒绝掉 all work.
+  if (/^(同意|批准|允许|可以|好的|行)/.test(normalized)) return "allowed-once";
+  if (/^(拒绝|不同意|不可以|不行|否)/.test(normalized)) return "rejected";
+  return undefined;
+}
+
 /** Render a scannable QR code as SVG. Vendored encoder (MIT, Kazuhiko Arase). */
 export function renderQrSvg(payload, { cellSize = 4, margin = 2 } = {}) {
   const qr = qrcode(0, "M");
@@ -327,6 +451,108 @@ export function apply(ctx, config = {}) {
     return result;
   }
 
+  // ── approvals asked over WeChat ───────────────────────────────────────────
+
+  /**
+   * `chatId key -> { resolve, timer }` for one approval awaiting a WeChat reply.
+   * One pending request per chat keeps the numbering unambiguous.
+   */
+  const pendingApprovals = new Map();
+  /** How long a WeChat approval prompt waits before falling back to the GUI. */
+  const approvalTimeoutMs = Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000;
+  const approvalKey = (accountId, chatId) => `${accountId}|${chatId}`;
+
+  /**
+   * Which WeChat chat (if any) owns a DSH session: the in-memory map first, then
+   * the persisted routing table, so an approval that arrives after a restart is
+   * still bridged.
+   */
+  async function findConversation(sessionId) {
+    const known = conversations.get(sessionId);
+    if (known) return known;
+    const routes = await state.loadRoutes();
+    for (const [accountId, chats] of Object.entries(routes)) {
+      for (const [chatId, route] of Object.entries(chats ?? {})) {
+        if (route?.sessionId === sessionId) {
+          const conversation = { accountId, chatId, peerName: route.peerName };
+          conversations.set(sessionId, conversation);
+          return conversation;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Consume a WeChat reply that answers a pending approval.
+   * @returns {boolean} true when the message was the answer and must not be
+   *   forwarded to the agent as an ordinary turn.
+   */
+  function consumeApprovalReply(accountId, chatId, text) {
+    const key = approvalKey(accountId, chatId);
+    const pending = pendingApprovals.get(key);
+    if (!pending) return false;
+    const outcome = parseApprovalReply(text);
+    if (!outcome) return false;
+    clearTimeout(pending.timer);
+    pendingApprovals.delete(key);
+    pending.resolve(outcome);
+    return true;
+  }
+
+  /**
+   * Ask the human in WeChat and wait for 1/2.
+   * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
+   *   "no answer" - the caller must delegate so the GUI still gets its prompt.
+   */
+  async function askWechatApproval(account, chatId, request, { timeoutMs = approvalTimeoutMs } = {}) {
+    const key = approvalKey(account.accountId ?? account.botId, chatId);
+    // One question per chat at a time: a second one would make "1"/"2" ambiguous.
+    if (pendingApprovals.has(key)) return undefined;
+    try {
+      await sendText(account, chatId, formatApprovalPrompt(request), { typing: false });
+    } catch (error) {
+      // No outbound path (window closed): let the GUI handle the request.
+      ctx.logger?.warn?.("[dsh-wechat-media] approval prompt could not be sent: %s", error?.message ?? error);
+      return undefined;
+    }
+    const answer = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingApprovals.delete(key);
+        resolve(undefined);
+      }, timeoutMs);
+      pendingApprovals.set(key, { resolve, timer, requestedAt: Date.now() });
+      // The requester may cancel while we wait (turn aborted, session closed).
+      request?.signal?.addEventListener?.("abort", () => {
+        clearTimeout(timer);
+        pendingApprovals.delete(key);
+        resolve(undefined);
+      }, { once: true });
+    });
+    if (!answer) {
+      await sendText(account, chatId, "⌛ 微信里没等到批复，这次转由 GUI 处理。", { typing: false }).catch(() => {});
+    }
+    return answer;
+  }
+
+  ctx.inject(["approval"], (approvalCtx) => {
+    approvalCtx.on("approval/request", async (request, next) => {
+      try {
+        const conversation = await findConversation(String(request?.agent?.session?.id ?? ""));
+        if (!conversation) return next();
+        if (config.approval === "ignore") return next();
+        const account = await state.loadAccount(conversation.accountId);
+        if (!account?.token) return next();
+        const outcome = await askWechatApproval(account, conversation.chatId, request);
+        // Undefined means "ask someone else": the GUI's own prompt stays intact.
+        return outcome ?? next();
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] approval bridge failed: %s", error?.message ?? error);
+        return next();
+      }
+    });
+  });
+
   // ── inbound ───────────────────────────────────────────────────────────────
 
   /** Turn one inbound message into a prompt, download its media, and feed the agent. */
@@ -343,24 +569,50 @@ export function apply(ctx, config = {}) {
     // Our own outbound messages echo back through the same stream.
     if (message?.message_type === 2) return;
 
-    const chatId = String(message?.group_id || message?.from_user_id || "");
-    if (!chatId) return;
-    const peerName = String(message?.from_user_name ?? message?.from_user_id ?? chatId);
+    const identity = describeEnvelope(message);
+    if (!identity.chatId) return;
+    const { chatId, isGroup, peerName } = identity;
+    // Diagnostic: print the envelope's identifying fields, so the field that
+    // actually addresses a group can be confirmed against the platform instead of
+    // guessed (the protocol port flagged this as an unknown).
+    ctx.logger?.info?.(
+      "[dsh-wechat-media] inbound %s chat=%s session_id=%s group_id=%s room=%s from=%s type=%s",
+      isGroup ? "group" : "direct",
+      chatId,
+      message?.session_id ?? "-",
+      message?.group_id ?? "-",
+      message?.room_id ?? message?.chat_room_id ?? "-",
+      message?.from_user_id ?? "-",
+      message?.message_type ?? "-",
+    );
     if (message?.context_token) await state.saveContextToken(accountId, chatId, message.context_token);
-    lastInbound.set(accountId, { accountId, chatId, peerName, at: Date.now() });
+    lastInbound.set(accountId, { accountId, chatId, peerName, isGroup, groupId: identity.groupId, sessionChat: identity.sessionChat, fromUserId: identity.fromUserId, at: Date.now() });
 
-    const prefs = await state.loadPrefs();
-    if (prefs.requireAllowlist) {
-      const peer = await state.getPeer(accountId, chatId);
-      if (peer?.allowed !== true) {
-        ctx.logger?.info?.("[dsh-wechat-media] ignored message from %s (not allowlisted)", chatId);
-        return;
-      }
-    }
+    // Remember every chat so the allowlist panel can list it. `allowed` is the
+    // user's decision and is never overwritten here.
+    await state.setPeer(accountId, chatId, {
+      name: peerName,
+      kind: isGroup ? "group" : "direct",
+      // Both candidate ids are kept: which one addresses the chat when *sending*
+      // is settled by the platform, and the panel exposes them so the answer can
+      // be read from /state instead of from a log file.
+      groupId: identity.groupId ?? null,
+      sessionChat: identity.sessionChat ?? null,
+      fromUserId: identity.fromUserId ?? null,
+      seenAt: new Date().toISOString(),
+    });
 
     const normalized = ilink.describeInbound ? ilink.describeInbound(message) : { kind: "text", items: [] };
     const text = String(normalized?.text ?? "").trim();
     const media = Array.isArray(normalized?.media) ? normalized.media : [];
+
+    // One decision for the whole message: allowlist, approval answer, or a turn.
+    const verdict = await classifyInbound({ accountId, message, text, state, consumeApproval: consumeApprovalReply });
+    if (verdict.action === "ignore") {
+      ctx.logger?.info?.("[dsh-wechat-media] ignored message from %s (%s)", chatId, verdict.reason);
+      return;
+    }
+    if (verdict.action === "answer") return; // already handed to the waiting requester
 
     const lines = [];
     if (text) lines.push(text);
@@ -550,7 +802,7 @@ export function apply(ctx, config = {}) {
       const sendFileTool = define({
         name: "wechat_send_file",
         description:
-          "Send a local file to a WeChat contact or group through the bridge. Use this whenever the user asks you to send, forward or deliver a file. Images (.jpg/.png/.webp/.gif) go as pictures, videos (.mp4/.mov) as videos, everything else (pdf, docx, xlsx, zip, 7z, ...) as a file attachment. Pass the wxid from the [微信 …] header of the incoming message as `to` when the reply targets a specific chat, or omit it to answer the chat that most recently wrote to you.",
+          "Send a local file to a WeChat contact or group through the bridge. Use this whenever the user asks you to send, forward or deliver a file. Images (.jpg/.png/.webp/.gif) go as pictures, videos (.mp4/.mov) as videos, everything else (pdf, docx, xlsx, zip, 7z, ...) as a file attachment. Pass the wxid from the [微信 …] header of the incoming message as `to` when the reply targets a specific chat (a group id looks like `12345678@chatroom`), or omit it to answer the chat that most recently wrote to you.",
         parameters: {
           path: { type: "string", required: true, description: "Absolute path of the local file to send." },
           to: { type: "string", description: "WeChat wxid or group id; omit to use the most recent conversation." },
@@ -575,7 +827,7 @@ export function apply(ctx, config = {}) {
           "Send an extra text message to WeChat. Your final answer is already delivered to the same chat automatically, so use this only for something the answer does not cover: an early progress note, or a message to a different chat via `to`. Do not repeat your final answer with it.",
         parameters: {
           text: { type: "string", required: true, description: "Message text (<= 2000 characters)." },
-          to: { type: "string", description: "WeChat wxid or group id; omit for the most recent conversation." },
+          to: { type: "string", description: "WeChat wxid or group id (e.g. 12345678@chatroom); omit for the most recent conversation." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 60_000,
@@ -666,6 +918,7 @@ export function apply(ctx, config = {}) {
             stateRoot,
             inboxRoot: inboxRoot(dshHome),
             prefs,
+            peers: await state.loadPeers(),
             accounts: accounts.map((account) => {
               const control = monitors.get(account.accountId);
               return {
@@ -782,6 +1035,66 @@ export function apply(ctx, config = {}) {
           if (control) control.stopped = true;
           if (accountId) await state.removeAccount(accountId);
           json(res, 200, { ok: true });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/peers",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readBody(req);
+          const accountId = String(body.accountId ?? "");
+          const chatId = String(body.chatId ?? "");
+          if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
+          // true = allowed, false = blocked, anything else = undecided (unlisted).
+          const allowed = body.allowed === true ? true : body.allowed === false ? false : null;
+          const peer = await state.setPeer(accountId, chatId, { allowed });
+          json(res, 200, { ok: true, peer, peers: await state.loadPeers() });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/prefs",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readBody(req);
+          const patch = {};
+          if (typeof body.requireAllowlist === "boolean") patch.requireAllowlist = body.requireAllowlist;
+          if (typeof body.autoReply === "boolean") patch.autoReply = body.autoReply;
+          if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
+          const prefs = await state.savePrefs(patch);
+          json(res, 200, { ok: true, prefs });
+        },
+      },
+      {
+        // Self-test for the WeChat round trip of an approval: it sends exactly the
+        // prompt a real request sends and waits for the 1/2 answer. It does not go
+        // through the harness, so it verifies the channel, not the hook.
+        kind: "exact",
+        path: "/dsh-wechat-media/test-approval",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readBody(req);
+          const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
+          const account = accountId ? await state.loadAccount(accountId) : undefined;
+          if (!account?.token) return json(res, 400, { error: "no paired account" });
+          const routes = await state.loadRoutes();
+          const chatId = String(body.chatId ?? "")
+            || lastInbound.get(accountId)?.chatId
+            || Object.keys(routes[accountId] ?? {})[0];
+          if (!chatId) return json(res, 400, { error: "no chat to ask: write to the bot first" });
+          if (pendingApprovals.has(approvalKey(accountId, chatId))) {
+            return json(res, 409, { error: "an approval is already pending for this chat" });
+          }
+          const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
+          const outcome = await askWechatApproval(account, chatId, {
+            toolName: body.toolName ?? "dsh-wechat-media self-test",
+            reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
+          }, { timeoutMs });
+          json(res, 200, { ok: true, accountId, chatId, answered: Boolean(outcome), outcome: outcome ?? null });
         },
       },
     ];
