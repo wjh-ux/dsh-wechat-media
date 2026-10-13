@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3
+
+- **A waiting approval is visible in the card and can be cancelled from DSH.** `/state` reports the pending
+  questions (chat, tool, how long it has waited) and `POST /dsh-wechat-media/approvals/cancel` gives up on one,
+  which hands the request back to the GUI instead of making the user wait out the timeout.
+- **Only a real timeout says "no answer".** Cancelling in DSH and aborting a turn no longer also send
+  "⌛ 微信里没等到批复…" right after their own notice - two contradictory messages for one event (caught by the
+  new test). Two more tests (89 total).
+
 ## 0.2.2
 
 - **Approval answers are confirmed in the chat.** Reported from real use: answering `1` or `2` was consumed
