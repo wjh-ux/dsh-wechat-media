@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.8
+
+- **Pick the inbox directory with the system folder dialog.** A new *Browse… / 浏览…* action (card and control
+  panel) and the route `GET /dsh-wechat-media/pick-folder` open Windows' own folder picker on the user's desktop
+  and save the choice. A browser cannot hand over an absolute path (a directory `<input>` only exposes relative
+  names), so the host opens the dialog through `powershell -STA`; the typed input stays as a fallback, and a
+  cancelled or failed dialog says so on the page instead of failing silently. `FOLDER_PICK_SCRIPT` and
+  `parsePickedPath` are exported and tested - a relative or empty answer is refused. Two more tests (100 total).
+
 ## 0.2.7
 
 - **The inbox directory is configurable.** Inbound media used to always land in `$DSH_HOME/wechat-inbox`; now a
