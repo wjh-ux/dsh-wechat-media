@@ -234,7 +234,7 @@ window.__ModuleLoader__.load({
         async function startPairing() {
           setBusy(true);
           try {
-            await api("/login", { method: "POST", body: {} });
+            await api("/login");
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -246,7 +246,7 @@ window.__ModuleLoader__.load({
         async function unpair(accountId) {
           setBusy(true);
           try {
-            await api("/logout", { method: "POST", body: { accountId } });
+            await api(`/logout${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`);
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -259,7 +259,7 @@ window.__ModuleLoader__.load({
           if (!pending) return;
           setBusy(true);
           try {
-            await api(`/login/${pending.id}/verify`, { method: "POST", body: { code } });
+            await api(`/login/${encodeURIComponent(pending.id)}/verify?code=${encodeURIComponent(code)}`);
             setCode("");
             await refresh();
           } catch (problem) {
@@ -273,7 +273,7 @@ window.__ModuleLoader__.load({
         async function cancelPairing(loginId) {
           setBusy(true);
           try {
-            await api(`/login/${loginId}/cancel`, { method: "POST", body: {} });
+            await api(`/login/${encodeURIComponent(loginId)}/cancel`);
             setCode("");
             await refresh();
           } catch (problem) {
@@ -287,10 +287,37 @@ window.__ModuleLoader__.load({
         async function decide(accountId, chatId, allowed) {
           setBusy(true);
           try {
-            await api("/peers", { method: "POST", body: { accountId, chatId, allowed } });
+            await api(`/peers?accountId=${encodeURIComponent(accountId)}&chatId=${encodeURIComponent(chatId)}&allowed=${allowed === null || allowed === undefined ? "null" : String(allowed)}`);
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
+         * Send the approval prompt through the GET route and report what happened.
+         * POST never reaches the plugin in the reporter's browser, so the card does
+         * not rely on it.
+         */
+        async function runApprovalSelfTest() {
+          setBusy(true);
+          setFailed(false);
+          setMessage(t("testApprovalSending", "Sending the approval prompt…"));
+          try {
+            const result = await api("/test-approval");
+            if (result.sent) {
+              setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here)."));
+            } else if (result.reason === "pending") {
+              setMessage(t("testApprovalPending", "An approval is already waiting in this chat - answer it in WeChat, or cancel it here."));
+            } else {
+              setFailed(true);
+              setMessage(`${t("testApprovalFailed", "The prompt could not be sent")}: ${result.error ?? "?"}`);
+            }
+          } catch (problem) {
+            setFailed(true);
+            setMessage(String(problem?.message ?? problem));
           } finally {
             setBusy(false);
           }
@@ -300,7 +327,7 @@ window.__ModuleLoader__.load({
         async function cancelApproval(entry) {
           setBusy(true);
           try {
-            await api("/approvals/cancel", { method: "POST", body: { accountId: entry?.accountId, chatId: entry?.chatId } });
+            await api(`/approvals/cancel?accountId=${encodeURIComponent(entry?.accountId ?? "")}&chatId=${encodeURIComponent(entry?.chatId ?? "")}`);
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -312,7 +339,7 @@ window.__ModuleLoader__.load({
         async function setAllowlist(requireAllowlist) {
           setBusy(true);
           try {
-            await api("/prefs", { method: "POST", body: { requireAllowlist } });
+            await api(`/prefs?requireAllowlist=${requireAllowlist ? "true" : "false"}`);
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -393,18 +420,13 @@ window.__ModuleLoader__.load({
           h("div", { key: "contacts", className: "dswxCard" }, [
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("contacts", "Contacts & groups")),
-              // A link, not a fetch: in the reporter's browser a POST from the card
-              // never reached the plugin (no entry in /state.recentRoutes) while the
-              // same URL fetched as GET worked every time. This opens that page.
-              h("a", {
-                key: "test",
-                className: "dswxBtn",
-                href: `${BASE}/send-test-approval`,
-                target: "_blank",
-                rel: "noreferrer",
-                style: { cursor: "pointer" },
-                title: t("testApprovalHint", "Opens a small page that sends the approval prompt"),
-              }, (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳" : t("testApproval", "Test approval")),
+              // Fetched as GET on purpose: in the reporter's browser every POST from
+              // the card was swallowed before reaching the plugin, while GETs always
+              // worked. The route answers JSON for GET now, so no new tab is needed.
+              h("button", { key: "test", type: "button", className: "dswxBtn", disabled: busy, onClick: runApprovalSelfTest },
+                busy ? t("working", "Working…")
+                  : (snapshot?.approvals ?? []).length > 0 ? t("testApproval", "Test approval") + " ⏳"
+                    : t("testApproval", "Test approval")),
               h("span", { key: "url", className: "dswxMeta" },
                 t("testApprovalUrl", "or open this URL") + ": " + `${BASE}/send-test-approval`),
               h("label", { key: "l", className: "dswxMeta" }, [
