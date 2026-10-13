@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5
+
+- **The self-test says what actually happened.** `POST /dsh-wechat-media/test-approval` now waits for the *send*
+  and reports it (`sent: true`, or the delivery error) instead of claiming success before the prompt had left the
+  process - a failed send used to look like a silent success. A click while a question is already waiting answers
+  `{ok:false, reason:"pending"}` with HTTP 200 rather than a bare 409, and the card explains all three outcomes:
+  sent / already waiting / could not be sent.
+- One more test (91 total).
+
 ## 0.2.4
 
 - **The approval self-test no longer looks dead.** `POST /dsh-wechat-media/test-approval` used to hold the HTTP
