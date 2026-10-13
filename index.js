@@ -22,7 +22,50 @@
  * runtime through the Cordis loader, and every use is guarded.
  */
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
 import { isAbsolute, join } from "node:path";
+/**
+ * The Windows folder picker, run by the host on the user's own desktop. The browser
+ * cannot hand over an absolute path (a directory input only exposes relative names),
+ * so the dialog is opened natively - which is also what "use the system picker"
+ * means to a user.
+ */
+export const FOLDER_PICK_SCRIPT = [
+  "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
+  "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+  "$d.Description = 'Choose where dsh-wechat-media saves WeChat files'",
+  "$d.ShowNewFolderButton = $true",
+  "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }",
+].join("; ");
+
+/**
+ * Normalise what the picker printed: an absolute directory, or undefined when the
+ * dialog was cancelled (or printed something unusable).
+ */
+export function parsePickedPath(stdout) {
+  const text = String(stdout ?? "").trim();
+  return text && isAbsolute(text) ? text : undefined;
+}
+
+/**
+ * Open the system folder picker and return the chosen directory.
+ * @returns {Promise<{ path?: string, error?: string }>}
+ */
+export function pickFolder({ timeoutMs = 300000 } = {}) {
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-STA", "-Command", FOLDER_PICK_SCRIPT],
+      { windowsHide: true, timeout: timeoutMs },
+      (error, stdout) => {
+        const picked = parsePickedPath(stdout);
+        if (picked) resolve({ path: picked });
+        else if (error) resolve({ error: error.message });
+        else resolve({});
+      },
+    );
+  });
+}
 
 import * as ilink from "./ilink.js";
 import qrcode from "./vendor/qrcode-generator.mjs";
@@ -1510,6 +1553,7 @@ ${note ? `<div class="note">${note}</div>` : ""}
 ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><div class="m">等待中：${pending.map((item) => `${item.toolName ?? "?"}（${Math.round(item.waitedMs / 1000)} 秒）`).join("、")}</div>` : ""}
 <h4>收件目录</h4>
 <div class="m">微信收到的文件保存在：<code>${await resolvedInbox()}</code></div>
+<p><a class="b" href="/dsh-wechat-media/pick-folder">用系统文件夹选择器选择…</a></p>
 <form method="get" style="margin:8px 0">
   <input name="inboxDir" placeholder="绝对路径，例如 D:\\wechat-files" value="" style="font:14px system-ui;padding:6px 8px;width:420px">
   <button type="submit" style="font:14px system-ui;padding:6px 12px">保存</button>
@@ -1521,6 +1565,30 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
 <p class="m" style="margin-top:22px">本页仅本机可访问；所有操作都通过普通链接完成。</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button> <span style="color:#888;font-size:13px">（或按浏览器的返回键）</span></p></body>`;
           res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
           res.end(html);
+        },
+      },
+      {
+        // Opens the operating system's folder picker on the user's desktop and saves
+        // the choice as the inbox directory. Reachable as a plain link, because the
+        // browser cannot supply an absolute path itself.
+        kind: "exact",
+        path: "/dsh-wechat-media/pick-folder",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) {
+            res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+            return res.end("loopback only");
+          }
+          const picked = await pickFolder();
+          if (picked.path) await state.savePrefs({ inboxDir: picked.path });
+          noteRoute("/pick-folder", { picked: picked.path ?? null, error: picked.error ?? null });
+          const title = picked.path ? "✅ 收件目录已设为系统选择器里选的目录" : "ℹ️ 没有选择目录";
+          const detail = picked.path
+            ? `<code>${picked.path}</code><br>微信收到的文件会保存在 <code>${picked.path}/&lt;日期&gt;/&lt;会话&gt;/</code>`
+            : picked.error
+              ? `弹窗失败：${picked.error}<br>（可以直接在输入框里手输绝对路径）`
+              : "对话框被取消，目录未改变。";
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+          res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:680px"><h3>${title}</h3><p>${detail}</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button></p></body>`);
         },
       },
     ];
