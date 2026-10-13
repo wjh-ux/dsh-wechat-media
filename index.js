@@ -176,6 +176,23 @@ export function formatApprovalPrompt(request = {}, { maxArgumentChars = 400 } = 
  *
  * @returns {{ blockedCount: number, blockedAt: string }}
  */
+/**
+ * Build an inbound envelope of the same shape the platform sends, so the receive
+ * path can be exercised without a phone. Used by the loopback-only debug route.
+ */
+export function syntheticInbound({ chatId, text, fromUserId, messageId, now = Date.now() } = {}) {
+  const from = fromUserId || chatId;
+  const envelope = {
+    message_id: messageId || `debug-${Math.random().toString(36).slice(2, 10)}`,
+    message_type: 1,
+    from_user_id: from,
+    session_id: chatId,
+    create_time_ms: now,
+    item_list: [{ type: 1, text_item: { text: String(text ?? "debug inbound") } }],
+  };
+  if (/@chatroom$/.test(String(chatId ?? ""))) envelope.group_id = chatId;
+  return envelope;
+}
 export function noteBlocked(peer, now = new Date().toISOString()) {
   return { blockedCount: (Number(peer?.blockedCount) || 0) + 1, blockedAt: now };
 }
@@ -1152,6 +1169,40 @@ export function apply(ctx, config = {}) {
             reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
           }, { timeoutMs });
           json(res, 200, { ok: true, accountId, chatId, answered: Boolean(outcome), outcome: outcome ?? null });
+        },
+      },
+      {
+        // Verification helper: feed the receive path an envelope shaped like the
+        // platform's, so the inbound pipeline (allowlist -> agent -> reply) can be
+        // exercised and read back through peers.json, the route table and the
+        // counters without a phone. Loopback only, like every other route here.
+        kind: "exact",
+        path: "/dsh-wechat-media/debug/inbound",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readBody(req);
+          const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
+          const account = accountId ? await state.loadAccount(accountId) : undefined;
+          if (!account?.token) return json(res, 400, { error: "no paired account" });
+          const routes = await state.loadRoutes();
+          const chatId = String(body.chatId ?? "")
+            || lastInbound.get(accountId)?.chatId
+            || Object.keys(routes[accountId] ?? {})[0];
+          if (!chatId) return json(res, 400, { error: "no chat yet: write to the bot once or pass chatId" });
+          const envelope = syntheticInbound({ chatId, text: body.text, fromUserId: body.fromUserId });
+          await handleInbound(accountId, envelope);
+          const after = await state.loadRoutes();
+          json(res, 200, {
+            ok: true,
+            accountId,
+            chatId,
+            messageId: envelope.message_id,
+            isGroup: /@chatroom$/.test(chatId),
+            route: after[accountId]?.[chatId] ?? null,
+            peer: (await state.loadPeers())[accountId]?.[chatId] ?? null,
+            counters: { ...counters },
+          });
         },
       },
     ];
