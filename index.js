@@ -32,10 +32,16 @@ import { isAbsolute, join } from "node:path";
  */
 export const FOLDER_PICK_SCRIPT = [
   "Add-Type -AssemblyName System.Windows.Forms | Out-Null",
+  // Without an owner the dialog frequently never appears (or appears behind the
+  // app), so it is shown against a topmost form: that is the documented fix.
+  "$owner = New-Object System.Windows.Forms.Form",
+  "$owner.TopMost = $true",
+  "$owner.ShowInTaskbar = $false",
+  "$owner.WindowState = 'Minimized'",
   "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
   "$d.Description = 'Choose where dsh-wechat-media saves WeChat files'",
   "$d.ShowNewFolderButton = $true",
-  "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }",
+  "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }",
 ].join("; ");
 
 /**
@@ -52,16 +58,20 @@ export function parsePickedPath(stdout) {
  * @returns {Promise<{ path?: string, error?: string }>}
  */
 export function pickFolder({ timeoutMs = 300000 } = {}) {
+  const startedAt = Date.now();
   return new Promise((resolve) => {
     execFile(
       "powershell.exe",
       ["-NoProfile", "-STA", "-Command", FOLDER_PICK_SCRIPT],
-      { windowsHide: true, timeout: timeoutMs },
+      // windowsHide can leave the process without a usable window, so the dialog is
+      // shown normally; the console window is suppressed by the script instead.
+      { windowsHide: false, timeout: timeoutMs },
       (error, stdout) => {
+        const elapsedMs = Date.now() - startedAt;
         const picked = parsePickedPath(stdout);
-        if (picked) resolve({ path: picked });
-        else if (error) resolve({ error: error.message });
-        else resolve({});
+        if (picked) resolve({ path: picked, elapsedMs });
+        else if (error) resolve({ error: error.message, elapsedMs });
+        else resolve({ elapsedMs });
       },
     );
   });
@@ -1580,13 +1590,16 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
           }
           const picked = await pickFolder();
           if (picked.path) await state.savePrefs({ inboxDir: picked.path });
-          noteRoute("/pick-folder", { picked: picked.path ?? null, error: picked.error ?? null });
+          noteRoute("/pick-folder", { picked: picked.path ?? null, error: picked.error ?? null, elapsedMs: picked.elapsedMs ?? null });
+          const neverShown = !picked.path && !picked.error && (picked.elapsedMs ?? 0) < 3000;
           const title = picked.path ? "✅ 收件目录已设为系统选择器里选的目录" : "ℹ️ 没有选择目录";
           const detail = picked.path
             ? `<code>${picked.path}</code><br>微信收到的文件会保存在 <code>${picked.path}/&lt;日期&gt;/&lt;会话&gt;/</code>`
             : picked.error
               ? `弹窗失败：${picked.error}<br>（可以直接在输入框里手输绝对路径）`
-              : "对话框被取消，目录未改变。";
+              : neverShown
+                ? `系统没有把文件夹对话框显示出来（宿主进程可能无法弹窗，用时 ${picked.elapsedMs} ms）。<br>请直接在卡片或控制面板的输入框里填入绝对路径，例如 <code>D:\\wechat-files</code>。`
+                : "对话框被取消，目录未改变。";
           res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
           res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:680px"><h3>${title}</h3><p>${detail}</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button></p></body>`);
         },
