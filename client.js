@@ -127,6 +127,7 @@ window.__ModuleLoader__.load({
           requireAllowlist: "Only accept allowlisted chats",
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
+          blockedCount: "blocked",
           testApproval: "Test approval",
           testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s).",
           approvalAnswer: "Answer received",
@@ -165,6 +166,7 @@ window.__ModuleLoader__.load({
           requireAllowlist: "只接收白名单内的联系人与群",
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
+          blockedCount: "已拦截",
           testApproval: "测试审批",
           testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（最多等 120 秒）。",
           approvalAnswer: "已收到答复",
@@ -402,6 +404,9 @@ window.__ModuleLoader__.load({
                 h("span", { key: "n", className: "dswxName" }, peer.name ?? peer.chatId),
                 h("span", { key: "k", className: "dswxMeta" }, peer.kind === "group" ? "群 / group" : "私聊 / direct"),
                 h("span", { key: "d", className: "dswxMeta" }, decisionLabel(peer)),
+                Number(peer.blockedCount) > 0
+                  ? h("span", { key: "b", className: "dswxMeta dswxErr" }, `${t("blockedCount", "blocked")} ${peer.blockedCount}`)
+                  : null,
               ]),
               h("div", { key: "l2", className: "dswxMeta" }, peer.chatId),
               h("div", { key: "l3", className: "dswxRow" }, [
