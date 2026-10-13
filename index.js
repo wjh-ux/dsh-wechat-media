@@ -1060,6 +1060,18 @@ export function apply(ctx, config = {}) {
     return raw ? JSON.parse(raw) : {};
   };
 
+  /**
+   * Arguments for a control route: the query string, merged with the JSON body for
+   * POSTs. GET is supported on purpose - in one reporter's browser every POST from
+   * the card was swallowed before reaching the plugin (nothing in recentRoutes)
+   * while GETs worked, so every card action must be expressible as a GET.
+   */
+  const readArgs = async (req) => {
+    const query = Object.fromEntries(new URL(req.url, "http://127.0.0.1").searchParams);
+    if (req.method === "POST") return { ...query, ...(await readBody(req)) };
+    return query;
+  };
+
   const isLoopback = (req) => {
     const address = req.socket?.remoteAddress ?? "";
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
@@ -1110,7 +1122,7 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/login",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           try {
             const session = await logins.start();
             void logins.run(session).then(async (finished) => {
@@ -1140,12 +1152,12 @@ export function apply(ctx, config = {}) {
           const [loginId, action] = rest.split("/");
           const session = logins.get(loginId);
           if (!session) return json(res, 404, { error: "unknown login session" });
-          if (action === "verify" && req.method === "POST") {
-            const body = await readBody(req);
+          if (action === "verify" && (req.method === "POST" || req.method === "GET")) {
+            const body = await readArgs(req);
             logins.submitVerifyCode(session, body.code);
             return json(res, 200, { ok: true, login: publicLogin(session) });
           }
-          if (action === "cancel" && req.method === "POST") {
+          if (action === "cancel" && (req.method === "POST" || req.method === "GET")) {
             logins.cancel(session);
             return json(res, 200, { ok: true, login: publicLogin(session) });
           }
@@ -1195,8 +1207,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/logout",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const accountId = String(body.accountId ?? "");
           const control = monitors.get(accountId);
           if (control) control.stopped = true;
@@ -1209,8 +1221,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/peers",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const accountId = String(body.accountId ?? "");
           const chatId = String(body.chatId ?? "");
           if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
@@ -1225,8 +1237,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/prefs",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const patch = {};
           if (typeof body.requireAllowlist === "boolean") patch.requireAllowlist = body.requireAllowlist;
           if (typeof body.autoReply === "boolean") patch.autoReply = body.autoReply;
@@ -1243,8 +1255,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/test-approval",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
           const account = accountId ? await state.loadAccount(accountId) : undefined;
           if (!account?.token) return json(res, 400, { error: "no paired account" });
@@ -1306,8 +1318,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/debug/inbound",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
           const account = accountId ? await state.loadAccount(accountId) : undefined;
           if (!account?.token) return json(res, 400, { error: "no paired account" });
@@ -1342,8 +1354,8 @@ export function apply(ctx, config = {}) {
         path: "/dsh-wechat-media/approvals/cancel",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
-          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
-          const body = await readBody(req);
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
           const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
           const chatId = String(body.chatId ?? "") || approvals.list()[0]?.chatId || "";
           if (!chatId) return json(res, 400, { error: "no approval is pending" });
