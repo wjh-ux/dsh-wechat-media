@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.10
+
+- **The system folder picker actually appears now.** v0.2.8 spawned PowerShell with `windowsHide: true`, which
+  left the process without a usable window: the dialog returned "cancelled" about two seconds later without ever
+  being shown (verified against the running plugin: three calls, `picked: null, elapsedMs ≈ 2100`). The spawn no
+  longer hides the window, and the dialog is shown against a **topmost owner form** - the documented fix for a
+  dialog that never comes to the front. Run directly on the same machine, the same script does show the dialog and
+  returns the chosen directory.
+- **A failure is never ambiguous.** The route now reports how long the dialog took, so the page distinguishes
+  "you cancelled" from "the system never showed it" and tells you to type the absolute path in that case.
+
 ## 0.2.9
 
 - **The test suite is platform-neutral again.** `test/inbox.test.mjs` asserted on a Windows drive path
