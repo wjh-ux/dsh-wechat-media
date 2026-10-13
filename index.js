@@ -169,6 +169,16 @@ export function formatApprovalPrompt(request = {}, { maxArgumentChars = 400 } = 
   return lines.join("\n");
 }
 
+/**
+ * Count a message the allowlist dropped. Silently ignoring a chat is the right
+ * behaviour and a terrible experience: the count makes the silence visible in the
+ * card ("已拦截 N 条") instead of leaving the user wondering why the bot went quiet.
+ *
+ * @returns {{ blockedCount: number, blockedAt: string }}
+ */
+export function noteBlocked(peer, now = new Date().toISOString()) {
+  return { blockedCount: (Number(peer?.blockedCount) || 0) + 1, blockedAt: now };
+}
 /** One short, readable block of the tool arguments (object, string or nothing). */
 function formatArguments(args, maxChars) {
   if (args === undefined || args === null) return "";
@@ -610,6 +620,8 @@ export function apply(ctx, config = {}) {
     const verdict = await classifyInbound({ accountId, message, text, state, consumeApproval: consumeApprovalReply });
     if (verdict.action === "ignore") {
       ctx.logger?.info?.("[dsh-wechat-media] ignored message from %s (%s)", chatId, verdict.reason);
+      // Keep the drop countable so the card can show it.
+      await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       return;
     }
     if (verdict.action === "answer") return; // already handed to the waiting requester
