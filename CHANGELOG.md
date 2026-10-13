@@ -8,7 +8,8 @@
 - The approval bridge was extracted into `createApprovalBridge` with its dependencies injected, so every
   decision — who gets asked, what "1"/"2" mean, the timeout, an aborted turn, one question per chat, and the
   rule that an undeliverable prompt must fall back to the GUI — is covered by tests. Twelve new tests
-  (85 total).- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
+  (85 total).- `GET /dsh-wechat-media/state` now also reports `counters` (received / forwarded / blocked / answered) and the
+  last inbound message per account, so checking a live run means one request instead of log archaeology.- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
   `/state` exposes them, so the field that actually addresses a group is read off the platform instead of
   guessed. Still awaiting a live group message; the v0.2.0 release notes say so.
 
