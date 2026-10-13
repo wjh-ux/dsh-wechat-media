@@ -583,7 +583,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0 };
   const approvals = createApprovalBridge({
     notify: (account, chatId, text) => sendText(account, chatId, text, { typing: false }),
     timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
@@ -705,7 +705,19 @@ export function apply(ctx, config = {}) {
         lines.push(`[微信媒体下载失败] ${item?.type ?? "media"}: ${error?.message ?? error}`);
       }
     }
-    if (lines.length === 0) return;
+    if (lines.length === 0) {
+      // An item that is neither text nor downloadable media (a sticker, or a type
+      // this port does not know). Count it and log its item types: dropping it
+      // silently is indistinguishable from a broken bridge.
+      counters.unusable += 1;
+      ctx.logger?.info?.(
+        "[dsh-wechat-media] inbound %s from %s carried nothing usable (item types: %s)",
+        isGroup ? "group" : "direct",
+        chatId,
+        (Array.isArray(message?.item_list) ? message.item_list : []).map((item) => item?.type ?? "?").join(",") || "none",
+      );
+      return;
+    }
 
     counters.forwarded += 1;
     const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
