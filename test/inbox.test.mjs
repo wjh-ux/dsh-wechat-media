@@ -110,11 +110,19 @@ await test("the picker script asks Windows for a folder, in STA", () => {
 });
 
 await test("only an absolute path from the dialog is accepted", () => {
-  assert.equal(parsePickedPath("D:\\wechat-files\r\n"), "D:\\wechat-files");
-  assert.equal(parsePickedPath("  C:\\Users\\Administrator\\Documents  "), "C:\\Users\\Administrator\\Documents");
+  // Platform-neutral on purpose: the suites run on Windows and on Linux in CI, and
+  // "D:\\wechat-files" is not an absolute path there.
+  const absolute = join(tmpdir(), "wechat-files");
+  assert.equal(parsePickedPath(`${absolute}\r\n`), absolute, "trailing newlines are trimmed");
+  assert.equal(parsePickedPath(`  ${absolute}  `), absolute, "surrounding spaces are trimmed");
   assert.equal(parsePickedPath(""), undefined, "a cancelled dialog prints nothing");
   assert.equal(parsePickedPath("   "), undefined);
   assert.equal(parsePickedPath("relative\\dir"), undefined, "a relative answer is refused");
+  assert.equal(parsePickedPath("relative/dir"), undefined, "on every platform");
+  assert.equal(parsePickedPath(42), undefined, "a non-string is refused");
+  if (process.platform === "win32") {
+    assert.equal(parsePickedPath("D:\\wechat-files"), "D:\\wechat-files", "a drive path is absolute on Windows");
+  }
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
