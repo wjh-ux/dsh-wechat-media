@@ -129,7 +129,8 @@ window.__ModuleLoader__.load({
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           blockedCount: "blocked",
           testApproval: "Test approval",
-          testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s).",
+          testApprovalSent: "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here).",
+          lastApproval: "Last approval",
           approvalAnswer: "Answer received",
           approvalNoAnswer: "No answer within the timeout - a real request would fall back to the GUI the same way.",
           scanHint: "Scan with WeChat on your phone. Scanning a different WeChat account adds it as another account; the same account just refreshes its login. Credentials stay on this machine, so restarting dsh needs no new scan.",
@@ -168,7 +169,8 @@ window.__ModuleLoader__.load({
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           blockedCount: "已拦截",
           testApproval: "测试审批",
-          testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（最多等 120 秒）。",
+          testApprovalSent: "已把审批提示发到微信 —— 回 1 批准、回 2 拒绝（也可以在卡片上取消）。",
+          lastApproval: "最近一次审批",
           approvalAnswer: "已收到答复",
           approvalNoAnswer: "超时没等到答复 —— 真实审批也会这样回落到 GUI。",
           scanHint: "用手机微信扫码。扫**不同的微信号**就是再加一个账号；扫同一个号只是刷新登录。凭证保存在本机，重启 dsh 不需要重扫。",
@@ -308,13 +310,8 @@ window.__ModuleLoader__.load({
           setFailed(false);
           setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (waiting up to 120 s)."));
           try {
-            const result = await api("/test-approval", { method: "POST", body: {} });
-            if (result.answered) {
-              setMessage(`${t("approvalAnswer", "Answer received")}: ${result.outcome}`);
-            } else {
-              setFailed(true);
-              setMessage(t("approvalNoAnswer", "No answer within the timeout - a real request would fall back to the GUI the same way."));
-            }
+            await api("/test-approval", { method: "POST", body: {} });
+            setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here)."));
           } catch (problem) {
             setFailed(true);
             setMessage(String(problem?.message ?? problem));
@@ -410,6 +407,10 @@ window.__ModuleLoader__.load({
                   h("button", { key: "c", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelApproval(snapshot.approvals[0]) },
                     t("cancelWaiting", "Cancel")),
                 ])
+              : null,
+            snapshot?.lastApproval
+              ? h("p", { key: "lastApproval", className: "dswxMeta" },
+                  `${t("lastApproval", "Last approval")}: ${snapshot.lastApproval.outcome} · ${snapshot.lastApproval.chatId}`)
               : null,
             peerRows.length === 0
               ? h("p", { key: "none", className: "dswxMeta" }, t("contactsEmpty", "Nobody has written to it yet."))
