@@ -60,6 +60,21 @@ Each account is stored under its normalized `ilink_bot_id` (`b0f5860fdecb@im.bot
 with `0600` permissions on the files that hold a token; accounts, cursors and conversation routes are keyed
 per account, so several can poll at the same time.
 
+## Where inbound files go / 收件目录
+
+By default inbound media is decrypted into `$DSH_HOME/wechat-inbox/<date>/<chat>/`. That directory is
+configurable, and the change takes effect without a restart:
+
+1. **From the card** - the field under *Inbound files are saved in* submits a plain GET form (a navigation, not a
+   fetch), so it works even in browsers where the card's requests never reach the plugin.
+2. **From the control panel** - `/dsh-wechat-media/panel` has the same field and a *restore default* button.
+3. **From the plugin config** - `inboxDir: "D:\\wechat-files"` in the plugin options, used when no runtime
+   preference is set.
+
+The order is preference (card/panel) → config → `$DSH_HOME/wechat-inbox`. Only an absolute path is accepted: a
+relative one is refused with a message instead of being resolved against the process working directory, because a
+silently different directory is worse than the documented default. `GET /dsh-wechat-media/state` reports the
+effective value as `inboxRoot`, with `inboxRootDefault` and `inboxRootConfig` for comparison.
 ## Using it / 使用
 
 Just message the bot from WeChat. A few things the agent can do from inside the conversation:
