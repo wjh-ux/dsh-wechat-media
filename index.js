@@ -210,6 +210,8 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
   const pending = new Map();
   const keyOf = (accountId, chatId) => `${accountId}|${chatId}`;
 
+  /** Most recent outcome, so a UI can show the result without blocking. */
+  let lastResult;
   const bridge = {
     pending,
 
@@ -236,10 +238,16 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       clearTimeout(waiting.timer);
       pending.delete(key);
       waiting.resolve(undefined);
+      lastResult = { outcome: "cancelled", chatId, toolName: waiting.toolName, at: new Date().toISOString() };
       Promise.resolve()
         .then(() => notify?.(waiting.account, chatId, "🚫 已在 DSH 里取消这次审批，转由 GUI 处理。"))
         .catch(() => {});
       return true;
+    },
+
+    /** The most recent outcome ("allowed-once" / "rejected" / "cancelled" / "timeout"). */
+    last() {
+      return lastResult ? { ...lastResult } : undefined;
     },
 
     /**
@@ -256,6 +264,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       clearTimeout(waiting.timer);
       pending.delete(key);
       waiting.resolve(outcome);
+      lastResult = { outcome, chatId, toolName: waiting.toolName, at: new Date().toISOString() };
       // Confirm in the chat. Reported from real use: answering and then hearing
       // nothing back is indistinguishable from being ignored.
       const confirmation = outcome === "allowed-once" ? "✅ 已批准，本次操作继续。" : "🚫 已拒绝，本次操作已取消。";
@@ -292,6 +301,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       const answer = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           timedOut = true;
+          lastResult = { outcome: "timeout", chatId, toolName: request?.toolName, at: new Date().toISOString() };
           pending.delete(key);
           resolve(undefined);
         }, Math.max(1, Number(limit) || timeoutMs));
@@ -1049,6 +1059,7 @@ export function apply(ctx, config = {}) {
             peers: await state.loadPeers(),
             counters: { ...counters },
             approvals: approvals.list(),
+            lastApproval: approvals.last() ?? null,
             lastInbound: Object.fromEntries(lastInbound.entries()),
             accounts: accounts.map((account) => {
               const control = monitors.get(account.accountId);
@@ -1221,11 +1232,14 @@ export function apply(ctx, config = {}) {
             return json(res, 409, { error: "an approval is already pending for this chat" });
           }
           const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
-          const outcome = await approvals.ask(account, chatId, {
+          // Deliberately not awaited: blocking the HTTP request for up to two
+          // minutes made the card's button look dead. The card polls /state instead
+          // (approvals while waiting, lastApproval once answered).
+          void approvals.ask(account, chatId, {
             toolName: body.toolName ?? "dsh-wechat-media self-test",
             reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
           }, { timeoutMs, accountId });
-          json(res, 200, { ok: true, accountId, chatId, answered: Boolean(outcome), outcome: outcome ?? null });
+          json(res, 200, { ok: true, accountId, chatId, sent: true, waiting: approvals.list() });
         },
       },
       {
@@ -1260,6 +1274,7 @@ export function apply(ctx, config = {}) {
             peer: (await state.loadPeers())[accountId]?.[chatId] ?? null,
             counters: { ...counters },
             approvals: approvals.list(),
+            lastApproval: approvals.last() ?? null,
           });
         },
       },
