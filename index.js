@@ -1404,7 +1404,87 @@ export function apply(ctx, config = {}) {
             ? `chatId: ${chatId}<br>请在微信里回 <b>1</b>（批准一次）或 <b>2</b>（拒绝）。`
             : `原因：${String(result.error ?? "?")}${result.reason === "pending" ? "<br>（已有一条在等待：去微信回 1/2，或在卡片上点「取消等待」）" : ""}`;
           res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-          res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:640px"><h3>${title}</h3><p>${detail}</p><p style="color:#666">这是 dsh-wechat-media 的自检页面（仅本机可访问）。</p></body>`);
+          res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:640px"><h3>${title}</h3><p>${detail}</p><p style="color:#666">这是 dsh-wechat-media 的自检页面（仅本机可访问）。</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button> <span style="color:#888;font-size:13px">（或按浏览器的返回键）</span></p></body>`);
+        },
+      },
+      {
+        // A no-JavaScript control panel. In the reporter's browser every fetch from
+        // the card was swallowed before reaching the plugin, while plain navigation
+        // worked - so everything the card can do is also available here as links.
+        kind: "exact",
+        path: "/dsh-wechat-media/panel",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) {
+            res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+            return res.end("loopback only");
+          }
+          const args = Object.fromEntries(new URL(req.url, "http://127.0.0.1").searchParams);
+          const accountId = String(args.accountId ?? "") || (await state.listAccounts())[0];
+          const account = accountId ? await state.loadAccount(accountId) : undefined;
+          const routes = await state.loadRoutes();
+          const chatFallback = () => String(args.chatId ?? "") || lastInbound.get(accountId)?.chatId || Object.keys(routes[accountId] ?? {})[0] || "";
+          let note = "";
+          if (args.set) {
+            const [acct, chat, decision] = String(args.set).split("|");
+            const allowed = decision === "allowed" ? true : decision === "blocked" ? false : null;
+            await state.setPeer(acct, chat, { allowed });
+            note = `已把 ${chat} 设为 ${decision === "allowed" ? "允许" : decision === "blocked" ? "忽略" : "未决定"}`;
+            noteRoute("/panel", { action: "set", chatId: chat, decision });
+          } else if (args.allowlist) {
+            await state.savePrefs({ requireAllowlist: args.allowlist === "true" });
+            note = `白名单开关 → ${args.allowlist === "true" ? "开" : "关"}`;
+            noteRoute("/panel", { action: "allowlist", value: args.allowlist });
+          } else if (args.cancel) {
+            const chatId = chatFallback();
+            const cancelled = chatId ? approvals.cancel(accountId, chatId) : false;
+            note = cancelled ? "已取消等待中的审批（转由 GUI 处理）" : "当前没有待批的审批";
+            noteRoute("/panel", { action: "cancel", chatId, cancelled });
+          } else if (args.test) {
+            const chatId = chatFallback();
+            if (!account?.token) note = "❌ 没有已配对的账号";
+            else if (!chatId) note = "❌ 还没有对话：先在微信里给 bot 发一条消息";
+            else if (approvals.pending.has(`${accountId}|${chatId}`)) note = "ℹ️ 这条对话已有一条审批在等待（在微信回 1/2，或点下面的取消）";
+            else {
+              const sent = await new Promise((resolve) => {
+                let settled = false;
+                const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+                approvals.ask(account, chatId, {
+                  toolName: "dsh-wechat-media self-test",
+                  reason: "来自控制面板的自检：验证微信里回 1/2 的链路，不会真的执行任何操作",
+                }, { timeoutMs: 120000, accountId, onSent: (ok, error) => done(ok ? true : `❌ 发送失败：${error?.message ?? error}`) })
+                  .then(() => done(true), (error) => done(`❌ ${error?.message ?? error}`));
+              });
+              note = sent === true ? `✅ 审批提示已发送到微信（chatId: ${chatId}），请在微信回 1 或 2` : String(sent);
+              noteRoute("/panel", { action: "test", sent: sent === true });
+            }
+          }
+          const prefs = await state.loadPrefs();
+          const peers = (await state.loadPeers())[accountId] ?? {};
+          const pending = approvals.list();
+          const rows = Object.entries(peers).map(([chatId, peer]) => {
+            const stateText = peer.allowed === true ? "允许" : peer.allowed === false ? "忽略" : "未决定";
+            const link = (decision, label) => `<a class="b" href="?set=${encodeURIComponent(`${accountId}|${chatId}|${decision}`)}">${label}</a>`;
+            const blocked = Number(peer.blockedCount) > 0 ? ` · 已拦截 ${peer.blockedCount} 条` : "";
+            return `<tr><td>${chatId}<div class="m">${peer.kind === "group" ? "群" : "私聊"} · 当前：${stateText}${blocked}</div></td>`
+              + `<td>${link("allowed", "允许")} ${link("blocked", "忽略")} ${link("clear", "清除")}</td></tr>`;
+          }).join("");
+          const html = `<!doctype html><meta charset="utf-8"><title>dsh-wechat-media 控制面板</title>
+<style>body{font:15px/1.7 system-ui;padding:26px;max-width:860px;color:#222}
+h3{margin:0 0 6px}h4{margin:22px 0 6px}a.b{display:inline-block;padding:3px 10px;border:1px solid #bbb;border-radius:6px;text-decoration:none;color:#036;margin:0 4px 4px 0}
+.m{color:#666;font-size:13px}table{border-collapse:collapse;width:100%}td{padding:6px 4px;border-bottom:1px solid #eee;vertical-align:top}
+.note{background:#f3f7ff;border:1px solid #cfe0ff;padding:8px 12px;border-radius:8px;margin:14px 0}</style>
+<body><p style="margin:0 0 10px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button></p><h3>dsh-wechat-media 控制面板（纯链接，不需要 JavaScript）</h3>
+<div class="m">账号：${accountId ?? "（无）"} · 白名单：${prefs.requireAllowlist ? "开" : "关"} · 待批审批：${pending.length}</div>
+${note ? `<div class="note">${note}</div>` : ""}
+<h4>审批</h4>
+<a class="b" href="?test=1">发送一条测试审批到微信</a>
+${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><div class="m">等待中：${pending.map((item) => `${item.toolName ?? "?"}（${Math.round(item.waitedMs / 1000)} 秒）`).join("、")}</div>` : ""}
+<h4>联系人白名单</h4>
+<a class="b" href="?allowlist=${prefs.requireAllowlist ? "false" : "true"}">${prefs.requireAllowlist ? "关闭" : "开启"}「只接收白名单内的联系人与群」</a>
+<table>${rows || `<tr><td class="m">还没有联系人给它发过消息</td></tr>`}</table>
+<p class="m" style="margin-top:22px">本页仅本机可访问；所有操作都通过普通链接完成。</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button> <span style="color:#888;font-size:13px">（或按浏览器的返回键）</span></p></body>`;
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+          res.end(html);
         },
       },
     ];
