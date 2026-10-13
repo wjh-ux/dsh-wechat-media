@@ -1,0 +1,12 @@
+# Runtime state (created by the plugin under $DSH_HOME, never committed)
+state/
+*.json.bak
+
+# Local install artifacts
+node_modules/
+package-lock.json
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
