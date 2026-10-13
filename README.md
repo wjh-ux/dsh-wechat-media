@@ -174,6 +174,9 @@ Everything here was learned against the live platform; each item broke something
   carries a group's addressable id — `group_id` or `session_id`; the host logs
   `inbound group chat=… session_id=… group_id=… room=…` when a group first writes, which settles it, and if the
   answer is `session_id` the fix is one line in `describeEnvelope`.
+- **Stickers and unknown item types are dropped, but visibly.** A message that carries neither text nor a
+  downloadable file is counted (`counters.unusable` in `/dsh-wechat-media/state`) and logged with its item
+  types instead of vanishing silently.
 - **Voice is not bridged as audio.** WeChat's own transcript rides along as text when present; the `.silk`
   payload is downloaded but not transcoded.
 - **Proactive sends need an open conversation window.** Without a stored context token for that peer the
