@@ -40,7 +40,8 @@
     "vendor/qrcode-generator.mjs",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD-PARTY.md"
   ],
   "dsh": {
     "bundle": {
