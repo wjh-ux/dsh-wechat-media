@@ -13,7 +13,7 @@
  * anything is encrypted and uploaded.
  */
 import { mkdir, open, rename, rm, stat } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { isAbsolute, extname, join } from "node:path";
 
 /** Directory under $DSH_HOME where inbound media is written. */
 const INBOX_NAME = "wechat-inbox";
@@ -135,16 +135,39 @@ export async function ensureMediaExtension(filePath) {
   return target;
 }
 
-/** Root of the inbound media tree: `$DSH_HOME/wechat-inbox`. */
+/** Root of the inbound media tree by default: `$DSH_HOME/wechat-inbox`. */
 export function inboxRoot(dshHome) {
   return join(dshHome, INBOX_NAME);
 }
 
+/**
+ * Where inbound media is written.
+ *
+ * Deliberate order: the runtime preference (set from the card or the control panel)
+ * wins over the plugin config, which wins over the default under `$DSH_HOME`. A
+ * relative path is ignored rather than resolved against the process cwd, because a
+ * silently different directory is worse than the documented default.
+ *
+ * @returns {string} an absolute directory
+ */
+export function resolveInboxDir({ prefs, config, dshHome } = {}) {
+  for (const candidate of [prefs?.inboxDir, config?.inboxDir]) {
+    const value = typeof candidate === "string" ? candidate.trim() : "";
+    if (value && isAbsolute(value)) return value;
+  }
+  return inboxRoot(dshHome);
+}
+
 /** A per-day, per-chat directory so a busy group does not flatten into one folder. */
-function inboxDir(dshHome, chatId, when) {
+function dayDir(root, chatId, when) {
   const day = new Date(when ?? Date.now()).toISOString().slice(0, 10);
   const safeChat = String(chatId ?? "unknown").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 48);
-  return join(inboxRoot(dshHome), day, safeChat);
+  return join(root, day, safeChat);
+}
+
+/** A per-day, per-chat directory under the default root. */
+function inboxDir(dshHome, chatId, when) {
+  return dayDir(inboxRoot(dshHome), chatId, when);
 }
 
 /**
@@ -162,10 +185,12 @@ function inboxDir(dshHome, chatId, when) {
  * @param {number} [options.maxBytes] inbound cap, default 100 MiB
  * @param {number} [options.now]     clock, injectable for tests
  * @param {string} [options.fileName] force a file name
+ * @param {string} [options.inboxPath] override the inbox root (an absolute directory)
  * @returns {Promise<{ path: string, kind: string, bytes: number, name: string }>}
  */
-export async function saveInboundMedia({ ilink, chatId, item, dshHome, maxBytes = 100 * 1024 * 1024, now, fileName }) {
-  const dir = inboxDir(dshHome, chatId, now);
+export async function saveInboundMedia({ ilink, chatId, item, dshHome, maxBytes = 100 * 1024 * 1024, now, fileName, inboxPath }) {
+  const root = typeof inboxPath === "string" && isAbsolute(inboxPath.trim()) ? inboxPath.trim() : inboxRoot(dshHome);
+  const dir = dayDir(root, chatId, now);
   await mkdir(dir, { recursive: true });
   const savedPath = await ilink.downloadMedia({
     item,
