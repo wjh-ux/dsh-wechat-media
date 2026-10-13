@@ -210,5 +210,26 @@ await test("pending questions are listed and can be cancelled from DSH", async (
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(notify.sent.length, 2, "the chat is told the approval was cancelled in DSH");
 });
+await test("the last outcome is reported without blocking", async () => {
+  const notify = recorder();
+  const bridge = createApprovalBridge({ notify, timeoutMs: 5000 });
+  assert.equal(bridge.last(), undefined, "nothing has happened yet");
+  const waiting = bridge.ask(account, "chat-a", request(), { accountId: "acct-one" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  bridge.consume("acct-one", "chat-a", "2");
+  await waiting;
+  assert.equal(bridge.last().outcome, "rejected");
+  assert.equal(bridge.last().chatId, "chat-a");
+  assert.equal(bridge.last().toolName, "pwsh");
+
+  const second = bridge.ask(account, "chat-a", request(), { accountId: "acct-one" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  bridge.cancel("acct-one", "chat-a");
+  await second;
+  assert.equal(bridge.last().outcome, "cancelled");
+
+  await bridge.ask(account, "chat-a", request(), { accountId: "acct-one" }, { timeoutMs: 20 });
+  assert.equal(bridge.last().outcome, "timeout");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
