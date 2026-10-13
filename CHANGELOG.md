@@ -15,7 +15,9 @@
   the inbound path used the monitor's account id. Real account records carry `botId`, so the two differed and a
   "1"/"2" reply never matched: it reached the agent as an ordinary message instead of answering the approval.
   The key is now passed explicitly from the sender side, with a regression test that names the account record
-  differently (87 tests total).- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
+  differently (87 tests total).- A message that carries neither text nor downloadable media (a sticker, an unknown item type) is now counted as
+  `counters.unusable` and logged with its item types instead of disappearing without a trace. A live run showed
+  exactly that: the peer's `seenAt` advanced while no session turn was produced.- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
   `/state` exposes them, so the field that actually addresses a group is read off the platform instead of
   guessed. Still awaiting a live group message; the v0.2.0 release notes say so.
 
