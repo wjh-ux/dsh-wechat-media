@@ -231,5 +231,27 @@ await test("the last outcome is reported without blocking", async () => {
   await bridge.ask(account, "chat-a", request(), { accountId: "acct-one" }, { timeoutMs: 20 });
   assert.equal(bridge.last().outcome, "timeout");
 });
+await test("the caller learns whether the prompt really went out", async () => {
+  const flags = [];
+  const ok = createApprovalBridge({ notify: async () => {}, timeoutMs: 30 });
+  const waiting = ok.ask(account, "chat-a", request(), { accountId: "acct-one", onSent: (sent) => flags.push(sent) });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(flags, [true], "a delivered prompt reports true");
+  await waiting;
+
+  const failing = createApprovalBridge({
+    notify: async () => {
+      throw new Error("window closed");
+    },
+    timeoutMs: 30,
+  });
+  const failures = [];
+  const outcome = await failing.ask(account, "chat-a", request(), {
+    accountId: "acct-one",
+    onSent: (sent, error) => failures.push([sent, error?.message]),
+  });
+  assert.equal(outcome, undefined);
+  assert.deepEqual(failures, [[false, "window closed"]], "an undeliverable prompt reports the reason");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
