@@ -11,6 +11,15 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
+/**
+ * Every shipped JavaScript module that runs on the host: taken from the manifest, so
+ * a new module cannot be published without also being import-checked here. The client
+ * half is excluded because it is bundled for the browser, not resolved by node.
+ */
+function hostModules() {
+  return pkg.files.filter((file) => file.endsWith(".js") && file !== "client.js");
+}
+
 let passed = 0;
 let failed = 0;
 function test(name, fn) {
@@ -79,8 +88,8 @@ test("the client half keeps its __ModuleLoader__ wrapper", () => {
 });
 
 test("every relative import resolves", () => {
-  const sources = ["index.js", "client.js", "ilink.js", "login.js", "media.js", "state.js"];
-  for (const source of sources) {
+  for (const source of hostModules()) {
+    assert.ok(existsSync(join(root, source)), `published source missing: ${source}`);
     const text = readFileSync(join(root, source), "utf8");
     for (const match of text.matchAll(/from\s+"(\.[^"]+)"/g)) {
       const target = join(root, dirname(source), match[1]);
@@ -92,7 +101,7 @@ test("every relative import resolves", () => {
 test("the host half never statically imports a harness package", () => {
   // A link-installed plugin cannot resolve @deepseek-ai/* from its own directory,
   // so those must go through the loader at runtime instead.
-  for (const source of ["index.js", "login.js", "media.js", "state.js"]) {
+  for (const source of hostModules()) {
     const text = readFileSync(join(root, source), "utf8");
     for (const match of text.matchAll(/^\s*import[^;]*from\s+"(@deepseek-ai\/[^"]+)"/gm)) {
       assert.fail(`${source} statically imports ${match[1]}; use ctx.loader.internal.import`);

@@ -25,7 +25,9 @@ async function test(name, fn) {
     failed += 1;
     console.log(`  FAIL ${name}\n       ${error?.message ?? error}`);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    // Windows occasionally holds the directory for a moment (indexer, antivirus);
+    // a flaky cleanup would report a passing suite as failed.
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 

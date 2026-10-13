@@ -22,7 +22,9 @@
  * runtime through the Cordis loader, and every use is guarded.
  */
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -81,7 +83,15 @@ import * as ilink from "./ilink.js";
 import qrcode from "./vendor/qrcode-generator.mjs";
 import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
-import { WechatState, defaultStateRoot } from "./state.js";
+import { openSessionAgent } from "./session.js";
+import * as wecom from "./wecom.js";
+// The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
+// them as `streamBody(...)` (as this file did) throws
+// `TypeError: wecom.streamBody is not a function` inside the reply's try/catch, so every
+// WeCom answer was swallowed and the bot simply never replied. test/wiring.test.mjs now
+// cross-checks every `namespace.name(...)` call against the module it came from.
+import { WecomBot, describeBotMessage, generateReqId, markdownBody, splitForStream, streamBody } from "./wecom-bot.js";
+import { normalizeAccountId, WechatState, defaultStateRoot } from "./state.js";
 
 /** Long-poll budget the platform advertises; used until it tells us otherwise. */
 const DEFAULT_POLL_MS = 35_000;
@@ -204,6 +214,33 @@ export async function classifyInbound({ accountId, message, text, state, consume
   // a reader of the log that the allowlist let this chat through.
   return { ...base, action: "forward", reason: decided.reason === "open" ? "ok" : decided.reason };
 }
+
+/**
+ * The same one-decision rule for a message that arrived over the WeCom long
+ * connection, whose envelope is not the personal-WeChat one (see wecom-bot.js).
+ *
+ * It exists as its own function because the two paths must agree on the *order*:
+ * allowlist first, then "is this a 1/2 answer to a pending approval?", then a turn.
+ * The WeCom path originally skipped the middle step, so answering an approval in a
+ * WeCom chat started a turn instead of answering it.
+ *
+ * @returns {Promise<{ action: "ignore" | "answer" | "forward", reason: string, chatId: string, isGroup: boolean, text: string }>}
+ */
+export async function classifyWecomInbound({ accountId, message, text, state, consumeApproval }) {
+  const chatId = String(message?.chatId ?? "");
+  const body = String(text ?? "");
+  const base = { chatId, isGroup: message?.chatType === "group", text: body };
+  if (!chatId) return { ...base, action: "ignore", reason: "no-chat-id" };
+
+  const prefs = await state.loadPrefs();
+  const decided = allowDecision({ peer: await state.getPeer(accountId, chatId), prefs });
+  if (!decided.accepted) return { ...base, action: "ignore", reason: decided.reason };
+
+  if (body && typeof consumeApproval === "function" && consumeApproval(accountId, chatId, body)) {
+    return { ...base, action: "answer", reason: "approval-answer" };
+  }
+  return { ...base, action: "forward", reason: decided.reason === "open" ? "ok" : decided.reason };
+}
 /**
  * Render an approval request as the WeChat prompt. The arguments matter as much
  * as the tool name: "工具：pwsh" alone does not tell anyone what they are about
@@ -248,6 +285,27 @@ export function syntheticInbound({ chatId, text, fromUserId, messageId, now = Da
 }
 export function noteBlocked(peer, now = new Date().toISOString()) {
   return { blockedCount: (Number(peer?.blockedCount) || 0) + 1, blockedAt: now };
+}
+
+/**
+ * Which record an approval for this conversation must be asked through.
+ *
+ * A personal-WeChat chat needs an account that holds a token (without one nothing
+ * can be sent, so the GUI keeps the request). A WeCom chat has no account file at
+ * all: the long connection is the channel, and it is answerable only while it is
+ * authenticated. Skipping this distinction is why approvals inside a WeCom chat
+ * never reached the user - the bridge demanded a WeChat token for a pseudo account
+ * (`wecom-…`) that can never have one, and quietly handed every request to the GUI.
+ *
+ * @returns {object|undefined} the record to pass to `notify`, or undefined to fall
+ *   back to the GUI.
+ */
+export function approvalTarget({ conversation, account, wecomReady } = {}) {
+  const accountId = String(conversation?.accountId ?? "");
+  if (accountId.startsWith("wecom-")) {
+    return wecomReady ? { accountId, via: "wecom" } : undefined;
+  }
+  return account?.token ? account : undefined;
 }
 
 /**
@@ -392,8 +450,10 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
         if (ignore) return next();
         const conversation = await findConversation?.(String(request?.agent?.session?.id ?? ""));
         if (!conversation) return next(); // not a WeChat-driven session
-        const account = await loadAccount?.(conversation.accountId);
-        if (!account?.token) return next();
+        // Whoever the caller can actually reach. `loadAccount` owns that judgement
+        // (a WeChat account needs a token; a WeCom chat needs a live long connection).
+        const account = await loadAccount?.(conversation.accountId, conversation);
+        if (!account) return next();
         // Undefined means "ask someone else": the GUI's own prompt stays intact.
         return (await bridge.ask(account, conversation.chatId, request, { accountId: conversation.accountId })) ?? next();
       } catch (error) {
@@ -539,10 +599,29 @@ class ReplyCollector {
   }
 }
 
-/** A stable, restart-safe session id for one WeChat chat. */
-function sessionIdFor(accountId, chatId) {
-  const digest = Buffer.from(`${accountId}\u0000${chatId}`).toString("base64url").replace(/[^A-Za-z0-9]/g, "");
-  return `wechat-${digest.slice(0, 40)}`;
+/**
+ * A stable, restart-safe session id for one chat.
+ *
+ * It must cover the **whole** identity. The first version kept the first 40 base64url
+ * characters of `${accountId}\0${chatId}` - about 30 bytes - and a WeCom pseudo account
+ * id alone is 41 characters, so the chat id never reached the digest: *every* chat of a
+ * WeCom bot resolved to the same session (verified live: four different chat ids, one
+ * id). A direct message, a group and a debug chat then shared one conversation and one
+ * context. The same truncation could merge two personal-WeChat chats whose ids share a
+ * prefix. SHA-256 over the full identity removes the truncation; 32 base64url characters
+ * of it are 192 bits, which is both collision-free in practice and a safe file name.
+ *
+ * Changing this scheme orphans sessions created under the old one; each chat simply
+ * opens a fresh conversation on its next message (the ladder in session.js handles it).
+ *
+ * @returns {string} `wechat-` + 32 url-safe characters.
+ */
+export function sessionIdFor(accountId, chatId) {
+  const digest = createHash("sha256")
+    .update(`${accountId}\u0000${chatId}`)
+    .digest("base64url")
+    .replace(/[^A-Za-z0-9]/g, "");
+  return `wechat-${digest.slice(0, 32)}`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -566,6 +645,13 @@ export function apply(ctx, config = {}) {
   const typingTickets = new Map();
   /** `${accountId}|${peer}` -> { accountId, chatId, peerName, at } last inbound */
   const lastInbound = new Map();
+  /**
+   * How the last conversation had to be opened when resuming did not just work:
+   * `{ at, requested, resume, create, retryResume, freshId }`. Reported by /state and
+   * on the WeCom page, because a chat that silently started a fresh history (or a
+   * different session id) is otherwise indistinguishable from one that lost its mind.
+   */
+  let lastSessionIssue = null;
   const collectors = new ReplyCollector(ctx);
   /** Injected factories resolved lazily through the loader. */
   const harness = { createUserMessage: undefined, defineTool: undefined };
@@ -631,16 +717,32 @@ export function apply(ctx, config = {}) {
       }
     };
 
-    let handle;
-    try {
-      handle = await ctx.agents.resume({ resumeSessionId: sessionId, meta, ...(agentOptions ? { agentOptions } : {}), setup });
-    } catch {
-      handle = await ctx.agents.create({ sessionId, meta, ...(agentOptions ? { agentOptions } : {}), setup });
+    // Opening the conversation is its own ladder of attempts (resume, create, resume
+    // again, fresh id) because a chat whose stored session cannot be resumed must not
+    // stay silent forever - see session.js, and /state.wecom.sessionIssue for the
+    // outcome of the last one.
+    const opened = await openSessionAgent({
+      agents: ctx.agents,
+      sessionId,
+      meta,
+      agentOptions,
+      setup,
+      logger: ctx.logger,
+    });
+    const handle = opened.handle;
+    const resolvedId = opened.sessionId;
+    if (opened.issue) {
+      lastSessionIssue = { at: new Date().toISOString(), ...opened.issue };
+      ctx.logger?.warn?.(
+        "[dsh-wechat-media] session %s needed recovery: %s",
+        resolvedId,
+        opened.issue.freshId ? `a fresh session was started (${opened.issue.freshId})` : "the stored session was reopened",
+      );
     }
-    ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${sessionId}`);
-    conversations.set(sessionId, { accountId, chatId, peerName });
-    await state.setRoute(accountId, chatId, { sessionId, peerName, kind: String(chatId).includes("@chatroom") ? "group" : "direct" });
-    return { agent: handle.agent, sessionId, accountId, chatId, peerName };
+    ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${resolvedId}`);
+    conversations.set(resolvedId, { accountId, chatId, peerName });
+    await state.setRoute(accountId, chatId, { sessionId: resolvedId, peerName, kind: String(chatId).includes("@chatroom") ? "group" : "direct" });
+    return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName };
   }
 
   /** Send one text message, with a lazily-fetched typing ticket. */
@@ -700,6 +802,298 @@ export function apply(ctx, config = {}) {
    * per use so changing it takes effect without a restart.
    */
   const resolvedInbox = async () => resolveInboxDir({ prefs: await state.loadPrefs(), config, dshHome });
+
+  // ── WeCom (企业微信) ───────────────────────────────────────────────────────
+  //
+  // Outbound has two paths that need no public address: a group robot webhook (one
+  // URL) and a self-built app (corpid/corpsecret/agentid). Inbound is the intelligent
+  // robot's long connection (BotID + Secret over `wss://openws.work.weixin.qq.com`),
+  // which needs no callback URL either - see wecom-bot.js. What WeCom *cannot* do
+  // here is the callback API, which insists on a public HTTPS endpoint this machine
+  // cannot offer.
+
+  /** Every WeCom call gets a bounded wait so a stuck request cannot hang a turn. */
+  const wecomTimeoutMs = 20000;
+  const wecomTokenCache = wecom.createTokenCache();
+  async function wecomToken(config) {
+    const cached = wecomTokenCache.get();
+    if (cached) return cached;
+    const { token, expiresIn } = await wecom.getToken({
+      corpId: config.corpId,
+      corpSecret: config.corpSecret,
+      timeoutMs: wecomTimeoutMs,
+    });
+    wecomTokenCache.set(token, expiresIn);
+    return token;
+  }
+
+  // ── WeCom intelligent robot over the long connection ───────────────────────
+  //
+  // Two-way, with no public URL: the robot's BotID + Secret open a WebSocket to
+  // openws.work.weixin.qq.com. Messages are routed through exactly the same session
+  // machinery as personal WeChat by using a pseudo account id (`wecom:<botId>`), so
+  // peers, routes, the allowlist, approvals and the reply collector all apply
+  // unchanged.
+
+  /**
+   * The pseudo account id for a WeCom bot.
+   *
+   * It goes through the state layer's own `normalizeAccountId`, which turns ":" into
+   * "-": a peer written under `wecom:<botId>` would otherwise be invisible to the
+   * lookup that reads `wecom-<botId>`, and the first WeCom message was blocked exactly
+   * that way. Runtime keys and persisted keys must be the same string.
+   */
+  function wecomAccountId(botId) {
+    return normalizeAccountId(`wecom:${String(botId ?? "").trim()}`);
+  }
+
+  let wecomBot;
+  let wecomBotStatus = { connected: false, authenticated: false, attempts: 0, botId: null };
+  /** The last failure while handling a WeCom message, surfaced in /state: the
+   * long-connection callback has nowhere else to report it. */
+  let wecomInboundError = null;
+
+  /**
+   * The WeCom projection both `/state` and `/debug/inbound` report. One function, so
+   * the two can never drift apart, and "is WeCom configured?" counts every path that
+   * can actually send something - including the intelligent-robot long connection,
+   * which the first version of this report forgot.
+   */
+  async function wecomState() {
+    const cfg = await state.loadWecom();
+    const botReady = Boolean(cfg.botId && cfg.botSecret);
+    return {
+      configured: Boolean(cfg.webhookUrl || botReady || (cfg.corpSecret && cfg.agentId)),
+      via: cfg.webhookUrl
+        ? "group-robot webhook"
+        : botReady
+          ? "intelligent-robot long connection"
+          : cfg.corpSecret && cfg.agentId
+            ? "self-built app"
+            : null,
+      webhook: cfg.webhookUrl ? `${cfg.webhookUrl.slice(0, 48)}…` : null,
+      corpId: cfg.corpId || null,
+      agentId: cfg.agentId || null,
+      toUser: cfg.toUser || null,
+      secretSet: Boolean(cfg.corpSecret),
+      // The BotID is an identifier, not a secret, so it is reported in full -
+      // we need to be able to see whether the stored value is complete.
+      botIdFull: cfg.botId || null,
+      botIdLength: cfg.botId ? String(cfg.botId).length : 0,
+      secretLength: cfg.botSecret ? String(cfg.botSecret).length : 0,
+      botConfigured: botReady,
+      botEnabled: Boolean(cfg.botEnabled),
+      bot: wecomBotStatus,
+      inboundError: wecomInboundError,
+      // How the last conversation had to be opened when a plain resume did not work.
+      sessionIssue: lastSessionIssue,
+    };
+  }
+
+  function stopWecomBot() {
+    if (!wecomBot) return;
+    try {
+      wecomBot.close();
+    } catch {
+      // already gone
+    }
+    wecomBot = undefined;
+    wecomBotStatus = { connected: false, authenticated: false, attempts: 0, botId: null };
+  }
+
+  /** Connect (or reconnect after a configuration change). */
+  async function startWecomBot({ force = false } = {}) {
+    if (wecomBot && !force) return wecomBot;
+    stopWecomBot();
+    const cfg = await state.loadWecom();
+    if (!cfg.botEnabled || !cfg.botId || !cfg.botSecret) return undefined;
+    const accountId = wecomAccountId(cfg.botId);
+    const bot = new WecomBot({
+      botId: cfg.botId,
+      secret: cfg.botSecret,
+      logger: ctx.logger,
+      onStatus: (status) => {
+        wecomBotStatus = status;
+      },
+      onMessage: (message, frame) => {
+        void handleWecomInbound(accountId, message, frame).catch((error) => {
+          ctx.logger?.warn?.("[dsh-wechat-media] wecom inbound failed: %s", error?.message ?? error);
+        });
+      },
+    });
+    try {
+      bot.connect();
+      wecomBot = bot;
+      ctx.logger?.info?.("[dsh-wechat-media] wecom bot connecting as %s", cfg.botId);
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] wecom bot did not start: %s", error?.message ?? error);
+      return undefined;
+    }
+    return bot;
+  }
+
+  /** The long connection's counterpart of handleInbound. */
+  async function handleWecomInbound(accountId, message, frame) {
+    try {
+      await handleWecomInboundInner(accountId, message, frame);
+      wecomInboundError = null;
+    } catch (error) {
+      wecomInboundError = { at: new Date().toISOString(), message: String(error?.message ?? error), stack: String(error?.stack ?? "").slice(0, 400) };
+      ctx.logger?.warn?.("[dsh-wechat-media] wecom inbound failed: %s", wecomInboundError.message);
+      try {
+        wecomBot?.reply(frame, streamBody(generateReqId("stream-fail"), `❌ 处理这条企业微信消息时出错：${wecomInboundError.message}`, true));
+      } catch {
+        // the socket may already be gone
+      }
+    }
+  }
+
+  async function handleWecomInboundInner(accountId, message, frame) {
+    if (!message) return;
+    if (message.msgId) {
+      const bucket = seen.get(accountId);
+      if (bucket?.has(message.msgId)) return;
+      rememberSeen(accountId, message.msgId);
+    }
+    const chatId = String(message.chatId ?? "");
+    if (!chatId) return;
+    const isGroup = message.chatType === "group";
+    const peerName = isGroup ? `企业微信群 ${chatId}` : `企业微信 ${chatId}`;
+    counters.received += 1;
+    lastInbound.set(accountId, { accountId, chatId, peerName, isGroup, at: Date.now() });
+    await state.setPeer(accountId, chatId, {
+      name: peerName,
+      kind: isGroup ? "group" : "direct",
+      seenAt: new Date().toISOString(),
+    });
+
+    // One decision for the whole message: allowlist, "1"/"2" approval answer, or a turn -
+    // the same rule and the same order as the personal-WeChat path (classifyInbound).
+    const verdict = await classifyWecomInbound({
+      accountId,
+      message,
+      text: message.text,
+      state,
+      consumeApproval: consumeApprovalReply,
+    });
+    if (verdict.action === "ignore") {
+      counters.blocked += 1;
+      await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
+      ctx.logger?.info?.("[dsh-wechat-media] ignored wecom message from %s (%s)", chatId, verdict.reason);
+      return;
+    }
+    if (verdict.action === "answer") {
+      // The prompt went out over the long connection, so the answer comes back the same
+      // way: a WeCom chat gets the same remote approval a WeChat chat does.
+      counters.answered += 1;
+      ctx.logger?.info?.("[dsh-wechat-media] wecom approval answer consumed for %s", chatId);
+      return;
+    }
+
+    const lines = [];
+    if (message.text) lines.push(message.text);
+    for (const item of message.media ?? []) {
+      const label = item.type === "image" ? "图片" : item.type === "file" ? "文件" : item.type === "voice" ? "语音" : item.type;
+      lines.push(`[企业微信${label}：暂未下载（媒体支持待补）]`);
+    }
+    if (lines.length === 0) {
+      counters.unusable += 1;
+      return;
+    }
+
+    counters.forwarded += 1;
+    const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
+    // Exactly the personal-WeChat path: the harness's own `createUserMessage` assigns
+    // the message id and metadata the model request needs. Handing `followup` a bare
+    // literal (and correlating on the WeCom msgid instead of that id) produced
+    // `DeepSeek Messages transport failed` on every turn.
+    const prompt = `[${peerName}]\n${lines.join("\n\n")}`;
+    const message2 = await userMessage(prompt);
+    const waiting = collectors.wait(sessionId, message2?.id);
+    await agent.followup(message2);
+    const outcome = await waiting;
+    // Never leave the chat without an answer: mirror what the personal-WeChat path
+    // does when a turn errors or produces no text.
+    const replyWith = (body) => {
+      try {
+        // `reply` answers false when the socket is not writable (reconnecting, closed).
+        // Saying nothing about that is exactly how a reply becomes invisible.
+        if (wecomBot?.reply(frame, body) === false) {
+          ctx.logger?.warn?.("[dsh-wechat-media] wecom reply dropped: the long connection is not writable");
+        }
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] wecom reply failed: %s", error?.message ?? error);
+      }
+    };
+    if (outcome.error) {
+      // Byte-safe: the limit is 20480 *bytes*, and Chinese costs three each.
+      replyWith(streamBody(generateReqId("stream-error"), splitForStream(`❌ agent 出错：${outcome.error}`)[0], true));
+      return;
+    }
+    if (!outcome.text) {
+      if (outcome.deliveredByTool) return;
+      replyWith(streamBody(generateReqId("stream-empty"), splitForStream(`（本轮没有文本回复：${outcome.stopReason}）`)[0], true));
+      return;
+    }
+    // A WeCom intelligent robot only accepts `stream` for a passive reply, and one
+    // stream body holds 20480 bytes; a longer answer becomes several messages.
+    const parts = splitForStream(outcome.text);
+    for (let index = 0; index < parts.length; index += 1) {
+      replyWith(streamBody(generateReqId(`stream-${index}`), parts[index], true));
+    }
+  }
+  // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
+  // harness without it still gets the long connection instead of losing the feature.
+  if (typeof ctx.effect === "function") {
+    ctx.effect(() => {
+      void startWecomBot();
+      return () => stopWecomBot();
+    }, "dsh-wechat-media: wecom bot");
+  } else {
+    void startWecomBot();
+  }
+
+  /** Send one message through whichever WeCom path is configured. */
+  async function wecomSendText({ text, markdown = false, webhookUrl, to } = {}) {
+    const config = await state.loadWecom();
+    const url = String(webhookUrl ?? config.webhookUrl ?? "").trim();
+    if (url) {
+      const payload = markdown ? wecom.markdownPayload(text) : wecom.textPayload(text);
+      await wecom.sendWebhook({ webhookUrl: url, payload, timeoutMs: wecomTimeoutMs });
+      return { via: "webhook", kind: payload.msgtype };
+    }
+    const accountId = wecomAccountId(config.botId);
+    const botChat = String(to ?? "").trim() || lastInbound.get(accountId)?.chatId || "";
+    if (wecomBot && wecomBotStatus.authenticated && botChat) {
+      // A proactive send has no inbound frame, and WeCom accepts markdown / template
+      // card / media here - not plain text, so everything goes out as markdown.
+      if (wecomBot.sendMessage(botChat, markdownBody(text)) === false) {
+        // The socket is reconnecting or gone. Reporting success here would be a lie the
+        // caller cannot detect, so say what happened and let the sender retry.
+        throw new Error("the WeCom long connection is not writable right now (reconnecting?); try again in a moment");
+      }
+      return { via: "long-connection", kind: "markdown", to: botChat };
+    }
+    const token = await wecomToken(config);
+    const payload = markdown ? wecom.appMarkdownPayload(text) : wecom.appTextPayload(text);
+    await wecom.sendAppMessage({ token, agentId: config.agentId, toUser: to ?? config.toUser, payload, timeoutMs: wecomTimeoutMs });
+    return { via: "app", kind: payload.msgtype, to: to ?? config.toUser };
+  }
+
+  /**
+   * Send into a WeCom chat without an inbound frame - an approval prompt, a
+   * confirmation, a timeout notice. Only markdown is accepted on this path, and a
+   * closed or reconnecting socket must raise rather than report success.
+   */
+  async function sendWecomProactive(chatId, text) {
+    if (!wecomBot || !wecomBotStatus.authenticated) {
+      throw new Error("the WeCom long connection is not authenticated");
+    }
+    if (wecomBot.sendMessage(chatId, markdownBody(text)) === false) {
+      throw new Error("the WeCom long connection is not writable right now");
+    }
+    return { via: "long-connection", kind: "markdown", to: chatId };
+  }
   /**
    * The last few control-route calls, so "I clicked and nothing happened" can be
    * answered from the server side: did the request arrive, and what did it do?
@@ -710,7 +1104,12 @@ export function apply(ctx, config = {}) {
     if (routeLog.length > 20) routeLog.shift();
   }
   const approvals = createApprovalBridge({
-    notify: (account, chatId, text) => sendText(account, chatId, text, { typing: false }),
+    // Two channels, one question: a WeChat chat is answered by the ilink sender, a
+    // WeCom chat by a proactive long-connection message (there is no inbound frame
+    // to reply to when *we* start the conversation).
+    notify: (account, chatId, text) => (account?.via === "wecom"
+      ? sendWecomProactive(chatId, text)
+      : sendText(account, chatId, text, { typing: false })),
     timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
     logger: ctx.logger,
   });
@@ -742,7 +1141,11 @@ export function apply(ctx, config = {}) {
     approvalCtx.on("approval/request", (request, next) => approvals.respond(request, next, {
       ignore: config.approval === "ignore",
       findConversation,
-      loadAccount: (accountId) => state.loadAccount(accountId),
+      loadAccount: async (accountId, conversation) => approvalTarget({
+        conversation,
+        account: await state.loadAccount(accountId),
+        wecomReady: Boolean(wecomBot && wecomBotStatus.authenticated),
+      }),
     }));
   });
 
@@ -1012,6 +1415,76 @@ export function apply(ctx, config = {}) {
         // fall back to a plain definition object
       }
       const define = typeof harness.defineTool === "function" ? harness.defineTool : (definition) => definition;
+        // ── WeCom (企业微信) tools ───────────────────────────────────────────
+        // They call the helpers defined next to the inbox resolver above.
+
+
+        const wecomText = define({
+          name: "wecom_send_text",
+          description:
+            "Send a text or markdown message through WeCom (企业微信). Uses the configured group-robot webhook, or an explicit webhookUrl, or the intelligent-robot long connection (botId/botSecret, proactive send), or the configured self-built app (corpid/corpsecret/agentid). Incoming WeCom messages also arrive over the long connection and are answered in the same chat.",
+          parameters: {
+            text: { type: "string", required: true, description: "Message text (<= 4096 bytes for a robot, 2048 for the app)." },
+            markdown: { type: "boolean", description: "Send it as markdown instead of plain text." },
+            webhookUrl: { type: "string", description: "Override the configured group-robot webhook for this call." },
+            to: { type: "string", description: "The chat id for a long-connection proactive send, or the WeCom recipients (userid list, department, or @all) for the app path." },
+          },
+          output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+          timeoutMs: 30000,
+          async execute(args) {
+            const text = String(args?.text ?? "");
+            if (!text.trim()) return "nothing to send: `text` is empty";
+            const sent = await wecomSendText({ text, markdown: Boolean(args?.markdown), webhookUrl: args?.webhookUrl, to: args?.to });
+            noteRoute("/wecom", sent);
+            if (sent.via === "webhook") return `sent a ${sent.kind} message to the WeCom group robot`;
+            if (sent.via === "long-connection") return `sent a ${sent.kind} message over the WeCom long connection to ${sent.to}`;
+            return `sent a ${sent.kind} message to ${sent.to} through the WeCom app`;
+          },
+        });
+
+        const wecomFile = define({
+          name: "wecom_send_file",
+          description:
+            "Send a local file through WeCom (企业微信). With a self-built app it is uploaded and sent as image/file/video/voice; with only a group-robot webhook, images are supported and other types are refused with an explanation.",
+          parameters: {
+            path: { type: "string", required: true, description: "Absolute path of the local file." },
+            to: { type: "string", description: "Application recipients; app path only." },
+            text: { type: "string", description: "Optional text message sent before the file." },
+          },
+          output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+          timeoutMs: 180000,
+          async execute(args) {
+            const filePath = String(args?.path ?? args?.filePath ?? "");
+            if (!filePath) return "nothing to send: `path` is empty";
+            const config = await state.loadWecom();
+            const type = wecom.wecomUploadType(filePath);
+            const hasApp = Boolean(config.corpSecret && config.agentId);
+            if (!hasApp) {
+              const webhookUrl = String(config.webhookUrl ?? "").trim();
+              if (!webhookUrl) return "WeCom is not configured: set a group-robot webhook, or corpid/corpsecret/agentid for files";
+              if (type !== "image") {
+                return `a group-robot webhook can only send images; ${filePath} looks like ${type}. Configure corpid/corpsecret/agentid to send it.`;
+              }
+              await wecom.sendWebhook({ webhookUrl, payload: wecom.imagePayload(await readFile(filePath)), timeoutMs: wecomTimeoutMs });
+              noteRoute("/wecom", { via: "webhook", kind: "image" });
+              return `sent ${filePath} as an image to the WeCom group robot`;
+            }
+            const token = await wecomToken(config);
+            if (args?.text) {
+              await wecom.sendAppMessage({ token, agentId: config.agentId, toUser: args?.to ?? config.toUser, payload: wecom.appTextPayload(String(args.text)), timeoutMs: wecomTimeoutMs });
+            }
+            const { mediaId } = await wecom.uploadMedia({ token, filePath, type, timeoutMs: wecomTimeoutMs });
+            await wecom.sendAppMessage({
+              token,
+              agentId: config.agentId,
+              toUser: args?.to ?? config.toUser,
+              payload: wecom.appMediaPayload(type, mediaId),
+              timeoutMs: wecomTimeoutMs,
+            });
+            noteRoute("/wecom", { via: "app", kind: type });
+            return `sent ${filePath} as ${type} through the WeCom app`;
+          },
+        });
 
       const sendFileTool = define({
         name: "wechat_send_file",
@@ -1072,7 +1545,7 @@ export function apply(ctx, config = {}) {
       });
 
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, statusTool]) {
+      for (const definition of [sendFileTool, sendTextTool, statusTool, wecomText, wecomFile]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -1095,6 +1568,19 @@ export function apply(ctx, config = {}) {
   });
 
   // ── HTTP surface for the browser card ─────────────────────────────────────
+
+  /**
+   * Read a boolean from either a JSON body or a query string.
+   *
+   * The routes are reachable by plain GET links (the card and the no-JS panel rely on
+   * that), so `"true"` has to mean true: comparing with `=== true` alone silently
+   * turned every allow/deny link into "undecided".
+   */
+  const asBool = (value) => {
+    if (value === true || value === 1 || value === "1" || value === "true") return true;
+    if (value === false || value === 0 || value === "0" || value === "false") return false;
+    return null;
+  };
 
   const json = (res, status, body) => {
     const payload = JSON.stringify(body);
@@ -1158,6 +1644,7 @@ export function apply(ctx, config = {}) {
             counters: { ...counters },
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
+            wecom: await wecomState(),
             recentRoutes: [...routeLog],
             lastInbound: Object.fromEntries(lastInbound.entries()),
             accounts: accounts.map((account) => {
@@ -1289,7 +1776,7 @@ export function apply(ctx, config = {}) {
           const chatId = String(body.chatId ?? "");
           if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
           // true = allowed, false = blocked, anything else = undecided (unlisted).
-          const allowed = body.allowed === true ? true : body.allowed === false ? false : null;
+          const allowed = asBool(body.allowed);
           const peer = await state.setPeer(accountId, chatId, { allowed });
           json(res, 200, { ok: true, peer, peers: await state.loadPeers() });
         },
@@ -1302,8 +1789,8 @@ export function apply(ctx, config = {}) {
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           const body = await readArgs(req);
           const patch = {};
-          if (typeof body.requireAllowlist === "boolean") patch.requireAllowlist = body.requireAllowlist;
-          if (typeof body.autoReply === "boolean") patch.autoReply = body.autoReply;
+          if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
+          if (asBool(body.autoReply) !== null) patch.autoReply = asBool(body.autoReply);
           if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
           if (body.inboxDir !== undefined) {
             const value = String(body.inboxDir).trim();
@@ -1413,6 +1900,7 @@ export function apply(ctx, config = {}) {
             counters: { ...counters },
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
+            wecom: await wecomState(),
             recentRoutes: [...routeLog],
           });
         },
@@ -1561,6 +2049,9 @@ ${note ? `<div class="note">${note}</div>` : ""}
 <h4>审批</h4>
 <a class="b" href="?test=1">发送一条测试审批到微信</a>
 ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><div class="m">等待中：${pending.map((item) => `${item.toolName ?? "?"}（${Math.round(item.waitedMs / 1000)} 秒）`).join("、")}</div>` : ""}
+<h4>企业微信（WeCom）</h4>
+<div class="m">当前：${(await state.loadWecom()).webhookUrl ? "群机器人 webhook 已配置" : (await state.loadWecom()).corpSecret ? "自建应用已配置" : "未配置"} · 长连接：${wecomBotStatus.authenticated ? "已认证" : ((await state.loadWecom()).botId ? "未连接/连接中" : "未配置")}</div>
+<p><a class="b" href="/dsh-wechat-media/wecom">配置企业微信 / 发送测试消息</a></p>
 <h4>收件目录</h4>
 <div class="m">微信收到的文件保存在：<code>${await resolvedInbox()}</code></div>
 <p><a class="b" href="/dsh-wechat-media/pick-folder">用系统文件夹选择器选择…</a></p>
@@ -1602,6 +2093,162 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
                 : "对话框被取消，目录未改变。";
           res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
           res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:680px"><h3>${title}</h3><p>${detail}</p><p style="margin-top:22px"><button onclick="history.back()" style="font:15px system-ui;padding:6px 14px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer">← 返回 DSH</button></p></body>`);
+        },
+      },
+      {
+        // Reproduce the long-connection inbound path locally, without waiting for a
+        // real WeCom message: the same synthetic frame the server would push.
+        kind: "exact",
+        path: "/dsh-wechat-media/wecom/inbound-test",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          const args = Object.fromEntries(new URL(req.url, "http://127.0.0.1").searchParams);
+          const cfg = await state.loadWecom();
+          if (!cfg.botId) return json(res, 400, { error: "no WeCom bot configured" });
+          const accountId = wecomAccountId(cfg.botId);
+          const chatId = String(args.chatId ?? "debug-wecom-chat");
+          const stamp = Date.now();
+          const frame = {
+            cmd: "aibot_msg_callback",
+            headers: { req_id: `debug-${stamp}` },
+            body: {
+              msgid: `debug-${stamp}`,
+              aibotid: cfg.botId,
+              chatid: chatId,
+              chattype: "single",
+              msgtype: "text",
+              text: { content: String(args.text ?? "(debug) inbound from the debug route") },
+            },
+          };
+          const message = describeBotMessage(frame);
+          const started = Date.now();
+          await handleWecomInbound(accountId, message, frame);
+          json(res, 200, { ok: true, chatId, sessionId: sessionIdFor(accountId, chatId), ms: Date.now() - started, inboundError: wecomInboundError });
+        },
+      },
+      {
+        // WeCom setup and self-test as a plain page: a browser that cannot fetch from
+        // the card still navigates fine, and the corpsecret never has to pass through
+        // the card's own JavaScript.
+        kind: "exact",
+        path: "/dsh-wechat-media/wecom",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) {
+            res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+            return res.end("loopback only");
+          }
+          const args = Object.fromEntries(new URL(req.url, "http://127.0.0.1").searchParams);
+          let note = "";
+          const patch = {};
+          for (const key of ["webhookUrl", "corpId", "corpSecret", "agentId", "toUser", "botId", "botSecret"]) {
+            if (args[key] !== undefined) patch[key] = String(args[key]).trim();
+          }
+          if (Object.keys(patch).length > 0) {
+            if (patch.webhookUrl && !wecom.isWebhookUrl(patch.webhookUrl)) {
+              note = "❌ webhook 地址不像企业微信群机器人地址（应形如 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…）";
+            } else {
+              await state.saveWecom(patch);
+              wecomTokenCache.clear();
+              // A changed BotID/Secret means the long connection has to be rebuilt.
+              if (patch.botId !== undefined || patch.botSecret !== undefined) {
+                await state.saveWecom({ botEnabled: Boolean((await state.loadWecom()).botId && (await state.loadWecom()).botSecret) });
+                await startWecomBot({ force: true });
+              }
+              note = `✅ 已保存${patch.corpSecret || patch.botSecret ? "（密钥已更新）" : ""}`;
+              noteRoute("/wecom", { action: "save", fields: Object.keys(patch) });
+            }
+          }
+          if (args.bot === "stop") {
+            stopWecomBot();
+            note = "已断开企业微信长连接";
+            noteRoute("/wecom", { action: "bot-stop" });
+          } else if (args.bot === "start") {
+            await startWecomBot({ force: true });
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+            note = wecomBotStatus.authenticated
+              ? "✅ 长连接已认证成功"
+              : `⏳ 已发起连接：${wecomBotStatus.error ?? "等待认证应答（若一直失败请核对 BotID/Secret，以及机器人是否为「API 模式 + 长连接」）"}`;
+            noteRoute("/wecom", { action: "bot-start", authenticated: wecomBotStatus.authenticated === true, error: wecomBotStatus.error ?? null });
+          }
+          if (args.test) {
+            try {
+              const stamp = new Date().toLocaleString("zh-CN");
+              const sent = await wecomSendText({ text: `dsh-wechat-media 测试消息 · ${stamp}`, to: args.to });
+              const label = { webhook: "群机器人", "long-connection": "智能机器人长连接", app: "自建应用" }[sent.via] ?? sent.via;
+              note = `✅ 测试消息已发出（${label} · ${sent.kind}${sent.to ? ` → ${sent.to}` : ""}）`;
+              noteRoute("/wecom", { action: "test", via: sent.via, kind: sent.kind });
+            } catch (error) {
+              note = `❌ 发送失败：${error?.message ?? error}`;
+              noteRoute("/wecom", { action: "test", error: String(error?.message ?? error) });
+            }
+          }
+          const cfg = await state.loadWecom();
+          const botState = wecomBotStatus.authenticated
+            ? "✅ 长连接已认证（可双向收发）"
+            : wecomBotStatus.connecting || wecomBotStatus.attempts > 0
+              ? `⏳ 连接中/重连中（尝试 ${wecomBotStatus.attempts ?? 0} 次${wecomBotStatus.error ? "：" + wecomBotStatus.error : ""}）`
+              : cfg.botId && cfg.botSecret
+                ? "未连接（点下面的「连接」）"
+                : "未配置";
+          const status = cfg.webhookUrl
+            ? `群机器人 webhook（key ${cfg.webhookUrl.slice(-6)}）`
+            : cfg.corpSecret && cfg.agentId
+              ? `自建应用 corpid ${cfg.corpId || "?"} · agentid ${cfg.agentId} · 默认接收人 ${cfg.toUser}`
+              : "未配置";
+          const field = (name, label, value, placeholder) =>
+            `<p style="margin:6px 0"><label style="display:inline-block;width:150px">${label}</label>`
+            + `<input name="${name}" value="${String(value ?? "").replace(/"/g, "&quot;")}" placeholder="${placeholder}" style="font:14px system-ui;padding:5px 8px;width:460px"></p>`;
+          // Failures belong on this page: it is where someone comes to ask "why does the
+          // bot not answer?", and /state is not a page anyone reads by hand.
+          const problems = [];
+          if (wecomInboundError) problems.push(`上次处理入站消息时出错（${wecomInboundError.at}）：${wecomInboundError.message}`);
+          if (lastSessionIssue) {
+            problems.push(lastSessionIssue.freshId
+              ? `上次这条会话无法恢复，已改用新会话 ${lastSessionIssue.freshId}（历史为空）：resume ${lastSessionIssue.resume}；create ${lastSessionIssue.create}`
+              : `上次这条会话先 resume 失败后重建成功：${lastSessionIssue.resume}`);
+          }
+          const problemBox = problems.length > 0
+            ? `<div class="bad">${problems.map((line) => `<div>⚠️ ${line}</div>`).join("")}</div>`
+            : "";
+          const html = `<!doctype html><meta charset="utf-8"><title>dsh-wechat-media · 企业微信</title>
+<style>body{font:15px/1.7 system-ui;padding:26px;max-width:820px;color:#222}
+.note{background:#f3f7ff;border:1px solid #cfe0ff;padding:8px 12px;border-radius:8px;margin:14px 0}
+.bad{background:#fff7f5;border:1px solid #ffd0c4;padding:8px 12px;border-radius:8px;margin:14px 0;color:#8a3b25;font-size:13px}
+.m{color:#666;font-size:13px}button{font:14px system-ui;padding:6px 12px;border:1px solid #bbb;border-radius:8px;background:#f7f7f7;cursor:pointer}</style>
+<body>
+<p><button onclick="history.back()">← 返回 DSH</button></p>
+<h3>企业微信（WeCom）</h3>
+<div class="m">当前状态：${status}</div>
+<div class="m">长连接：${botState}</div>
+${note ? `<div class="note">${note}</div>` : ""}
+${problemBox}
+<h4>群机器人（最省事：只需一个 webhook 地址，支持文字 / markdown / 图片）</h4>
+<form method="get">
+${field("webhookUrl", "群机器人 webhook", cfg.webhookUrl, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…")}
+<button type="submit">保存</button>
+</form>
+<h4>自建应用（可发文件 / 语音 / 视频，需要 corpid + corpsecret + agentid）</h4>
+<form method="get">
+${field("corpId", "corpid", cfg.corpId, "ww1234567890abcdef")}
+${field("corpSecret", "corpsecret", "", cfg.corpSecret ? "已保存（留空表示不修改）" : "应用的 Secret")}
+${field("agentId", "agentid", cfg.agentId, "1000002")}
+${field("toUser", "默认接收人", cfg.toUser, "@all 或 userid1|userid2")}
+<button type="submit">保存</button>
+</form>
+<h4>智能机器人长连接（双向，推荐；无需公网地址）</h4>
+<form method="get">
+${field("botId", "BotID", cfg.botId, "在企业微信后台：智能机器人 → API 模式 → 长连接")}
+${field("botSecret", "Secret", "", cfg.botSecret ? "已保存（留空表示不修改）" : "长连接专用 Secret")}
+<input type="hidden" name="botEnabled" value="true">
+<button type="submit">保存并连接</button>
+</form>
+<p><a class="b" href="?bot=start">连接 / 重连</a> <a class="b" href="?bot=stop">断开</a></p>
+<h4>测试</h4>
+<p><a href="?test=1"><button type="button">发送一条测试消息</button></a></p>
+<div class="m">企业微信的两条出站链路都可用；<b>接收</b>走「智能机器人 → API 模式 → 长连接」（只需 BotID + Secret，不需要公网地址）。真正做不到的是回调 API：它要求把回调注册到一个公网 HTTPS 地址，本机插件给不了入口。个人微信那条链路仍是双向的。</div>
+</body>`;
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+          res.end(html);
         },
       },
     ];

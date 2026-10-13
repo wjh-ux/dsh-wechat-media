@@ -113,8 +113,7 @@ test("adding another account is always offered", () => {
   }
 });
 
-test("a pairing attempt can be cancelled", () => {
-  // A QR shown by mistake must be dismissible without waiting for it to expire.
+test("a pairing attempt can be cancelled", () => {  // A QR shown by mistake must be dismissible without waiting for it to expire.
   assert.match(code, /\/login\/\$\{loginId\}\/cancel|login\/\$\{pending\.id\}\/cancel|\/cancel/);
   assert.match(code, /t\("cancel"/);
   for (const key of ["cancel"]) {
@@ -123,8 +122,29 @@ test("a pairing attempt can be cancelled", () => {
   }
   // The host side has to offer the route the card calls.
   const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /resolveInboxDir/, "the host must resolve a configurable inbox");
   assert.match(host, /action === "cancel"/, "index.js must handle the cancel action");
   assert.match(host, /logins\.cancel\(/, "index.js must cancel the login session");
+});
+
+test("the contact allowlist panel and approval hint are wired", () => {
+  assert.match(code, /t\("contacts"/);
+  assert.match(code, /t\("requireAllowlist"/);
+  assert.match(code, /t\("approvalHint"/);
+  assert.match(code, /name: "inboxDir"/, "the inbox directory form must exist");
+  assert.match(code, /t\("inboxLabel"/);
+  assert.match(code, /api\(`\/peers\?accountId=/);
+  assert.match(code, /api\(`\/prefs\?requireAllowlist=/);
+  for (const key of ["contacts", "allow", "block", "clearDecision", "requireAllowlist", "allowlistWarning", "approvalHint", "allowed", "blocked", "undecided"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  // The host half has to serve both routes.
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /resolveInboxDir/, "the host must resolve a configurable inbox");
+  assert.match(host, /path: "\/dsh-wechat-media\/peers"/);
+  assert.match(host, /path: "\/dsh-wechat-media\/prefs"/);
+  assert.match(host, /path: "\/dsh-wechat-media\/test-approval"/, "the approval self-test route must exist");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

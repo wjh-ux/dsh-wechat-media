@@ -6,6 +6,7 @@
  */
 import assert from "node:assert/strict";
 
+import { normalizeAccountId } from "../state.js";
 import { allowDecision, chunkText, formatApprovalPrompt, noteBlocked, parseApprovalReply, syntheticInbound } from "../index.js";
 
 let passed = 0;
@@ -117,5 +118,11 @@ test("a synthetic inbound looks like the platform's envelope", () => {
   assert.equal(room.group_id, "123@chatroom");
   assert.equal(room.from_user_id, "wxid_b");
 });
+await test('account ids are normalised the same way the state layer does it', () => {
+  assert.equal(normalizeAccountId('wecom:bot-id'), 'wecom-bot-id');
+  assert.equal(normalizeAccountId('  wecom:bot id  '), 'wecom-bot-id');
+  assert.equal(normalizeAccountId('b775a478733a-im-bot'), 'b775a478733a-im-bot');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

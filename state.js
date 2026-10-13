@@ -243,6 +243,35 @@ export class WechatState {
     await writeJson(join(this.root, "prefs.json"), merged);
     return merged;
   }
+
+  // ── WeCom (企业微信) ───────────────────────────────────────────────────────
+
+  /**
+   * WeCom settings live in their own `0600` file: they hold a robot webhook key and a
+   * corpsecret, which have nothing to do with the personal-WeChat account state.
+   */
+  async loadWecom() {
+    const file = await readJson(join(this.root, "wecom.json"), {});
+    return {
+      webhookUrl: "",
+      corpId: "",
+      corpSecret: "",
+      agentId: "",
+      toUser: "@all",
+      // The intelligent robot's long connection: BotID + Secret, and no public URL.
+      botId: "",
+      botSecret: "",
+      botEnabled: false,
+      ...(file && typeof file === "object" ? file : {}),
+    };
+  }
+
+  async saveWecom(patch) {
+    const merged = { ...(await this.loadWecom()), ...patch };
+    await this.init();
+    await writeJson(join(this.root, "wecom.json"), merged, { secret: true });
+    return merged;
+  }
 }
 
 /**

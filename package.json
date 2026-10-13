@@ -1,6 +1,6 @@
 {
   "name": "dsh-wechat-media",
-  "version": "0.2.10",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "Personal WeChat for DeepSeek Harness (dsh): QR-code login over Tencent's iLink channel, one DSH conversation per contact or group, and two-way text, image, video, document and archive transfer",
@@ -37,6 +37,10 @@
     "login.js",
     "media.js",
     "state.js",
+    "session.js",
+    "wecom.js",
+    "ws-client.js",
+    "wecom-bot.js",
     "vendor/qrcode-generator.mjs",
     "scripts/probe-group-send.mjs",
     "cordis.patch.yml",

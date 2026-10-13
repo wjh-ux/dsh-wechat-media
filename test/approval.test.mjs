@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 
-import { createApprovalBridge, formatApprovalPrompt } from "../index.js";
+import { approvalTarget, createApprovalBridge, formatApprovalPrompt } from "../index.js";
 
 let passed = 0;
 let failed = 0;
@@ -65,12 +65,43 @@ await test("the bridge stays out of the way when configured to ignore approvals"
   assert.deepEqual(notify.sent, []);
 });
 
-await test("an account without a token is left to the GUI", async () => {
+await test("a conversation the caller cannot answer is left to the GUI", async () => {
   const notify = recorder();
   const bridge = createApprovalBridge({ notify, timeoutMs: 30 });
-  const answer = await bridge.respond(request(), GUI, { ...conversations, loadAccount: async () => ({ accountId: "x" }) });
+  // `loadAccount` is the caller's judgement about reachability, so an unresolved
+  // conversation (a WeChat account with no token, say) must mean "ask the GUI".
+  const answer = await bridge.respond(request(), GUI, { ...conversations, loadAccount: async () => undefined });
   assert.equal(answer, "GUI");
   assert.deepEqual(notify.sent, []);
+});
+
+await test("the caller gets the conversation, so it can answer over the right channel", async () => {
+  const notify = recorder();
+  const seen = [];
+  const bridge = createApprovalBridge({ notify, timeoutMs: 30 });
+  await bridge.respond(request(), GUI, {
+    ...conversations,
+    loadAccount: async (accountId, conversation) => {
+      seen.push([accountId, conversation]);
+      return account;
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], "acct-one");
+  assert.equal(seen[0][1].chatId, "chat-a");
+});
+
+console.log("-- which record answers for a chat --");
+
+await test("a WeChat account needs a token, a WeCom chat needs the live connection", () => {
+  const personal = { accountId: "acct-one", token: "tok" };
+  assert.equal(approvalTarget({ conversation: { accountId: "acct-one" }, account: personal, wecomReady: false }), personal);
+  assert.equal(approvalTarget({ conversation: { accountId: "acct-one" }, account: { accountId: "acct-one" }, wecomReady: false }), undefined);
+
+  const wecom = { accountId: "wecom-aibo3", chatId: "chat-w" };
+  assert.deepEqual(approvalTarget({ conversation: wecom, account: undefined, wecomReady: true }), { accountId: "wecom-aibo3", via: "wecom" });
+  // A reconnecting socket cannot carry the question, so the GUI must take it.
+  assert.equal(approvalTarget({ conversation: wecom, account: undefined, wecomReady: false }), undefined);
 });
 
 await test("a prompt that cannot be delivered fails safe to the GUI", async () => {

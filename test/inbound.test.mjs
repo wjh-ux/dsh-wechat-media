@@ -13,10 +13,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyInbound, describeEnvelope } from "../index.js";
+import { classifyInbound, classifyWecomInbound, describeEnvelope } from "../index.js";
 import { WechatState } from "../state.js";
 
 const ACCOUNT = "acct-one";
+/** The pseudo account id a WeCom bot writes under (`wecom:<botId>` normalised). */
+const WECOM = "wecom-example0BotId0NotReal0000000000000";
 
 let passed = 0;
 let failed = 0;
@@ -33,7 +35,9 @@ async function test(name, fn) {
     failed += 1;
     console.log(`  FAIL ${name}\n       ${error?.message ?? error}`);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    // Windows occasionally holds the directory for a moment (indexer, antivirus);
+    // a flaky cleanup would report a passing suite as failed.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -172,6 +176,72 @@ await test("a blocked chat cannot answer approvals", async (state) => {
   assert.equal(verdict.action, "ignore");
   assert.equal(verdict.reason, "blocked");
   assert.equal(asked, false, "the allowlist must decide before approvals are consulted");
+});
+
+console.log("-- the WeCom long connection --");
+
+/** A WeCom intelligent-robot callback body, as wecom-bot.js normalises it. */
+const wecom = (text, chatId = "chat-wecom-1", chatType = "single") => ({
+  msgId: `w-${Math.random().toString(36).slice(2, 8)}`,
+  botId: "example0BotId0NotReal0000000000000",
+  chatId,
+  chatType,
+  msgType: "text",
+  text,
+  media: [],
+});
+
+await test("a WeCom message reaches the agent when nothing blocks it", async (state) => {
+  const verdict = await classifyWecomInbound({ accountId: WECOM, message: wecom("你好"), text: "你好", state });
+  assert.equal(verdict.action, "forward");
+  assert.equal(verdict.chatId, "chat-wecom-1");
+  assert.equal(verdict.isGroup, false);
+});
+
+await test("the allowlist applies to a WeCom chat exactly as it does to a contact", async (state) => {
+  await state.savePrefs({ requireAllowlist: true });
+  const undecided = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi"), text: "hi", state });
+  assert.equal(undecided.action, "ignore");
+  assert.equal(undecided.reason, "not-listed");
+
+  await state.setPeer(WECOM, "chat-wecom-1", { allowed: true });
+  const allowed = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi"), text: "hi", state });
+  assert.equal(allowed.action, "forward");
+
+  await state.setPeer(WECOM, "chat-wecom-2", { allowed: false });
+  const blocked = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi", "chat-wecom-2"), text: "hi", state });
+  assert.equal(blocked.action, "ignore");
+  assert.equal(blocked.reason, "blocked");
+});
+
+await test("a 1/2 answer in a WeCom chat is consumed, not turned into a turn", async (state) => {
+  // The gap this covers: the long connection skipped the approval step entirely, so
+  // answering a prompt started a new turn and the approval waited until it timed out.
+  const calls = [];
+  const consumeApproval = (accountId, chatId, text) => {
+    calls.push([accountId, chatId, text]);
+    return text === "1";
+  };
+  const answer = await classifyWecomInbound({ accountId: WECOM, message: wecom("1"), text: "1", state, consumeApproval });
+  assert.equal(answer.action, "answer");
+  assert.equal(answer.reason, "approval-answer");
+  assert.deepEqual(calls[0], [WECOM, "chat-wecom-1", "1"]);
+
+  const ordinary = await classifyWecomInbound({ accountId: WECOM, message: wecom("2"), text: "2", state, consumeApproval });
+  assert.equal(ordinary.action, "forward", "the consumer decides; a stray 2 is still a message");
+});
+
+await test("a blocked WeCom chat cannot answer approvals either", async (state) => {
+  await state.savePrefs({ requireAllowlist: true });
+  await state.setPeer(WECOM, "chat-wecom-1", { allowed: false });
+  let asked = false;
+  const consumeApproval = () => {
+    asked = true;
+    return true;
+  };
+  const verdict = await classifyWecomInbound({ accountId: WECOM, message: wecom("1"), text: "1", state, consumeApproval });
+  assert.equal(verdict.action, "ignore");
+  assert.equal(asked, false);
 });
 
 console.log("-- recorded identities --");

@@ -123,6 +123,38 @@ Every chat that writes to the bot is remembered, and the card lists them under *
 - With it on, only chats marked *Allow* reach the agent; *Ignore* and undecided chats are dropped and logged.
 - A decision takes effect immediately (no restart) and is stored in `peers.json` beside the accounts.
 
+## WeCom (企业微信) / 企业微信
+
+WeCom works alongside the personal-WeChat bridge, outbound through two paths and **inbound through a third**:
+
+| Path | What you need | Direction |
+|---|---|---|
+| **Group robot webhook** | one webhook URL from a WeCom group (*群设置 → 群机器人 → 添加*) | out: text, markdown, images |
+| **Self-built app** | corpid + corpsecret + agentid of an app (*应用管理 → 自建*) | out: text, markdown, image, file, voice, video |
+| **Intelligent robot, long connection** | the robot's BotID + Secret (*智能机器人 → API 模式 → 长连接*) | **both**: messages in, answers back in the same chat |
+
+Configure any of them on the plain page `http://127.0.0.1:19387/dsh-wechat-media/wecom` (also linked from the card
+and the control panel), which is where you send a test message from as well. The long connection needs no public
+address: the plugin opens a WebSocket to `wss://openws.work.weixin.qq.com` and answers each message through the
+frame the platform sent, so a WeCom chat becomes an ordinary DSH conversation - the same session machinery,
+allowlist, approvals and reply relay as personal WeChat. Approval requests reach a WeCom chat as a proactive
+long-connection message and are answered there with `1` (allow once) or `2` (reject); anything else stays in the GUI,
+exactly as on the personal-WeChat side. The agent gets two extra tools:
+
+| Tool | Purpose |
+|---|---|
+| `wecom_send_text` | Send text or markdown through the configured robot, long connection or app (`to` overrides the recipients). |
+| `wecom_send_file` | Upload and send a local file (app); with only a robot, images work and other types are refused with an explanation. |
+
+Settings live in `$DSH_HOME/dsh-wechat-media/wecom.json` with mode `0600` - they contain a webhook key, a corpsecret
+and the robot secret, so they never go into `prefs.json` or a cordis patch. `GET /dsh-wechat-media/state` reports
+whether a secret is set, never its value.
+
+**What stays impossible is the callback API.** It insists on a public HTTPS URL that the enterprise registers, so a
+bridge running on your own machine cannot receive that way; the long connection above is what makes two-way WeCom
+possible without one. Long-connection media (images, files) is not downloaded yet: such a message reaches the agent
+labelled as an undownloaded attachment rather than being dropped silently.
+
 ## Diagnostics / 排障
 
 - The host logs one line per inbound message with the envelope's identifying fields:
@@ -131,7 +163,10 @@ Every chat that writes to the bot is remembered, and the card lists them under *
 - `node scripts/probe-group-send.mjs "<chatId>"` sends a labelled test message to one chat, prints the
   platform's `ret` for each addressing variant, and then lists the chats the bridge already knows.
 - `GET /dsh-wechat-media/state` (loopback only) returns accounts, monitors, preferences, peers and live
-  pairing attempts.
+  pairing attempts. `state.wecom.inboundError` and `state.wecom.sessionIssue` answer "why did the bot stop
+  answering this chat?": the first is the last failure while handling an inbound WeCom message, the second records
+  what had to be done when a stored conversation could not simply be resumed (`resume`, `create`, `retryResume` and
+  any replacement id). Both are also shown on the `/dsh-wechat-media/wecom` page.
 
 ## Where things live / 文件位置
 

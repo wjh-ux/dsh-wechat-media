@@ -128,6 +128,9 @@ window.__ModuleLoader__.load({
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           inboxLabel: "Inbound files are saved in",
+          wecomLabel: "WeCom (企业微信)",
+          notConfigured: "not configured",
+          configure: "Configure",
           inboxPlaceholder: "absolute path, e.g. D:\\wechat-files",
           save: "Save",
           browse: "Browse…",
@@ -180,6 +183,9 @@ window.__ModuleLoader__.load({
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           inboxLabel: "微信收到的文件保存在",
+          wecomLabel: "企业微信",
+          notConfigured: "未配置",
+          configure: "配置",
           inboxPlaceholder: "绝对路径，例如 D:\\wechat-files",
           save: "保存",
           browse: "浏览…",
@@ -533,6 +539,10 @@ window.__ModuleLoader__.load({
               h("a", { key: "p", className: "dswxBtn", href: `${BASE}/pick-folder`, style: { cursor: "pointer" } }, t("browse", "Browse…")),
             ]),
             h("p", { key: "h", className: "dswxMeta" }, t("inboxFormHint", "Saving opens the control panel; use the back button there to return.")),
+          ]),
+          h("p", { key: "wecom", className: "dswxHint" }, [
+            `${t("wecomLabel", "WeCom (企业微信)")}: ${snapshot?.wecom?.bot?.authenticated ? "long connection ✓" : snapshot?.wecom?.configured ? (snapshot.wecom.via ?? "configured") : t("notConfigured", "not configured")} · `,
+            h("a", { key: "l", href: `${BASE}/wecom`, style: { cursor: "pointer" } }, t("configure", "Configure")),
           ]),
           snapshot?.inboxRoot
             ? null

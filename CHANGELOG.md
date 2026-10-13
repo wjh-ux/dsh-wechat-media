@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.4.0
+
+- **Fixed: every chat of a WeCom bot shared one DSH conversation.** `sessionIdFor()` kept the first 40 base64url
+  characters of `${accountId}\0${chatId}` - about 30 bytes - while a WeCom pseudo account id (`wecom:` + BotID) is 41
+  characters on its own, so the chat id never entered the digest: a direct message, a work group and a debug chat all
+  resolved to the *same* session, with one shared context, and each of their route entries pointing at it. Measured
+  live before the fix (four different chat ids → one id); two personal-WeChat chats whose ids share a long prefix
+  could merge the same way. The id is now a SHA-256 over the full identity (`wechat-` + 32 url-safe characters):
+  stable across restarts, 192 bits, still short enough to be a directory name. Sessions created under the old rule are
+  orphaned, and each chat opens a fresh conversation on its next message.
+- **Fixed: the WeCom bot received messages and then never answered.** `index.js` sent every long-connection reply
+  through `wecom.streamBody(...)`, `wecom.generateReqId(...)`, `wecom.splitForStream(...)` and
+  `wecom.markdownBody(...)` - but those four helpers live in **wecom-bot.js**, not in wecom.js, so each call was a
+  `TypeError` raised inside the reply's own try/catch: logged nothing useful, delivered nothing, and the chat simply
+  stayed silent. The proactive long-connection send (`wecom_send_text`, and the test button on the WeCom page) failed
+  the same way. The helpers are now imported from the module that owns them, and `test/wiring.test.mjs` cross-checks
+  every `namespace.name(...)` call in the host against the exports of the module that namespace came from - the class
+  of bug, not just this instance.
+- **A send that did not happen is no longer reported as success.** `WecomBot#reply`/`sendMessage` answer `false` when
+  the socket is not writable (reconnecting, closed); both call sites now check, so a dropped reply is logged and a
+  dropped proactive send raises a readable error instead of claiming delivery.
+- **Remote approval now works in a WeCom chat as well.** It could not before, in both directions, and the failure was
+  invisible: the approval bridge demanded an account record that holds a WeChat token, and a WeCom chat's pseudo
+  account (`wecom-…`) has no account file at all - so every request was quietly handed to the GUI while the person in
+  WeCom saw nothing. The long connection also skipped the "is this a 1/2 answer?" step, so an answer would have
+  started a turn instead of answering. Now: `approvalTarget()` decides which record may be asked (a WeChat account
+  needs its token, a WeCom chat needs an authenticated socket, otherwise the GUI keeps the request), the prompt and
+  its confirmation go out as a proactive long-connection message, and the WeCom inbound path classifies with
+  `classifyWecomInbound()` - the same rule, in the same order (allowlist, then approval answer, then a turn) as
+  `classifyInbound()` for personal WeChat.
+- Two suites that create and delete a temp directory now retry that cleanup (`maxRetries`): Windows occasionally held
+  the directory for a moment, which reported a passing suite as failed.
+- **Two-way WeCom: the intelligent robot's long connection.** A robot configured as *API 模式 → 长连接*
+  (BotID + Secret) needs no public URL, so the plugin opens the WebSocket itself (`wecom-bot.js`), turns every
+  `aibot_msg_callback` into an ordinary DSH conversation through the same machinery as personal WeChat (pseudo
+  account `wecom:<botId>`, peers, allowlist, approvals, reply relay), and answers each inbound frame with a `stream`
+  body - the only passive reply type WeCom accepts.
+- **The "bot stopped answering this chat" bug is fixed at its root too.** A stored session that cannot be resumed made
+  `create` answer `SessionAlreadyExistsError` (the id *is* taken), so every later message died the same way - seen
+  live as `inboundError: session "wechat-…" already exists`, with no turn ever running again. Opening a conversation
+  is now an explicit ladder in the new `session.js`: **resume → create → resume again → fresh id**, with a non-clash
+  create failure reported instead of papered over. The second resume matters because the id can be occupied by a log
+  that a concurrent create just materialized - keeping that chat's history is worth one retry. A fresh id is the last
+  resort, so a chat keeps working instead of staying silent forever.
+- **Nothing about it is silent.** The outcome is recorded as `wecom.sessionIssue` (`requested`, `resume`, `create`,
+  `retryResume`, `freshId`) in `GET /state` and `GET /state`-style debug replies, logged once at warn level, and shown
+  on the `/dsh-wechat-media/wecom` page together with the last inbound failure - that page is where someone actually
+  goes to ask why the bot is quiet.
+- `GET /state.wecom.configured`/`via` now count the long connection, which the first version forgot (a bot-only setup
+  reported "not configured" while it was in fact working). The test-send note on the WeCom page no longer labels a
+  long-connection send as "自建应用", and it names the chat a proactive send went to.
+- The page, the README and the `wecom_send_text` tool description no longer claim WeCom is outbound-only: inbound is
+  the long connection, and only the *callback* API remains impossible. Long-connection media is still not downloaded -
+  an image or file arrives labelled as an undownloaded attachment rather than being dropped.
+- New suites `test/session.test.mjs` (the recovery ladder, driven by a scripted `ctx.agents` double) and
+  `test/wiring.test.mjs` (helper/namespace wiring). `test/package.test.mjs` now import-checks and
+  harness-import-checks every host module the manifest publishes, instead of a hand-written list that had already
+  fallen behind. 157 tests total.
+
+## 0.3.0
+
+- **WeCom (企业微信) support, outbound.** Two ways out: a **group robot webhook** (one URL; text / markdown /
+  image) and a **self-built app** (corpid + corpsecret + agentid; text / markdown plus image / file / voice /
+  video through a media upload). Both are configured on a plain page at `/dsh-wechat-media/wecom`, which is also
+  where the test message is sent from; the card shows the current state and links to it.
+- Two tools: `wecom_send_text` (text or markdown, webhook or app) and `wecom_send_file` (app: upload + send as
+  image/file/video/voice; webhook: images only, and anything else is refused with an explanation).
+- **No inbound path, deliberately.** WeCom delivers messages by calling a public HTTPS URL registered with the
+  enterprise, which a plugin running on someone's own machine cannot offer; claiming otherwise would produce a
+  dead feature. Personal WeChat keeps its two-way bridge.
+- Secrets live in their own `wecom.json` (mode `0600`), never in `prefs.json` and never in a cordis patch; `/state`
+  reports only whether a secret is set.
+- New `wecom.js` transport and suite `test/wecom.test.mjs`: payload shapes (including the image base64 + md5 pair),
+  error mapping (the platform's wording is not repeated when the hint already contains it), token caching with an
+  early refresh, and the exact requests the client sends - all with fetch injected, so no network. 14 new tests
+  (114 total).
+
 ## 0.2.10
 
 - **The system folder picker actually appears now.** v0.2.8 spawned PowerShell with `windowsHide: true`, which
