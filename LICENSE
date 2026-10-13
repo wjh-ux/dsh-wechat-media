@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This package vendors `qrcode-generator` (vendor/qrcode-generator.mjs), which is
-distributed under the MIT License, Copyright (c) 2009 Kazuhiko Arase, and keeps
-its own license notice in the file header.
-
-The iLink bot protocol implemented in ilink.js was ported from
-`@tencent-weixin/openclaw-weixin` (MIT License, Copyright (c) Tencent).
