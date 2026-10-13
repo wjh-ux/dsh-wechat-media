@@ -279,8 +279,11 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
      * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
      *   "no answer" - the caller must delegate so the GUI still gets its prompt.
      */
-    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs, accountId } = {}) {
-      if (typeof notify !== "function") return undefined;
+    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs, accountId, onSent } = {}) {
+      if (typeof notify !== "function") {
+        onSent?.(false, new Error("no notifier configured"));
+        return undefined;
+      }
       // Key by the id the *inbound* path uses (the monitor's account id), never by
       // whatever the account record happens to call itself: a botId/accountId
       // mismatch left a "1"/"2" reply unmatched, so it reached the agent as an
@@ -290,9 +293,13 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       if (pending.has(key)) return undefined;
       try {
         await notify(account, chatId, formatApprovalPrompt(request));
+        // Tell the caller the prompt really went out: "nothing happened" and
+        // "sent, waiting for you" must be distinguishable.
+        onSent?.(true);
       } catch (error) {
         // No outbound path (window closed): let the GUI handle the request.
         logger?.warn?.("[dsh-wechat-media] approval prompt could not be sent: %s", error?.message ?? error);
+        onSent?.(false, error);
         return undefined;
       }
       // Only a real timeout gets the "no answer" notice: a cancel from DSH and an
@@ -1229,17 +1236,46 @@ export function apply(ctx, config = {}) {
             || Object.keys(routes[accountId] ?? {})[0];
           if (!chatId) return json(res, 400, { error: "no chat to ask: write to the bot first" });
           if (approvals.pending.has(`${accountId}|${chatId}`)) {
-            return json(res, 409, { error: "an approval is already pending for this chat" });
+            // Answer 200 with a reason instead of an HTTP error: the card can then
+            // explain "one is already waiting" rather than showing a raw failure.
+            return json(res, 200, {
+              ok: false,
+              reason: "pending",
+              sent: false,
+              error: "an approval is already waiting in this chat",
+              waiting: approvals.list(),
+            });
           }
           const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
-          // Deliberately not awaited: blocking the HTTP request for up to two
-          // minutes made the card's button look dead. The card polls /state instead
+          // Wait only for the send, never for the answer: blocking the HTTP request
+          // for up to two minutes made the card's button look dead, and returning
+          // "sent" before the prompt left made a failed send look like nothing
+          // happened. The wait continues in the background; the card polls /state
           // (approvals while waiting, lastApproval once answered).
-          void approvals.ask(account, chatId, {
-            toolName: body.toolName ?? "dsh-wechat-media self-test",
-            reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
-          }, { timeoutMs, accountId });
-          json(res, 200, { ok: true, accountId, chatId, sent: true, waiting: approvals.list() });
+          const send = await new Promise((resolve) => {
+            let settled = false;
+            const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+            approvals.ask(account, chatId, {
+              toolName: body.toolName ?? "dsh-wechat-media self-test",
+              reason: body.reason ?? "test approval: verifies the 1/2 round trip; nothing is executed",
+            }, {
+              timeoutMs,
+              accountId,
+              onSent: (ok, error) => done({ sent: ok, error: error?.message }),
+            }).then(
+              (outcome) => done({ sent: true, outcome: outcome ?? null }),
+              (error) => done({ sent: false, error: String(error?.message ?? error) }),
+            );
+          });
+          json(res, 200, {
+            ok: send.sent === true,
+            accountId,
+            chatId,
+            sent: send.sent === true,
+            error: send.error ?? null,
+            outcome: send.outcome ?? null,
+            waiting: approvals.list(),
+          });
         },
       },
       {
