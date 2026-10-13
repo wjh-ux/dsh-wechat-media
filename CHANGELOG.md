@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4
+
+- **The approval self-test no longer looks dead.** `POST /dsh-wechat-media/test-approval` used to hold the HTTP
+  request open for the whole wait (up to two minutes), so clicking the card's button froze it with no visible
+  progress - reported from real use. The route now sends the prompt and returns at once; the card reports that
+  the prompt went out, shows the waiting question from `/state.approvals`, and displays the outcome from the new
+  `/state.lastApproval` (`allowed-once` / `rejected` / `cancelled` / `timeout`) once it is answered.
+- One more test (90 total).
+
 ## 0.2.3
 
 - **A waiting approval is visible in the card and can be cancelled from DSH.** `/state` reports the pending
