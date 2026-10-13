@@ -32,7 +32,7 @@ window.__ModuleLoader__.load({
     const BUNDLE_KEY = "dsh-wechat-media";
     const ROW_ID = "wechat-media";
     const LOCALE_NS = "dsh-wechat-media";
-    const POLL_MS = 2000;
+    const POLL_MS = 1000;
 
     const CSS = `
 .dswxCard{display:flex;flex-direction:column;gap:10px;padding:12px 0}
