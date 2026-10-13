@@ -38,9 +38,9 @@ dsh plugin --profile web add github:wjh-ux/dsh-wechat-media
 dsh plugin --profile web add link:/absolute/path/to/dsh-wechat-media
 ```
 
-Restart `dsh`, then open **Plugins → `dsh-wechat-media`** and press **Pair an account (QR code)**.
+Restart `dsh`, then open **Plugins → `dsh-wechat-media`** and press **Add an account (QR code)**.
 
-重启 dsh，然后在 **插件 → `dsh-wechat-media`** 点「配对账号（扫码）」。
+重启 dsh，然后在 **插件 → `dsh-wechat-media`** 点「**添加账号（扫码）**」。
 
 ## Pairing / 配对
 
@@ -48,11 +48,17 @@ Restart `dsh`, then open **Plugins → `dsh-wechat-media`** and press **Pair an 
 2. Scan it with WeChat on the phone, confirm on the phone.
 3. If WeChat asks for digits, type them into the card and submit.
 4. The account appears with a status dot: `monitoring` means the long poll is running.
-5. Repeat with **Pair an account** for as many accounts as you want; press **Unpair** to forget one.
+5. **Add an account (QR code)** stays available at all times — scanning a *different* WeChat account
+   adds it as another account, so a spare and your main account can run side by side. Scanning the account
+   you already have simply refreshes its login. Each row also has **Pair again** and **Unpair**.
+6. Opened the QR by mistake? Press **Cancel** — the attempt disappears immediately instead of waiting for
+   the code to expire. (A QR lives five minutes; an attempt gives up after eight, and at most three QR codes
+   are issued per attempt.)
 
 The QR encodes the landing-page URL the platform hands out — scanning it is what completes the binding.
 Each account is stored under its normalized `ilink_bot_id` (`b0f5860fdecb@im.bot` → `b0f5860fdecb-im-bot`),
-with `0600` permissions on the files that hold a token.
+with `0600` permissions on the files that hold a token; accounts, cursors and conversation routes are keyed
+per account, so several can poll at the same time.
 
 ## Using it / 使用
 
