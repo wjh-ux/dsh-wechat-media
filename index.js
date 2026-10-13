@@ -22,12 +22,12 @@
  * runtime through the Cordis loader, and every use is guarded.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import * as ilink from "./ilink.js";
 import qrcode from "./vendor/qrcode-generator.mjs";
 import { WechatLoginManager } from "./login.js";
-import { describeForModel, prepareOutbound, saveInboundMedia, inboxRoot } from "./media.js";
+import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { WechatState, defaultStateRoot } from "./state.js";
 
 /** Long-poll budget the platform advertises; used until it tells us otherwise. */
@@ -564,7 +564,7 @@ export function apply(ctx, config = {}) {
     const agentOptions = selection?.provider && selection?.model
       ? { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) }
       : undefined;
-    const workspaceRoot = inboxRoot(dshHome);
+    const workspaceRoot = await resolvedInbox();
     const meta = { cwd: config.cwd || workspaceRoot, ...(mountId ? { agentPreset: mountId } : {}) };
     const setup = async (agentCtx) => {
       // Without mounting the preset the agent publishes against the empty global
@@ -641,6 +641,12 @@ export function apply(ctx, config = {}) {
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
   const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0 };
+  /**
+   * Where inbound media goes right now: the runtime preference (card / control
+   * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
+   * per use so changing it takes effect without a restart.
+   */
+  const resolvedInbox = async () => resolveInboxDir({ prefs: await state.loadPrefs(), config, dshHome });
   /**
    * The last few control-route calls, so "I clicked and nothing happened" can be
    * answered from the server side: did the request arrive, and what did it do?
@@ -760,6 +766,7 @@ export function apply(ctx, config = {}) {
     for (const item of media) {
       try {
         const saved = await saveInboundMedia({
+      inboxPath: await resolvedInbox(),
           ilink,
           chatId,
           item: item.item ?? item,
@@ -1090,7 +1097,9 @@ export function apply(ctx, config = {}) {
           json(res, 200, {
             ok: true,
             stateRoot,
-            inboxRoot: inboxRoot(dshHome),
+            inboxRoot: await resolvedInbox(),
+            inboxRootDefault: inboxRoot(dshHome),
+            inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
             prefs,
             peers: await state.loadPeers(),
             counters: { ...counters },
@@ -1243,6 +1252,14 @@ export function apply(ctx, config = {}) {
           if (typeof body.requireAllowlist === "boolean") patch.requireAllowlist = body.requireAllowlist;
           if (typeof body.autoReply === "boolean") patch.autoReply = body.autoReply;
           if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
+          if (body.inboxDir !== undefined) {
+            const value = String(body.inboxDir).trim();
+            // Empty clears the preference (back to the config or the default); a
+            // relative path is refused instead of landing somewhere surprising.
+            if (value === "") patch.inboxDir = null;
+            else if (!isAbsolute(value)) return json(res, 400, { error: `inboxDir must be an absolute path, got "${value}"` });
+            else patch.inboxDir = value;
+          }
           const prefs = await state.savePrefs(patch);
           json(res, 200, { ok: true, prefs });
         },
@@ -1430,6 +1447,18 @@ export function apply(ctx, config = {}) {
             await state.setPeer(acct, chat, { allowed });
             note = `已把 ${chat} 设为 ${decision === "allowed" ? "允许" : decision === "blocked" ? "忽略" : "未决定"}`;
             noteRoute("/panel", { action: "set", chatId: chat, decision });
+          } else if (args.inboxDir !== undefined) {
+            const value = String(args.inboxDir).trim();
+            if (value === "") {
+              await state.savePrefs({ inboxDir: null });
+              note = "收件目录已恢复默认（$DSH_HOME/wechat-inbox）";
+            } else if (!isAbsolute(value)) {
+              note = `❌ 必须是绝对路径，收到的是「${value}」`;
+            } else {
+              await state.savePrefs({ inboxDir: value });
+              note = `收件目录已改为 ${value}`;
+            }
+            noteRoute("/panel", { action: "inboxDir", value, ok: note.startsWith("收件目录") });
           } else if (args.allowlist) {
             await state.savePrefs({ requireAllowlist: args.allowlist === "true" });
             note = `白名单开关 → ${args.allowlist === "true" ? "开" : "关"}`;
@@ -1479,6 +1508,13 @@ ${note ? `<div class="note">${note}</div>` : ""}
 <h4>审批</h4>
 <a class="b" href="?test=1">发送一条测试审批到微信</a>
 ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><div class="m">等待中：${pending.map((item) => `${item.toolName ?? "?"}（${Math.round(item.waitedMs / 1000)} 秒）`).join("、")}</div>` : ""}
+<h4>收件目录</h4>
+<div class="m">微信收到的文件保存在：<code>${await resolvedInbox()}</code></div>
+<form method="get" style="margin:8px 0">
+  <input name="inboxDir" placeholder="绝对路径，例如 D:\\wechat-files" value="" style="font:14px system-ui;padding:6px 8px;width:420px">
+  <button type="submit" style="font:14px system-ui;padding:6px 12px">保存</button>
+  <button type="submit" name="inboxDir" value="" style="font:14px system-ui;padding:6px 12px">恢复默认</button>
+</form>
 <h4>联系人白名单</h4>
 <a class="b" href="?allowlist=${prefs.requireAllowlist ? "false" : "true"}">${prefs.requireAllowlist ? "关闭" : "开启"}「只接收白名单内的联系人与群」</a>
 <table>${rows || `<tr><td class="m">还没有联系人给它发过消息</td></tr>`}</table>
