@@ -5,7 +5,10 @@
 - **Dropped messages are counted.** When the allowlist ignores a chat the drop is recorded
   (`blockedCount` / `blockedAt` on that chat) and the card shows "已拦截 N 条 / N blocked", so a muted
   conversation is visible instead of looking like a broken bridge. One more test (73 total).
-- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
+- The approval bridge was extracted into `createApprovalBridge` with its dependencies injected, so every
+  decision — who gets asked, what "1"/"2" mean, the timeout, an aborted turn, one question per chat, and the
+  rule that an undeliverable prompt must fall back to the GUI — is covered by tests. Twelve new tests
+  (85 total).- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
   `/state` exposes them, so the field that actually addresses a group is read off the platform instead of
   guessed. Still awaiting a live group message; the v0.2.0 release notes say so.
 
