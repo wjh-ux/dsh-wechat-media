@@ -11,7 +11,11 @@
   (85 total).- `GET /dsh-wechat-media/state` now also reports `counters` (received / forwarded / blocked / answered) and the
   last inbound message per account, so checking a live run means one request instead of log archaeology.- `POST /dsh-wechat-media/debug/inbound` (loopback only) feeds the receive path an envelope shaped like the
   platform's, so the inbound pipeline can be exercised and read back through `peers.json`, the route table and
-  the counters without a phone.- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
+  the counters without a phone.- **Fixed a bug the live run found.** The approval pending key used `account.accountId ?? account.botId` while
+  the inbound path used the monitor's account id. Real account records carry `botId`, so the two differed and a
+  "1"/"2" reply never matched: it reached the agent as an ordinary message instead of answering the approval.
+  The key is now passed explicitly from the sender side, with a regression test that names the account record
+  differently (87 tests total).- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
   `/state` exposes them, so the field that actually addresses a group is read off the platform instead of
   guessed. Still awaiting a live group message; the v0.2.0 release notes say so.
 
