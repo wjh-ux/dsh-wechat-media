@@ -274,6 +274,19 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Give up on a question that is waiting in WeChat. */
+        async function cancelApproval(entry) {
+          setBusy(true);
+          try {
+            await api("/approvals/cancel", { method: "POST", body: { accountId: entry?.accountId, chatId: entry?.chatId } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         async function setAllowlist(requireAllowlist) {
           setBusy(true);
           try {
@@ -390,6 +403,14 @@ window.__ModuleLoader__.load({
                 " " + t("requireAllowlist", "Only accept allowlisted chats"),
               ]),
             ]),
+            (snapshot?.approvals ?? []).length > 0
+              ? h("div", { key: "waiting", className: "dswxRow" }, [
+                  h("span", { key: "t", className: "dswxMeta" },
+                    `${t("waitingApproval", "Waiting for your approval in WeChat")}: ${(snapshot.approvals ?? []).map((item) => item.toolName ?? "?").join(", ")}`),
+                  h("button", { key: "c", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelApproval(snapshot.approvals[0]) },
+                    t("cancelWaiting", "Cancel")),
+                ])
+              : null,
             peerRows.length === 0
               ? h("p", { key: "none", className: "dswxMeta" }, t("contactsEmpty", "Nobody has written to it yet."))
               : null,
