@@ -1044,10 +1044,18 @@ export function apply(ctx, config = {}) {
 
   const readBody = async (req) => {
     const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-      if (chunks.reduce((total, part) => total + part.length, 0) > 64 * 1024) throw new Error("body too large");
-    }
+    let total = 0;
+    // A body that never arrives must not hold a route open forever: a stuck read
+    // here is what makes a card button sit on "处理中…" with nothing on the server.
+    const reading = (async () => {
+      for await (const chunk of req) {
+        chunks.push(chunk);
+        total += chunk.length;
+        if (total > 64 * 1024) throw new Error("body too large");
+      }
+    })();
+    reading.catch(() => {});
+    await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2000))]);
     const raw = Buffer.concat(chunks).toString("utf8");
     return raw ? JSON.parse(raw) : {};
   };
@@ -1342,6 +1350,49 @@ export function apply(ctx, config = {}) {
           const cancelled = approvals.cancel(accountId, chatId);
           noteRoute("/approvals/cancel", { chatId, cancelled });
           json(res, 200, { ok: true, cancelled, approvals: approvals.list() });
+        },
+      },
+      {
+        // Plain-URL fallback for the same self-test: paste
+        // /dsh-wechat-media/send-test-approval into the browser and the prompt goes
+        // out without any card JavaScript. GET and POST both accepted; the reply is
+        // a tiny HTML page. Loopback only, like the rest of this surface.
+        kind: "exact",
+        path: "/dsh-wechat-media/send-test-approval",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "GET" && req.method !== "POST") return json(res, 405, { error: "GET or POST only" });
+          const query = Object.fromEntries(new URL(req.url, "http://127.0.0.1").searchParams);
+          const body = req.method === "POST" ? { ...query, ...(await readBody(req)) } : query;
+          const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
+          const account = accountId ? await state.loadAccount(accountId) : undefined;
+          const routes = await state.loadRoutes();
+          const chatId = String(body.chatId ?? "")
+            || lastInbound.get(accountId)?.chatId
+            || Object.keys(routes[accountId] ?? {})[0];
+          let result;
+          if (!account?.token) result = { sent: false, error: "no paired account" };
+          else if (!chatId) result = { sent: false, error: "no chat yet: write to the bot once" };
+          else if (approvals.pending.has(`${accountId}|${chatId}`)) result = { sent: false, reason: "pending", error: "an approval is already waiting in this chat" };
+          else {
+            const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
+            result = await new Promise((resolve) => {
+              let settled = false;
+              const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+              approvals.ask(account, chatId, {
+                toolName: body.toolName ?? "dsh-wechat-media self-test",
+                reason: body.reason ?? "test approval via URL: verifies the 1/2 round trip; nothing is executed",
+              }, { timeoutMs, accountId, onSent: (ok, error) => done({ sent: ok, error: error?.message }) })
+                .then((outcome) => done({ sent: true, outcome: outcome ?? null }), (error) => done({ sent: false, error: String(error?.message ?? error) }));
+            });
+          }
+          noteRoute("/send-test-approval", { method: req.method, chatId, sent: result.sent === true, error: result.error ?? null });
+          const title = result.sent ? "✅ 审批提示已发送到微信" : "❌ 审批提示没有发出去";
+          const detail = result.sent
+            ? `chatId: ${chatId}<br>请在微信里回 <b>1</b>（批准一次）或 <b>2</b>（拒绝）。`
+            : `原因：${String(result.error ?? "?")}${result.reason === "pending" ? "<br>（已有一条在等待：去微信回 1/2，或在卡片上点「取消等待」）" : ""}`;
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+          res.end(`<!doctype html><meta charset="utf-8"><title>dsh-wechat-media</title><body style="font:16px/1.7 system-ui;padding:28px;max-width:640px"><h3>${title}</h3><p>${detail}</p><p style="color:#666">这是 dsh-wechat-media 的自检页面（仅本机可访问）。</p></body>`);
         },
       },
     ];
