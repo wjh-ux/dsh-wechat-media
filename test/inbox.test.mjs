@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { inboxRoot, resolveInboxDir, saveInboundMedia } from "../media.js";
+import { FOLDER_PICK_SCRIPT, parsePickedPath } from "../index.js";
 
 let passed = 0;
 let failed = 0;
@@ -100,5 +101,20 @@ await test("a relative inboxPath is ignored in favour of the default root", asyn
   assert.ok(saved.path.startsWith(resolve(inboxRoot(home))), `expected the default root, got ${saved.path}`);
 });
 
+console.log("-- system folder picker --");
+
+await test("the picker script asks Windows for a folder, in STA", () => {
+  assert.match(FOLDER_PICK_SCRIPT, /FolderBrowserDialog/);
+  assert.match(FOLDER_PICK_SCRIPT, /ShowDialog/);
+  assert.match(FOLDER_PICK_SCRIPT, /SelectedPath/);
+});
+
+await test("only an absolute path from the dialog is accepted", () => {
+  assert.equal(parsePickedPath("D:\\wechat-files\r\n"), "D:\\wechat-files");
+  assert.equal(parsePickedPath("  C:\\Users\\Administrator\\Documents  "), "C:\\Users\\Administrator\\Documents");
+  assert.equal(parsePickedPath(""), undefined, "a cancelled dialog prints nothing");
+  assert.equal(parsePickedPath("   "), undefined);
+  assert.equal(parsePickedPath("relative\\dir"), undefined, "a relative answer is refused");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
