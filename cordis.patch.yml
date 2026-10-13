@@ -1,0 +1,18 @@
+# dsh-wechat-media - composition patch.
+#
+# One row: this package's host half. It owns everything else itself -
+#
+#   * the iLink protocol client (QR login, long-poll receive, send/upload/download)
+#     in ilink.js, so no OpenClaw install and no external service is needed;
+#   * one DSH conversation per WeChat contact or group, with the mapping persisted;
+#   * local HTTP routes the browser card reads (login state, QR image, allowlist);
+#   * its state under $DSH_HOME, so restarting dsh keeps the login and the mapping.
+#
+# No secret is written into this file: the bot token is obtained by scanning a QR
+# code and stored in the state directory.
+- insert:
+    - id: wechat-media
+      name: dsh-wechat-media
+      config:
+        baseUrl: https://ilinkai.weixin.qq.com
+        botType: "3"
