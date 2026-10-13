@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- **Approval answers are confirmed in the chat.** Reported from real use: answering `1` or `2` was consumed
+  silently, which is indistinguishable from being ignored. The bridge now replies in the same chat -
+  "✅ 已批准，本次操作继续。" or "🚫 已拒绝，本次操作已取消。" - while the timeout notice stays as it was. One more
+  test (88 total).
+
 ## 0.2.1
 
 - **Dropped messages are counted.** When the allowlist ignores a chat the drop is recorded
