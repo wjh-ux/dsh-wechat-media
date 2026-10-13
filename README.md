@@ -74,7 +74,45 @@ Just message the bot from WeChat. A few things the agent can do from inside the 
 | `wechat_status` | Which accounts are paired and which conversations exist. |
 
 Every incoming message is prefixed with `[微信 <name> <wxid>]` so the agent can pass the right `to` when it
-answers a specific chat.
+answers a specific chat. Group ids look like `12345678@chatroom`.
+
+## Remote approval / 微信里远程审批
+
+When a WeChat-driven session asks for approval — a tool call the permission preset wants confirmed — the prompt
+goes to the same WeChat chat, not only to the GUI:
+
+```
+⚠️ 需要你批准一次操作（远程审批）
+工具：pwsh
+原因：write outside the workspace
+
+回 1 = 批准一次 · 回 2 = 拒绝
+```
+
+Answer `1` / `y` / `同意` / `批准` / `/approve` to allow that one call, or `2` / `n` / `拒绝` / `/reject` to
+refuse it. The answer is **consumed** — it never becomes a new turn. If nothing arrives within
+`approvalTimeoutSec` (default 120 s), or the prompt cannot be delivered, or the turn is aborted, the request is
+handed back to the GUI, so an approval is never silently dropped. Set `approval: "ignore"` in the plugin config
+to keep approvals in the GUI only.
+
+## Contact allowlist / 联系人白名单
+
+Every chat that writes to the bot is remembered, and the card lists them under **Contacts & groups / 联系人 /
+群**, with **Allow / Ignore / Clear** per row and an **Only accept allowlisted chats** switch.
+
+- The switch is **off by default** — otherwise a freshly paired account would look broken to everyone who writes.
+- With it on, only chats marked *Allow* reach the agent; *Ignore* and undecided chats are dropped and logged.
+- A decision takes effect immediately (no restart) and is stored in `peers.json` beside the accounts.
+
+## Diagnostics / 排障
+
+- The host logs one line per inbound message with the envelope's identifying fields:
+  `inbound group chat=… session_id=… group_id=… room=… from=… type=…` — for a group that settles which id the
+  platform expects as the send target.
+- `node scripts/probe-group-send.mjs "<chatId>"` sends a labelled test message to one chat, prints the
+  platform's `ret` for each addressing variant, and then lists the chats the bridge already knows.
+- `GET /dsh-wechat-media/state` (loopback only) returns accounts, monitors, preferences, peers and live
+  pairing attempts.
 
 ## Where things live / 文件位置
 
@@ -128,9 +166,14 @@ Everything here was learned against the live platform; each item broke something
 
 ## Limitations / 已知限制
 
-- **Group sending is unverified.** Receiving from a group works; the official send path pins
-  `ChatType: direct`, so a reply to a group may not be deliverable. Group chats therefore degrade to
-  "the group can talk to the agent; replies may need the direct chat".
+- **Group sending is unverified but well-founded.** Receiving from a group works today. Every reference
+  implementation addresses a chat through `to_user_id` alone — the official client, the Go library
+  (`daemon365/weixin-clawbot`, whose `Target` holds only `ToUserID` and whose `ChatType` is inbound metadata
+  hardcoded to `direct`) and the Python port (`SiverKing/weixin-ClawBot-API`, which has no `chat_type` field at
+  all). This package sends the same way. What is *not* confirmed against the platform is which inbound field
+  carries a group's addressable id — `group_id` or `session_id`; the host logs
+  `inbound group chat=… session_id=… group_id=… room=…` when a group first writes, which settles it, and if the
+  answer is `session_id` the fix is one line in `describeEnvelope`.
 - **Voice is not bridged as audio.** WeChat's own transcript rides along as text when present; the `.silk`
   payload is downloaded but not transcoded.
 - **Proactive sends need an open conversation window.** Without a stored context token for that peer the
