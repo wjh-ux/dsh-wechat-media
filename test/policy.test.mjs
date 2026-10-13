@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { allowDecision, chunkText, formatApprovalPrompt, parseApprovalReply } from "../index.js";
+import { allowDecision, chunkText, formatApprovalPrompt, noteBlocked, parseApprovalReply } from "../index.js";
 
 let passed = 0;
 let failed = 0;
@@ -99,6 +99,12 @@ test("a huge argument blob is truncated before it reaches WeChat", () => {
   // A string argument is shown as-is, not JSON-quoted.
   const raw = formatApprovalPrompt({ toolName: "t", arguments: "rm -rf /tmp/x" });
   assert.match(raw, /rm -rf \/tmp\/x/);
+});
+test("dropped messages are counted so the silence is visible", () => {
+  assert.deepEqual(noteBlocked(undefined, "T1"), { blockedCount: 1, blockedAt: "T1" });
+  assert.deepEqual(noteBlocked({ blockedCount: 4 }, "T2"), { blockedCount: 5, blockedAt: "T2" });
+  // A corrupted counter must not produce NaN in the UI.
+  assert.equal(noteBlocked({ blockedCount: "oops" }).blockedCount, 1);
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
