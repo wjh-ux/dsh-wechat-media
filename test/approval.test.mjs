@@ -166,5 +166,17 @@ await test("the asked prompt shows what will run", () => {
   assert.match(prompt, /a\.zip/);
 });
 
+await test("a reply is matched even when the account record names itself differently", async () => {
+  // Regression: the pending key used `account.accountId ?? account.botId` while the
+  // inbound path used the monitor's account id. Real accounts carry botId, so the
+  // two differed and a "1" reached the agent as a normal message.
+  const notify = recorder();
+  const bridge = createApprovalBridge({ notify, timeoutMs: 500 });
+  const record = { botId: "b775a478733a@im.bot", token: "tok" }; // note: no accountId
+  const waiting = bridge.ask(record, "chat-a", request(), { accountId: "b775a478733a-im-bot" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(bridge.consume("b775a478733a-im-bot", "chat-a", "1"), true, "the monitor's id must match the pending key");
+  assert.equal(await waiting, "allowed-once");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
