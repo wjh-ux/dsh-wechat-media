@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- **Dropped messages are counted.** When the allowlist ignores a chat the drop is recorded
+  (`blockedCount` / `blockedAt` on that chat) and the card shows "已拦截 N 条 / N blocked", so a muted
+  conversation is visible instead of looking like a broken bridge. One more test (73 total).
+- Group addressing now records all three candidate ids per chat (`groupId`, `sessionChat`, `fromUserId`) and
+  `/state` exposes them, so the field that actually addresses a group is read off the platform instead of
+  guessed. Still awaiting a live group message; the v0.2.0 release notes say so.
+
 ## 0.2.0
 
 - **Remote approval.** A WeChat-driven session's approval request is asked in the same WeChat chat, with the
