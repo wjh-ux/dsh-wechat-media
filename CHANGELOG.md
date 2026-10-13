@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- **Control-route log.** `/state` reports `recentRoutes` (the last 20 calls to `/test-approval`,
+  `/approvals/cancel` and `/debug/inbound` with their result), so "I clicked the button and nothing happened" can
+  be answered from the server: did the request arrive at all, and what did it do? Prompted by a report that the
+  card's Test-approval button sent no message while the same route worked when called directly.
+
 ## 0.2.5
 
 - **The self-test says what actually happened.** `POST /dsh-wechat-media/test-approval` now waits for the *send*
