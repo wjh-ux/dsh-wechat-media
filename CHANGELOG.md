@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.5
+
+- **Fixed the duplicate the user saw on v0.13.4: the live preview and the final answer used different
+  `req_id`s.** To the platform those are two messages - a preview that is never finished, plus the answer - so a
+  streamed reply arrived twice, the first copy frozen mid-sentence. `wecomStreamer` now registers its `req_id` for
+  the inbound frame (`liveFrames`), and `replyWecomInParts` looks it up and sends the **first** part on that same
+  id, which is what closes the stream. Later parts of an over-long answer still get their own ids, because one stream
+  body holds 20480 bytes and reusing one id would replace instead of append.
+- Every reply path now closes the stream, so no half-finished preview can be left behind: the answer, the error
+  notice and the empty-turn notice all go through `replyWecomInParts`, and the one path that replies through a
+  **tool** instead (`outcome.deliveredByTool`) calls `closeLiveStream(frame)` explicitly.
+- `/delivery` was switched back to `whole` while this was being fixed; streaming stays opt-in and is safe to
+  re-enable with `/delivery stream`.
+- 247 tests across 17 suites.
+
 ## 0.13.4
 
 - **Found why no streaming preview ever appeared: the live frames were being discarded by shape.** The adapter's

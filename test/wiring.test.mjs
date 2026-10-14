@@ -258,5 +258,18 @@ await test("a dropped long-connection send is never reported as success", () => 
   assert.ok(checksResult(reply, "reply("), "replyWecomInParts must notice a dropped reply");
 });
 
+await test("a live preview and its answer share one req_id", () => {
+  // v0.13.4 sent the preview on one req_id and the answer on another, so the platform showed two
+  // messages: an unfinished preview and the answer. One stream, one id, one closing send.
+  const at = host.indexOf("function replyWecomInParts");
+  const body = host.slice(at, at + 1400);
+  assert.match(body, /const live = liveFrames\.get\(frame\);/, "the final send must look up the open preview");
+  assert.match(body, /const head = firstReqId \?\? live\?\.reqId;/, "...and reuse its req id for the first part");
+  assert.match(body, /index === 0 && head \? head : generateReqId/, "...while later parts still get their own");
+  const streamer = host.slice(host.indexOf("function wecomStreamer"), host.indexOf("function wecomStreamer") + 900);
+  assert.match(streamer, /liveFrames\.set\(frame, live\);/, "opening a preview must register it");
+  assert.match(host, /function closeLiveStream\(frame, text\)/, "a turn without a text reply must still close the stream");
+  assert.match(host, /deliveredByTool\) \{ closeLiveStream\(frame\); return; \}/, "including the tool-answered path");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

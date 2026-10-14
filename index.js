@@ -1309,10 +1309,19 @@ export function apply(ctx, config = {}) {
    * Deliberately synchronous: `false` from the socket (reconnecting or closed) has to
    * reach the caller's own error handling instead of becoming an unhandled rejection.
    */
-  function replyWecomInParts(frame, text, tag = "stream") {
+  function replyWecomInParts(frame, text, tag = "stream", firstReqId) {
     const parts = splitForStream(text);
+    // The live streamer owns one req_id for the whole answer, and this send is what closes it. A
+    // *different* id here is not a cosmetic detail: the platform then sees two messages - the
+    // preview that never finishes, and the final answer - which is exactly the duplicate that
+    // shipped in v0.13.4. Consuming the entry also means every reply path (answer, error, empty)
+    // closes the stream, so no half-finished preview can be left behind.
+    const live = liveFrames.get(frame);
+    if (live) liveFrames.delete(frame);
+    const head = firstReqId ?? live?.reqId;
     for (let index = 0; index < parts.length; index += 1) {
-      if (wecomBot?.reply(frame, streamBody(generateReqId(`${tag}-${index}`), parts[index], true)) === false) {
+      const reqId = index === 0 && head ? head : generateReqId(`${tag}-${index}`);
+      if (wecomBot?.reply(frame, streamBody(reqId, parts[index], true)) === false) {
         throw new Error("the WeCom long connection is not writable right now");
       }
     }
@@ -1331,6 +1340,30 @@ export function apply(ctx, config = {}) {
   let lastStreamFrame = null;
 
   /**
+   * The live preview stream of each inbound frame, while it is open: `frame -> { reqId, text }`.
+   * Weak so an abandoned frame cannot hold anything alive. The final send looks its req_id up here,
+   * which is what keeps the preview and the answer on one stream instead of two messages.
+   */
+  const liveFrames = new WeakMap();
+
+  /**
+   * Close a preview whose turn ended without a text reply (a tool answered, or the turn produced
+   * nothing). Without this the platform keeps an unfinished stream, which shows up as a message
+   * that never settles.
+   */
+  function closeLiveStream(frame, text) {
+    const live = liveFrames.get(frame);
+    if (!live) return false;
+    liveFrames.delete(frame);
+    try {
+      return wecomBot?.reply(frame, streamBody(live.reqId, text ?? live.text ?? "", true)) !== false;
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not close the live stream: %s", error?.message ?? error);
+      return false;
+    }
+  }
+
+  /**
    * Show a WeCom answer while it is being written.
    *
    * The platform's `stream` message is incremental: the same req_id may be sent repeatedly with
@@ -1340,6 +1373,8 @@ export function apply(ctx, config = {}) {
    */
   function wecomStreamer(frame) {
     const live = { text: "", sent: 0, at: Date.now(), reqId: generateReqId("stream-live"), chunks: 0 };
+    // One req_id per answer, shared with the final send (see replyWecomInParts).
+    liveFrames.set(frame, live);
     return {
       push(delta) {
         live.text += delta;
@@ -1367,6 +1402,9 @@ export function apply(ctx, config = {}) {
       },
       chunks() {
         return live.chunks;
+      },
+      reqId() {
+        return live.reqId;
       },
     };
   }
@@ -1718,7 +1756,7 @@ export function apply(ctx, config = {}) {
       return;
     }
     if (!outcome.text) {
-      if (outcome.deliveredByTool) return;
+      if (outcome.deliveredByTool) { closeLiveStream(frame); return; }
       replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty");
       return;
     }
@@ -2043,7 +2081,7 @@ export function apply(ctx, config = {}) {
       return;
     }
     if (!outcome.text) {
-      if (outcome.deliveredByTool) return; // the tool carried the answer
+      if (outcome.deliveredByTool) return; // the tool carried the answer (WeChat has no live stream to close)
       await sendText(account, chatId, `（本轮没有文本回复：${outcome.stopReason}）`).catch((error) => {
         ctx.logger?.warn?.("[dsh-wechat-media] could not deliver the empty-turn notice: %s", error?.message ?? error);
       });
