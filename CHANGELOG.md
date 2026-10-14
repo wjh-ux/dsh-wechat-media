@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.3
+
+- **v0.19.2's changelog described a change its code did not contain, and this release makes it true.** The edit
+  missed its anchor (the wording it searched for had already been replaced in the previous release), the release was
+  published anyway, and the notes claimed a conversation-window caveat that the tool's reply did not have. The reply
+  now really carries it: *iLink delivers only inside a window opened by a recent inbound message, so a send made
+  outside one is accepted by the platform and then dropped without an error - if it did not arrive, ask them to write
+  to the bot first.*
+- Worth recording as a process failure rather than a wording fix: **a publish must fail when an intended edit did not
+  apply.** Two anchors have now silently missed this way (v0.19.2 here, and the `playtime` field earlier). The
+  publish script verifies the tree, not the intent.
+- Documentation and one reply string; 284 tests across 19 suites.
+
 ## 0.19.2
 
 - **The voice tool's reply now says what is actually true.** It still blamed a missing SILK encoder - which this
