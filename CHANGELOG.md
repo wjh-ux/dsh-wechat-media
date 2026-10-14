@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1
+
+- **The approval self-test now obeys the authorization level.** It used to send the prompt no matter what, which
+  contradicted the setting it sits beside: with 仅查看 a request is refused without asking, and with 完全权限
+  this plugin never asks, so a self-test that prompted anyway was the one code path that could be mistaken for
+  proof of the level's behaviour. It now reports *which level skipped it* (skipped: "readonly" | "full") and
+  records the refusal as an outcome instead of sending anything.
+- A wiring guard asserts the route reads the level and refuses/skips when the level does not ask.
+- 242 tests across 17 suites.
+
 ## 0.11.0
 
 - **New: four authorization levels for approvals** - a menu in the card's authorization area and `/auth` in the

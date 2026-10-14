@@ -188,6 +188,16 @@ await test("approvals in a WeCom chat go out over the long connection", () => {
   assert.match(host, /async function sendWecomProactive\(/, "sendWecomProactive must exist");
 });
 
+await test("the approval self-test obeys the authorization level", () => {
+  // A self-test that prompts while the level says "never ask here" contradicts the setting it
+  // sits next to - and it would be the one code path that could be mistaken for proof.
+  const at = host.indexOf('path: "/dsh-wechat-media/test-approval"');
+  const body = host.slice(at, at + 2600);
+  assert.match(body, /approvalPolicyFor\(\(await state\.loadPrefs\(\)\)\.authorization\)/, "it must read the level");
+  assert.match(body, /if \(!policy\.ask\)/, "and refuse or skip when the level does not ask");
+  assert.match(body, /skipped: policy\.level/, "reporting which level skipped it");
+  assert.match(body, /approvals\.record\?\./, "the read-only refusal is recorded as an outcome");
+});
 await test("the debug routes report the session the chat actually runs in", () => {
   // A chat restarted with `/new` runs on generation 1; echoing the generation-0 id sent a
   // reader after a session that was no longer in use (the live transcript had moved on).

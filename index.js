@@ -434,6 +434,12 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger, polic
       return lastResult ? { ...lastResult } : undefined;
     },
 
+    /** Record an outcome that happened without asking (`仅查看` refuses on its own). */
+    record(entry) {
+      lastResult = { at: new Date().toISOString(), ...entry };
+      return lastResult;
+    },
+
     /**
      * Feed an inbound message to the bridge.
      * @returns {boolean} true when it answered a pending request, so the caller
@@ -2433,6 +2439,18 @@ export function apply(ctx, config = {}) {
             });
           }
           const timeoutMs = Math.max(15, Number(body.timeoutSec ?? config.approvalTimeoutSec ?? 120)) * 1000;
+          // The self-test must obey the authorization level, or it contradicts the setting it
+          // sits next to: with 仅查看 it is refused without a prompt, with 完全权限 it is skipped
+          // (this plugin would not ask either), and only 严格/适中 actually send the prompt.
+          const policy = approvalPolicyFor((await state.loadPrefs()).authorization);
+          if (!policy.ask) {
+            const skipped = policy.decline
+              ? `当前档位「${policy.label}」：需要授权的操作会被直接拒绝，所以自检不发提示。`
+              : `当前档位「${policy.label}」：不在聊天里问，审批交给 GUI，所以自检不发提示。`;
+            if (policy.decline) approvals.record?.({ outcome: "rejected", chatId, toolName: "self-test", reason: "authorization-level-readonly" });
+            noteRoute("/test-approval", { chatId, skipped: policy.level });
+            return json(res, 200, { ok: false, accountId, chatId, sent: false, skipped: policy.level, note: skipped, waiting: approvals.list() });
+          }
           // Wait only for the send, never for the answer: blocking the HTTP request
           // for up to two minutes made the card's button look dead, and returning
           // "sent" before the prompt left made a failed send look like nothing
@@ -2453,12 +2471,13 @@ export function apply(ctx, config = {}) {
               (error) => done({ sent: false, error: String(error?.message ?? error) }),
             );
           });
-          noteRoute("/test-approval", { chatId, sent: send.sent === true, error: send.error ?? null });
+          noteRoute("/test-approval", { chatId, sent: send.sent === true, error: send.error ?? null, level: policy.level });
           json(res, 200, {
             ok: send.sent === true,
             accountId,
             chatId,
             sent: send.sent === true,
+            level: policy.level,
             error: send.error ?? null,
             outcome: send.outcome ?? null,
             waiting: approvals.list(),
