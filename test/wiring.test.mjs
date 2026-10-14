@@ -136,6 +136,28 @@ function checksResult(text, call) {
   return /===\s*false/.test(text.slice(at, at + 200));
 }
 
+await test("both inbound paths answer /commands instead of forwarding them", () => {
+  const calls = [...host.matchAll(/runChatCommand\(\{\s*transport:\s*"(\w+)"/g)].map((match) => match[1]);
+  assert.deepEqual(calls.sort(), ["wechat", "wecom"], "each transport must dispatch commands");
+  for (const match of host.matchAll(/const handled = await runChatCommand\([\s\S]{0,700}?\n\s*\}\);\n(\s*)if \(handled\) return;/g)) {
+    assert.ok(match[1].length >= 0, "a command that was answered must not reach the agent");
+  }
+  assert.equal([...host.matchAll(/if \(handled\) return;/g)].length, 2, "both call sites must return early");
+});
+
+await test("/new moves the chat onto a new generation, /stop cancels the turn", () => {
+  const at = host.indexOf("async function runChatCommand");
+  assert.ok(at > -1);
+  const body = host.slice(at, at + 6000);
+  assert.match(body, /const generation = previous \+ 1/, "/new must bump the generation");
+  assert.match(body, /sessionIdFor\(accountId, chatId, generation\)/, "...and route to the new session id");
+  assert.match(body, /conversations\.delete\(previousId\)/, "...and forget the old conversation");
+  assert.match(body, /handle\?\.dispose\?\.\(\)/, "...and dispose the old agent");
+  assert.match(body, /agent\.cancel\?\.\(new Error\(STOP_REASON\)\)/, "/stop must cancel the running turn");
+  assert.match(body, /statusText\(\{/, "/status must render the status block");
+  assert.match(body, /helpText\(\)/, "/help must render the command list");
+});
+
 await test("the WeCom outbound media path uploads over the long connection", () => {
   const at = host.indexOf("async function wecomSendMedia");
   assert.ok(at > -1, "wecomSendMedia must exist");

@@ -168,6 +168,22 @@ file name comes from `Content-Disposition` because the payload carries none. Not
 scheme (AES-128-ECB). A download that fails says so in the chat instead of dropping the attachment silently, and
 `/state` counts both outcomes (`counters.mediaDownloaded` / `counters.mediaFailed`).
 
+## Chat commands / 聊天里的命令
+
+A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and
+never becomes a turn. This works in personal WeChat and in WeCom, and only in chats your allowlist lets
+through (a blocked chat cannot run commands either).
+
+| Command | Aliases | What it does |
+|---|---|---|
+| `/help` | `/h`, `/?`, `/帮助` | Lists the commands. |
+| `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
+| `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
+| `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
+
+Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an
+ordinary message. Commands are counted (`counters.commands`) and recorded in `/state.recentRoutes`.
+
 ## Diagnostics / 排障
 
 - The host logs one line per inbound message with the envelope's identifying fields:

@@ -221,5 +221,31 @@ await test("the id is stable, short and filesystem-safe", () => {
   assert.ok(first.length <= 40, "session ids become directory names");
 });
 
+console.log("-- /new restarts a conversation --");
+
+await test("generation 0 is exactly what earlier releases computed", () => {
+  // Backwards compatibility: conversations that exist today must keep resolving to them.
+  for (const chat of [WECOM_ACCOUNT, "12345678@chatroom", "o9cq804M3lHB9fiVfj9vwwBe_hpc@im.wechat"]) {
+    assert.equal(sessionIdFor(WECOM_ACCOUNT, chat), sessionIdFor(WECOM_ACCOUNT, chat, 0));
+  }
+});
+
+await test("a new generation is a new conversation, and stable within itself", () => {
+  const chat = "woIHRNCwEXAMPLEchatId00000000000";
+  const ids = [0, 1, 2].map((generation) => sessionIdFor(WECOM_ACCOUNT, chat, generation));
+  assert.equal(new Set(ids).size, 3, "every /new must land on its own session id");
+  for (const generation of [0, 1, 2]) {
+    assert.equal(sessionIdFor(WECOM_ACCOUNT, chat, generation), ids[generation], "the id must not drift between messages");
+    assert.match(ids[generation], /^wechat-[A-Za-z0-9]{32}$/);
+  }
+});
+
+await test("generations do not collide across chats, and junk input falls back to 0", () => {
+  const account = "b775a478733a-im-bot";
+  assert.notEqual(sessionIdFor(account, "chat-a", 1), sessionIdFor(account, "chat-b", 1));
+  assert.equal(sessionIdFor(account, "chat-a", "nonsense"), sessionIdFor(account, "chat-a", 0));
+  assert.equal(sessionIdFor(account, "chat-a", -3), sessionIdFor(account, "chat-a", 0));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

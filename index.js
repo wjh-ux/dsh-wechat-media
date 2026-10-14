@@ -85,6 +85,7 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { openSessionAgent } from "./session.js";
+import { STOP_REASON, helpText, parseCommand, statusText, unknownCommandText } from "./commands.js";
 import * as wecom from "./wecom.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -612,14 +613,17 @@ class ReplyCollector {
  * prefix. SHA-256 over the full identity removes the truncation; 32 base64url characters
  * of it are 192 bits, which is both collision-free in practice and a safe file name.
  *
- * Changing this scheme orphans sessions created under the old one; each chat simply
- * opens a fresh conversation on its next message (the ladder in session.js handles it).
+ * `generation` is what `/new` bumps: a restarted conversation needs a *different* id, or
+ * resuming would bring the old history straight back. Generation 0 hashes exactly what
+ * earlier releases hashed, so existing conversations keep working.
  *
  * @returns {string} `wechat-` + 32 url-safe characters.
  */
-export function sessionIdFor(accountId, chatId) {
+export function sessionIdFor(accountId, chatId, generation = 0) {
+  const round = Number(generation) || 0;
+  const identity = round > 0 ? `${accountId}\u0000${chatId}\u0000${round}` : `${accountId}\u0000${chatId}`;
   const digest = createHash("sha256")
-    .update(`${accountId}\u0000${chatId}`)
+    .update(identity)
     .digest("base64url")
     .replace(/[^A-Za-z0-9]/g, "");
   return `wechat-${digest.slice(0, 32)}`;
@@ -689,13 +693,28 @@ export function apply(ctx, config = {}) {
     return { content: [{ type: "text", text }], source: { kind: "user" } };
   }
 
+  /**
+   * How many times this chat has been restarted with `/new`. Kept in the route table so
+   * it survives a restart: the id a chat resolves to must stay the same for a given
+   * generation, or every message would open yet another conversation.
+   */
+  async function generationOf(accountId, chatId) {
+    const route = await state.getRoute(accountId, chatId);
+    const generation = Number(route?.generation ?? 0);
+    return Number.isFinite(generation) && generation > 0 ? Math.floor(generation) : 0;
+  }
+
+  /** A live agent handle per session id, so `/stop` and `/new` can act on it. */
+  const conversationHandles = new Map();
+
   /** Ensure a live agent for one conversation, resuming its history when possible. */
   async function ensureAgent(accountId, chatId, peerName) {
-    const sessionId = sessionIdFor(accountId, chatId);
+    const generation = await generationOf(accountId, chatId);
+    const sessionId = sessionIdFor(accountId, chatId, generation);
     const existing = ctx.agents.get(sessionId);
     if (existing) {
-      conversations.set(sessionId, { accountId, chatId, peerName });
-      return { agent: existing, sessionId, accountId, chatId, peerName };
+      conversations.set(sessionId, { accountId, chatId, peerName, generation });
+      return { agent: existing, sessionId, accountId, chatId, peerName, generation, handle: conversationHandles.get(sessionId) };
     }
 
     const presets = ctx.get("agentPresets");
@@ -741,9 +760,112 @@ export function apply(ctx, config = {}) {
       );
     }
     ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${resolvedId}`);
-    conversations.set(resolvedId, { accountId, chatId, peerName });
-    await state.setRoute(accountId, chatId, { sessionId: resolvedId, peerName, kind: String(chatId).includes("@chatroom") ? "group" : "direct" });
-    return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName };
+    conversationHandles.set(resolvedId, handle);
+    conversations.set(resolvedId, { accountId, chatId, peerName, generation });
+    // Keep the generation: `/new` must not be undone by this write.
+    await state.setRoute(accountId, chatId, {
+      sessionId: resolvedId,
+      peerName,
+      kind: String(chatId).includes("@chatroom") ? "group" : "direct",
+      generation,
+    });
+    return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
+  }
+
+  /**
+   * Answer a message that is addressed to the bridge rather than to the agent.
+   *
+   * Both transports call this after their allowlist decision and before the approval
+   * step, so a blocked chat cannot run commands either and a command never becomes a
+   * turn. `/new` bumps the chat's generation (a *new* session id, so the old history is
+   * not resumed) and `/stop` cancels the turn that is running in this chat's session.
+   *
+   * @returns {Promise<boolean>} true when the message was a command and has been answered.
+   */
+  async function runChatCommand({ transport, accountId, chatId, peerName, text, reply }) {
+    const command = parseCommand(text);
+    if (!command) return false;
+    counters.commands += 1;
+    ctx.logger?.info?.("[dsh-wechat-media] command /%s from %s (%s)", command.name, chatId, transport);
+    noteRoute("/command", { command: command.name, chatId, transport });
+
+    if (!command.known) {
+      await reply(unknownCommandText(command.name));
+      return true;
+    }
+
+    if (command.name === "help") {
+      await reply(helpText());
+      return true;
+    }
+
+    if (command.name === "status") {
+      const generation = await generationOf(accountId, chatId);
+      await reply(statusText({
+        transport,
+        accountId,
+        chatId,
+        sessionId: sessionIdFor(accountId, chatId, generation),
+        generation,
+        counters,
+        // Reported for both transports: "is the other side down?" is exactly what this
+        // command is for, and the bot's state is one of the few visible failure signals.
+        bot: wecomBotStatus,
+        pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
+        lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
+        inbox: await resolvedInbox(),
+      }));
+      return true;
+    }
+
+    if (command.name === "new") {
+      const previous = await generationOf(accountId, chatId);
+      const previousId = sessionIdFor(accountId, chatId, previous);
+      const generation = previous + 1;
+      await state.setRoute(accountId, chatId, {
+        generation,
+        sessionId: sessionIdFor(accountId, chatId, generation),
+        peerName,
+      });
+      conversations.delete(previousId);
+      const handle = conversationHandles.get(previousId);
+      conversationHandles.delete(previousId);
+      try {
+        await handle?.dispose?.();
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] disposing the old session failed: %s", error?.message ?? error);
+      }
+      counters.commandsNew = (counters.commandsNew ?? 0) + 1;
+      await reply(`🆕 已开始新会话（第 ${generation + 1} 段）。上一条会话的记录仍保留在磁盘上，但不会被带进新对话。`);
+      return true;
+    }
+
+    if (command.name === "stop") {
+      const generation = await generationOf(accountId, chatId);
+      const sessionId = sessionIdFor(accountId, chatId, generation);
+      const agent = ctx.agents.get(sessionId);
+      if (!agent) {
+        await reply("现在没有这个会话的活着的 agent（还没聊过，或已经结束了）。");
+        return true;
+      }
+      if (agent.status !== "running") {
+        await reply("现在没有正在跑的回合。");
+        return true;
+      }
+      try {
+        agent.cancel?.(new Error(STOP_REASON));
+        counters.commandsStopped = (counters.commandsStopped ?? 0) + 1;
+        await reply(`⏹ ${STOP_REASON}`);
+      } catch (error) {
+        await reply(`打断失败：${error?.message ?? error}`);
+      }
+      return true;
+    }
+
+    // Unreachable while every entry of COMMANDS has a branch above; kept so a newly added
+    // command cannot turn into a silent no-op if its branch is forgotten.
+    await reply(unknownCommandText(command.name));
+    return true;
   }
 
   /** Send one text message, with a lazily-fetched typing ticket. */
@@ -796,7 +918,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -999,11 +1121,26 @@ export function apply(ctx, config = {}) {
       return;
     }
     if (verdict.action === "answer") {
-      // The prompt went out over the long connection, so the answer comes back the same
-      // way: a WeCom chat gets the same remote approval a WeChat chat does.
       counters.answered += 1;
       ctx.logger?.info?.("[dsh-wechat-media] wecom approval answer consumed for %s", chatId);
       return;
+    }
+
+    // A "/command" is addressed to the bridge, never to the agent.
+    if (verdict.text) {
+      const handled = await runChatCommand({
+        transport: "wecom",
+        accountId,
+        chatId,
+        peerName,
+        text: verdict.text,
+        reply: async (answer) => {
+          if (wecomBot?.reply(frame, streamBody(generateReqId("stream-cmd"), splitForStream(answer)[0], true)) === false) {
+            throw new Error("the WeCom long connection is not writable right now");
+          }
+        },
+      });
+      if (handled) return;
     }
 
     const lines = [];
@@ -1024,6 +1161,7 @@ export function apply(ctx, config = {}) {
           inboxPath: await resolvedInbox(),
         });
         counters.mediaDownloaded += 1;
+        counters.mediaBytes += Number(saved.bytes) || 0;
         lines.push(describeForModel(saved, "企业微信"));
         ctx.logger?.info?.("[dsh-wechat-media] wecom %s saved to %s (%d bytes)", item.type, saved.path, saved.bytes);
       } catch (error) {
@@ -1314,20 +1452,36 @@ export function apply(ctx, config = {}) {
     }
 
     const lines = [];
-    if (text) lines.push(text);
+    if (text) {
+      // A "/command" is addressed to the bridge, never to the agent.
+      const handled = await runChatCommand({
+        transport: "wechat",
+        accountId,
+        chatId,
+        peerName,
+        text,
+        reply: (answer) => sendText(account, chatId, answer, { typing: false }),
+      });
+      if (handled) return;
+      lines.push(text);
+    }
     for (const item of media) {
       try {
         const saved = await saveInboundMedia({
-      inboxPath: await resolvedInbox(),
+          inboxPath: await resolvedInbox(),
           ilink,
           chatId,
           item: item.item ?? item,
           dshHome,
           maxBytes: maxMediaBytes,
         });
+        counters.mediaDownloaded += 1;
+        counters.mediaBytes += Number(saved.bytes) || 0;
         lines.push(describeForModel(saved));
       } catch (error) {
+        counters.mediaFailed += 1;
         lines.push(`[微信媒体下载失败] ${item?.type ?? "media"}: ${error?.message ?? error}`);
+        ctx.logger?.warn?.("[dsh-wechat-media] inbound %s download failed: %s", item?.type ?? "media", error?.message ?? error);
       }
     }
     if (lines.length === 0) {

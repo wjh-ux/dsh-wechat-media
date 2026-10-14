@@ -1,0 +1,144 @@
+/**
+ * dsh-wechat-media - chat commands.
+ *
+ * A message that begins with `/` is addressed to the bridge, not to the agent: `/help`,
+ * `/status`, `/new`, `/stop`. Only the parsing and the wording live here; who may use a
+ * command, how the answer is delivered and what state it touches stays in index.js, so
+ * this module is pure and can be tested without WeChat, a harness or a clock.
+ *
+ * `/new` is the reason the session id carries a *generation*: a chat's conversation must
+ * be restartable without deleting the old transcript (see sessionIdFor in index.js).
+ */
+
+/** Every command, its aliases and its one-line summary. `/help` is generated from this. */
+export const COMMANDS = [
+  {
+    name: "help",
+    aliases: ["h", "?", "帮助"],
+    usage: "/help",
+    summary: "显示这份命令列表",
+  },
+  {
+    name: "status",
+    aliases: ["状态"],
+    usage: "/status",
+    summary: "桥接状态：账号、本会话、计数、企业微信长连接",
+  },
+  {
+    name: "new",
+    aliases: ["reset", "新会话"],
+    usage: "/new",
+    summary: "开一段新会话（清空上下文；旧会话文件保留在磁盘上）",
+  },
+  {
+    name: "stop",
+    aliases: ["cancel", "停止"],
+    usage: "/stop",
+    summary: "打断这条会话里正在跑的回合",
+  },
+];
+
+/**
+ * The error text `/stop` uses as its cancellation cause, so both reply paths can recognise
+ * a stop the user asked for (and not dress it up as an agent failure).
+ */
+export const STOP_REASON = "已按聊天里的 /stop 打断本轮";
+
+/** Look a command up by name or alias (case-insensitive). */
+export function findCommand(name) {
+  const wanted = String(name ?? "").toLowerCase();
+  return COMMANDS.find((command) => command.name === wanted || command.aliases.includes(wanted));
+}
+
+/**
+ * Parse a message into a command.
+ *
+ * @returns {undefined|{ name: string, known: boolean, args: string, raw: string }}
+ *   undefined when the message is not a command at all (a bare "/" is a message, and so
+ *   is anything whose first character is not "/").
+ */
+export function parseCommand(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw.startsWith("/")) return undefined;
+  const [head, ...rest] = raw.slice(1).split(/\s+/);
+  // A bare "/" and "//" are messages, not commands: people type them, and answering with
+  // a command list would be a surprise.
+  if (!head || head.includes("/")) return undefined;
+  const command = findCommand(head);
+  return {
+    name: command ? command.name : head.toLowerCase(),
+    known: Boolean(command),
+    args: rest.join(" ").trim(),
+    raw,
+  };
+}
+
+/** The `/help` body: every command the dispatcher answers, with its summary. */
+export function helpText() {
+  const lines = ["dsh-wechat-media 命令："];
+  for (const command of COMMANDS) {
+    lines.push(`${command.usage} — ${command.summary}`);
+  }
+  lines.push("", "直接发消息（不以 / 开头）就是和 agent 对话。");
+  return lines.join("\n");
+}
+
+/** Answers for an unknown command: name what was typed, then the list. */
+export function unknownCommandText(name) {
+  return `未知命令 /${String(name ?? "").replace(/^\/+/, "")}\n\n${helpText()}`;
+}
+
+/** A human size for the status block. */
+function size(bytes) {
+  const value = Number(bytes) || 0;
+  return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${Math.max(0, Math.round(value / 1024))} KB`;
+}
+
+/**
+ * Render the `/status` answer.
+ *
+ * @param {object} input
+ * @param {"wechat"|"wecom"} input.transport which bridge carried this command
+ * @param {string} input.accountId
+ * @param {string} input.chatId
+ * @param {string} input.sessionId the session this chat resolves to right now
+ * @param {number} [input.generation] how many times /new has restarted this chat
+ * @param {object} [input.counters] the plugin's counters
+ * @param {object} [input.bot] the WeCom bot's status (`authenticated` / `connected`)
+ * @param {number} [input.pendingApprovals] questions waiting for a 1/2 answer
+ * @param {string} [input.lastInboundAt] ISO time of the last inbound message
+ * @param {string} [input.inbox] where inbound media lands
+ */
+export function statusText({
+  transport,
+  accountId,
+  chatId,
+  sessionId,
+  generation = 0,
+  counters = {},
+  bot,
+  pendingApprovals = 0,
+  lastInboundAt,
+  inbox,
+} = {}) {
+  const lines = [
+    "dsh-wechat-media 状态",
+    `通道：${transport === "wecom" ? "企业微信长连接" : "个人微信"}`,
+    `账号：${accountId || "?"}`,
+    `会话：${chatId || "?"}`,
+    `DSH 会话：${sessionId || "?"}${generation > 0 ? `（第 ${generation + 1} 段，/new 过的）` : ""}`,
+  ];
+  const botState = bot
+    ? `${bot.authenticated ? "已认证" : bot.connected ? "已连接未认证" : "未连接"}${bot.error ? `（${bot.error}）` : ""}`
+    : "未配置";
+  lines.push(`企业微信长连接：${botState}`);
+  lines.push(
+    `计数：收到 ${counters.received ?? 0} · 转发 ${counters.forwarded ?? 0} · 拦截 ${counters.blocked ?? 0} · 审批答复 ${counters.answered ?? 0}`,
+    `媒体：保存 ${counters.mediaDownloaded ?? 0} · 失败 ${counters.mediaFailed ?? 0}${counters.mediaBytes ? ` · 共 ${size(counters.mediaBytes)}` : ""}`,
+  );
+  if (pendingApprovals > 0) lines.push(`待审批：${pendingApprovals} 个（回 1 批准 / 2 拒绝）`);
+  if (lastInboundAt) lines.push(`最近一条消息：${lastInboundAt}`);
+  if (inbox) lines.push(`媒体目录：${inbox}`);
+  lines.push("", "命令：/help · /status · /new · /stop");
+  return lines.join("\n");
+}

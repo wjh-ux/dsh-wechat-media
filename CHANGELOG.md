@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0
+
+- **Chat commands.** A message that starts with `/` is now handled by the bridge instead of being
+  forwarded to the agent: `/help` (`/h`, `/?`, `/帮助`), `/status` (`/状态`), `/new` (`/reset`, `/新会话`) and
+  `/stop` (`/cancel`, `/停止`). An unknown command answers with the list rather than guessing, a bare `/` and
+  `//` stay ordinary messages, and both transports dispatch *after* the allowlist decision, so a blocked
+  chat cannot run commands either. Every command is counted (`counters.commands`) and appears in
+  `/state.recentRoutes`.
+- **`/new` really starts a new conversation.** A chat's session id now carries a *generation*: the route
+  table remembers it, so it survives a restart, and resuming the previous history is impossible by
+  construction. `/new` disposes the live agent, forgets the in-memory conversation and answers with which
+  segment the chat is on; the old transcript stays on disk. Generation 0 hashes exactly what 0.6.0 hashed,
+  so conversations that exist today keep resolving to their session.
+- **`/stop` interrupts the turn running in this chat's session** - and says so honestly when there is
+  nothing running, or when the session has no live agent yet. The cancellation carries a readable cause, so
+  both reply paths report a stop the user asked for instead of an agent failure.
+- **`/status`** answers with the transport, account, chat, DSH session id (and the `/new` generation), the
+  WeCom long connection's state *including its last error*, the counters, how many approvals are waiting,
+  the last inbound time and the media directory - the same facts `/state` exposes, without opening the GUI.
+- **Fixed: the personal-WeChat media loop never touched the counters.** A failed WeChat download was only
+  visible in the transcript, and `counters.mediaDownloaded`/`mediaFailed` only ever moved for WeCom. Both
+  transports now count saved/failed media and the bytes they add up to, which is what `/status` prints.
+- 192 tests across 15 suites (`test/commands.test.mjs` is new; `session.test.mjs` covers the generations,
+  and `wiring.test.mjs` checks that both inbound paths dispatch commands and that `/new` and `/stop` are
+  wired to the pieces they claim to use).
+
 ## 0.6.0
 
 - **WeCom media now travels both ways.** `wecom_send_file` can upload a local file as a temporary WeCom asset and
