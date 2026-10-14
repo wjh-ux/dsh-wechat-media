@@ -12,8 +12,7 @@ import assert from "node:assert/strict";
 
 import * as ilink from "../ilink.js";
 import { mediaKindOf } from "../media.js";
-import {
-  aesEcbPaddedSize,
+import { aesEcbPaddedSize,
   buildBaseInfo,
   buildCdnDownloadUrl,
   buildCdnUploadUrl,
@@ -26,8 +25,7 @@ import {
   getMessageId,
   isMediaItem,
   parseAesKey,
-  pickMediaRef,
-} from "../ilink.js";
+  pickMediaRef, explainSendFailure } from "../ilink.js";
 
 let passed = 0;
 let failed = 0;
@@ -182,5 +180,16 @@ test("describeInbound reports a media-only message as that media kind", () => {
   assert.equal(described.media.length, 1);
 });
 
+await test("a send failure is explained, and an unknown code is not invented", () => {
+  // The raw text ("sendMessage ret=-2 errmsg=prepare failed") tells a user nothing; each documented code
+  // gets one actionable sentence, and anything unrecognised stays silent rather than guessing.
+  assert.match(explainSendFailure(-2, "prepare failed"), /conversation window is closed.*write to the bot/i);
+  assert.match(explainSendFailure(-2, "unknown error"), /stale.*QR scan/i);
+  assert.match(explainSendFailure(-14, "stale token"), /QR scan/i);
+  assert.match(explainSendFailure(-3, "invalid arguments"), /window is open/i);
+  assert.equal(explainSendFailure(0, "ok"), "");
+  assert.equal(explainSendFailure(-99, "who knows"), "");
+  assert.equal(explainSendFailure(undefined), "");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.1
+
+- **A send failure now says what to do about it.** iLink answers with a bare code - `sendMessage ret=-2
+  errmsg=prepare failed` - which tells a user nothing. `explainSendFailure()` turns the documented codes into one
+  actionable sentence and the thrown error carries it: `-2 prepare failed` becomes *"the WeChat conversation window
+  is closed: iLink sends only with a fresh context token from a recent inbound message, so ask them to write to the
+  bot first"*, `-2 unknown error` and `-14` become *"needs a new QR scan"*, `-3` says the request itself was
+  rejected (which means the window is open), and an unrecognised code explains **nothing** rather than guessing.
+- This came out of trying to verify the personal-WeChat voice path: the send was refused, and a control experiment -
+  sending *text* to the same chat - failed with the identical code, proving it was the closed conversation window
+  rather than the audio format. WeCom's long connection has no such window, which is why the same voice message sent
+  there cold works.
+- 277 tests across 19 suites.
+
 ## 0.18.0
 
 - **Voice messages can now be sent, and are spoken here.** Two tools - `wechat_send_voice` (personal WeChat,

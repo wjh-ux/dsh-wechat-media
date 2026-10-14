@@ -87,6 +87,30 @@ export const DEFAULT_BOT_AGENT = 'OpenClaw'; // fallback bot_agent
 export const BOT_AGENT_MAX_LEN = 256; // byte cap for the sanitized bot_agent
 export const DEFAULT_BOT_TYPE = '3'; // bot_type of the official QR login
 export const STALE_TOKEN_ERRCODE = -14; // bot token stale -> re-login required
+/**
+ * What a `ret` code from the send API means, in a sentence someone can act on.
+ *
+ * The protocol documents these codes, but the raw failure a caller sees -
+ * `sendMessage ret=-2 errmsg=prepare failed` - tells a user nothing. The two that matter in practice are
+ * the **closed conversation window** (iLink only sends with a fresh `context_token` from a recent inbound
+ * message, so the person has to write to the bot first) and a **stale bot token** (a new QR scan is
+ * needed). An unknown code explains nothing rather than guessing.
+ *
+ * @param {unknown} ret the platform's `ret`
+ * @param {unknown} [errmsg] its `errmsg`
+ * @returns {string} one sentence, or "" when the code is not recognised
+ */
+export function explainSendFailure(ret, errmsg) {
+  const code = Number(ret);
+  const detail = String(errmsg ?? '').trim().toLowerCase();
+  if (code === -2) {
+    if (detail.includes('unknown error')) return 'the session looks stale (ret=-2 with "unknown error") - the account probably needs a new QR scan';
+    return 'the WeChat conversation window is closed: iLink sends only with a fresh context token from a recent inbound message, so ask them to write to the bot first';
+  }
+  if (code === STALE_TOKEN_ERRCODE) return 'the bot token is stale - the account needs a new QR scan';
+  if (code === -3) return 'the platform rejected the request itself and its validation was reached, which means the window is open';
+  return '';
+}
 /** Upstream defaults (ms): api = send/getuploadurl, config = typing/notify. */
 export const DEFAULT_TIMEOUTS = { api: 15_000, config: 10_000, longPoll: 35_000, qr: 35_000 };
 
@@ -574,7 +598,8 @@ async function sendMessageRequest({ baseUrl, token, msg, timeoutMs = DEFAULT_TIM
     token, timeoutMs, signal, label: 'sendMessage',
   }));
   if (raw?.ret !== undefined && raw.ret !== 0) {
-    const err = new Error(`sendMessage ret=${raw.ret} errmsg=${raw.errmsg ?? '(none)'}`);
+    const explanation = explainSendFailure(raw.ret, raw.errmsg);
+    const err = new Error(`sendMessage ret=${raw.ret} errmsg=${raw.errmsg ?? '(none)'}${explanation ? ` — ${explanation}` : ''}`);
     err.ret = raw.ret;
     err.errcode = raw.errcode;
     err.errmsg = raw.errmsg;
