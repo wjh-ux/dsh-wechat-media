@@ -288,13 +288,15 @@ console.log("-- authorization levels --");
 
 await test("each level maps to what the plugin may do with a request", () => {
   const strict = approvalPolicyFor("strict");
-  assert.deepEqual([strict.ask, strict.onTimeout, strict.decline], [true, "decline", false], "strict asks, and silence is no");
+  assert.deepEqual([strict.ask, strict.onTimeout, strict.decision], [true, "decline", undefined], "strict asks, and silence is no");
   const moderate = approvalPolicyFor("moderate");
-  assert.deepEqual([moderate.ask, moderate.onTimeout, moderate.decline], [true, "gui", false], "moderate is the old behaviour");
+  assert.deepEqual([moderate.ask, moderate.onTimeout, moderate.decision], [true, "gui", undefined], "moderate is the old behaviour");
   const full = approvalPolicyFor("full");
-  assert.deepEqual([full.ask, full.onTimeout, full.decline], [false, "gui", false], "full does not ask here");
+  // 完全权限 means what it says: this plugin is itself an answerer, so it grants the request
+  // without asking. The session is put on the `ask` policy so the request reaches us at all.
+  assert.deepEqual([full.ask, full.onTimeout, full.decision], [false, "gui", "allowed-once"], "full grants without asking");
   const readonly = approvalPolicyFor("readonly");
-  assert.deepEqual([readonly.ask, readonly.onTimeout, readonly.decline], [false, "gui", true], "read only refuses without asking");
+  assert.deepEqual([readonly.ask, readonly.onTimeout, readonly.decision], [false, "gui", "rejected"], "read only refuses without asking");
 });
 
 await test("an unknown level falls back to moderate instead of failing open", () => {

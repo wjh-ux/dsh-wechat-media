@@ -218,17 +218,19 @@ export function approvalPolicyFor(level) {
   switch (wanted) {
     case "strict":
       // Every approval is asked in the chat, and silence is a no.
-      return { level: wanted, ask: true, onTimeout: "decline", decline: false, label: AUTHORIZATION_LABELS.strict };
+      return { level: wanted, ask: true, onTimeout: "decline", decision: undefined, label: AUTHORIZATION_LABELS.strict };
     case "full":
-      // Never ask in the chat: approvals (if the session policy asks for any) stay with the GUI.
-      return { level: wanted, ask: false, onTimeout: "gui", decline: false, label: AUTHORIZATION_LABELS.full };
+      // 完全权限, decided by the answerer this plugin already is: approve on the spot, without
+      // asking. The session is put on the `ask` policy so requests reach us at all (ensureAgent);
+      // DSH's own `never` policy would reject them before any answerer was consulted.
+      return { level: wanted, ask: false, onTimeout: "gui", decision: "allowed-once", label: AUTHORIZATION_LABELS.full };
     case "readonly":
       // Fail closed: anything that needs an approval is refused without asking.
-      return { level: wanted, ask: false, onTimeout: "gui", decline: true, label: AUTHORIZATION_LABELS.readonly };
+      return { level: wanted, ask: false, onTimeout: "gui", decision: "rejected", label: AUTHORIZATION_LABELS.readonly };
     case "moderate":
     default:
       // Today's behaviour: ask in the chat, and let the GUI take over if nobody answers.
-      return { level: "moderate", ask: true, onTimeout: "gui", decline: false, label: AUTHORIZATION_LABELS.moderate };
+      return { level: "moderate", ask: true, onTimeout: "gui", decision: undefined, label: AUTHORIZATION_LABELS.moderate };
   }
 }
 
@@ -531,13 +533,15 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger, polic
       try {
         // The level can change at any moment (`/auth`, the card), so it is read per request.
         const policy = await (policyFor?.() ?? approvalPolicyFor("moderate"));
-        if (ignore || (!policy.ask && !policy.decline)) return next();
-        // "仅查看": refuse anything that needs an approval, without asking anyone.
-        if (policy.decline) {
-          lastResult = { outcome: "rejected", chatId: "", toolName: request?.toolName, at: new Date().toISOString(), reason: "authorization-level-readonly" };
-          logger?.info?.("[dsh-wechat-media] declined %s without asking (authorization level: readonly)", request?.toolName ?? "?");
-          return "rejected";
+        if (ignore) return next();
+        // 完全权限 and 仅查看 are decided here, without asking anyone: this plugin is itself an
+        // answerer, so an approval can be granted or refused on the spot.
+        if (policy.decision) {
+          lastResult = { outcome: policy.decision, chatId: "", toolName: request?.toolName, at: new Date().toISOString(), reason: `authorization-level-${policy.level}` };
+          logger?.info?.("[dsh-wechat-media] %s %s without asking (authorization level: %s)", policy.decision === "allowed-once" ? "approved" : "declined", request?.toolName ?? "?", policy.level);
+          return policy.decision;
         }
+        if (!policy.ask) return next();
         const conversation = await findConversation?.(String(request?.agent?.session?.id ?? ""));
         if (!conversation) return next(); // not a WeChat-driven session
         // Whoever the caller can actually reach. `loadAccount` owns that judgement
@@ -931,6 +935,16 @@ export function apply(ctx, config = {}) {
       kind: String(chatId).includes("@chatroom") ? "group" : "direct",
       generation,
     });
+    // Put the session on the `ask` approval policy. With DSH's `never` policy a request is
+    // rejected before any answerer is consulted, so the authorization level could never decide;
+    // `ask` hands the decision to this plugin, and with no answerer reachable it still fails
+    // closed. Applied once per session, because the policy is recorded in the session itself.
+    try {
+      const approvalPlugin = await importHarnessPlugin(ctx, "@deepseek-ai/dsh-user-approval");
+      approvalPlugin?.setApprovalPolicy?.(handle.agent?.session, "ask");
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not set the session approval policy: %s", error?.message ?? error);
+    }
     return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
   }
 
@@ -2419,14 +2433,24 @@ export function apply(ctx, config = {}) {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           const body = await readArgs(req);
-          const accountId = String(body.accountId ?? "") || (await state.listAccounts())[0];
-          const account = accountId ? await state.loadAccount(accountId) : undefined;
-          if (!account?.token) return json(res, 400, { error: "no paired account" });
           const routes = await state.loadRoutes();
-          const chatId = String(body.chatId ?? "")
-            || lastInbound.get(accountId)?.chatId
-            || Object.keys(routes[accountId] ?? {})[0];
-          if (!chatId) return json(res, 400, { error: "no chat to ask: write to the bot first" });
+          // Whichever channel can actually reach a chat: a WeChat account with a usable token, or
+          // the WeCom long connection - the only channel on a bot-only setup, where the WeChat
+          // account has no token and every send fails with ret=-3 (measured live).
+          const wecomCfg = await state.loadWecom();
+          const wecomId = wecomCfg.botId ? wecomAccountId(wecomCfg.botId) : "";
+          const requested = String(body.chatId ?? "");
+          const wecomChat = requested || lastInbound.get(wecomId)?.chatId || Object.keys(routes[wecomId] ?? {})[0];
+          const listed = String(body.accountId ?? "") || (await state.listAccounts())[0];
+          const listedAccount = listed ? await state.loadAccount(listed) : undefined;
+          const wantWecom = Boolean(wecomId) && wecomBotStatus.authenticated && Boolean(wecomChat)
+            && (!listedAccount?.token || !requested || requested === wecomChat || Object.keys(routes[wecomId] ?? {}).includes(requested));
+          const accountId = wantWecom ? wecomId : listed;
+          const account = wantWecom ? { accountId: wecomId, via: "wecom" } : listedAccount;
+          const chatId = wantWecom ? wecomChat : (requested || lastInbound.get(accountId)?.chatId || Object.keys(routes[accountId] ?? {})[0]);
+          if (!account || !chatId) {
+            return json(res, 400, { error: "no channel to ask through", note: "pair a WeChat account, or connect the WeCom bot and write to it once" });
+          }
           if (approvals.pending.has(`${accountId}|${chatId}`)) {
             // Answer 200 with a reason instead of an HTTP error: the card can then
             // explain "one is already waiting" rather than showing a raw failure.
@@ -2444,10 +2468,12 @@ export function apply(ctx, config = {}) {
           // (this plugin would not ask either), and only 严格/适中 actually send the prompt.
           const policy = approvalPolicyFor((await state.loadPrefs()).authorization);
           if (!policy.ask) {
-            const skipped = policy.decline
-              ? `当前档位「${policy.label}」：需要授权的操作会被直接拒绝，所以自检不发提示。`
-              : `当前档位「${policy.label}」：不在聊天里问，审批交给 GUI，所以自检不发提示。`;
-            if (policy.decline) approvals.record?.({ outcome: "rejected", chatId, toolName: "self-test", reason: "authorization-level-readonly" });
+            const skipped = policy.decision === "allowed-once"
+              ? `当前档位「${policy.label}」：不在聊天里问，需要授权的操作会被**自动批准**，所以自检不发提示。`
+              : policy.decision === "rejected"
+                ? `当前档位「${policy.label}」：需要授权的操作会被直接拒绝，所以自检不发提示。`
+                : `当前档位「${policy.label}」：不在聊天里问，所以自检不发提示。`;
+            if (policy.decision) approvals.record?.({ outcome: policy.decision, chatId, toolName: "self-test", reason: `authorization-level-${policy.level}` });
             noteRoute("/test-approval", { chatId, skipped: policy.level });
             return json(res, 200, { ok: false, accountId, chatId, sent: false, skipped: policy.level, note: skipped, waiting: approvals.list() });
           }

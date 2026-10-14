@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0
+
+- **完全权限 now really grants: the plugin approves without asking.** It used to hand the request to the GUI, which could still refuse it - not what the level says. This plugin *is* an answerer, so it returns `allowed-once` on the spot. The session is put on the `ask` approval policy when it is opened, because with DSH's own `never` policy a request is rejected before any answerer is consulted and the level could never decide.
+- **Corrected understanding, recorded in the code**: DSH's `APPROVAL_POLICIES` are `["ask", "never"]`, and `never` means *actions that require approval are rejected automatically* - it is not a "allow everything" switch. What makes an action need approval at all is the session's file sandbox (`read-only` / `workspace-write` / `danger-full-access`). The mapping is therefore: 严格/适中 ask in the chat (silence = no / GUI), 完全权限 grants on the spot, 仅查看 refuses on the spot.
+- **The approval self-test can ask through the WeCom long connection.** It demanded a WeChat account with a usable token, so on a bot-only setup it failed at the channel level (`sendMessage ret=-3`, measured live) and could not verify anything. It now picks whichever channel can reach the chat and says which one it used.
+- 242 tests across 17 suites.
+
 ## 0.11.1
 
 - **The approval self-test now obeys the authorization level.** It used to send the prompt no matter what, which

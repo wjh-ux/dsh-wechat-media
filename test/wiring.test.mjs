@@ -188,15 +188,18 @@ await test("approvals in a WeCom chat go out over the long connection", () => {
   assert.match(host, /async function sendWecomProactive\(/, "sendWecomProactive must exist");
 });
 
-await test("the approval self-test obeys the authorization level", () => {
+await test("the approval self-test obeys the authorization level and can reach a WeCom chat", () => {
   // A self-test that prompts while the level says "never ask here" contradicts the setting it
-  // sits next to - and it would be the one code path that could be mistaken for proof.
+  // sits next to - and it would be the one code path that could be mistaken for proof. It also
+  // has to work on a bot-only setup, where the WeChat account has no usable token.
   const at = host.indexOf('path: "/dsh-wechat-media/test-approval"');
-  const body = host.slice(at, at + 2600);
+  const body = host.slice(at, at + 5200);
   assert.match(body, /approvalPolicyFor\(\(await state\.loadPrefs\(\)\)\.authorization\)/, "it must read the level");
   assert.match(body, /if \(!policy\.ask\)/, "and refuse or skip when the level does not ask");
   assert.match(body, /skipped: policy\.level/, "reporting which level skipped it");
-  assert.match(body, /approvals\.record\?\./, "the read-only refusal is recorded as an outcome");
+  assert.match(body, /approvals\.record\?\./, "the level's own decision is recorded as an outcome");
+  assert.match(body, /via: "wecom"/, "it must be able to ask through the long connection");
+  assert.match(body, /wecomBotStatus\.authenticated/, "...only while that connection is authenticated");
 });
 await test("the debug routes report the session the chat actually runs in", () => {
   // A chat restarted with `/new` runs on generation 1; echoing the generation-0 id sent a

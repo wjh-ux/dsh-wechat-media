@@ -211,7 +211,8 @@ test("the authorization menu is on the card, in both languages, wired to the hos
   assert.match(host, /AUTHORIZATION_LEVELS\.includes\(level\)/, "the host must validate the level it is given");
   assert.match(host, /command\.name === "auth"/, "the /auth command must be handled");
   assert.match(host, /policyFor: async \(\) => approvalPolicyFor/, "the approval bridge must read the level per request");
-  assert.match(host, /return "rejected";/, "the read-only level must refuse without asking");
+  assert.match(host, /return policy\.decision;/, "the level's own decision must be handed to the harness");
+  assert.match(host, /setApprovalPolicy\?\.\(handle\.agent\?\.session, "ask"\)/, "chat-driven sessions must be put on the ask policy, or requests never reach us");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
