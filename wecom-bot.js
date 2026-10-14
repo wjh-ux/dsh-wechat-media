@@ -136,8 +136,24 @@ export function sendFrame(chatId, body, reqId = generateReqId(CMDS.SEND_MSG)) {
   return { cmd: CMDS.SEND_MSG, headers: { req_id: reqId }, body: { chatid: String(chatId), ...body } };
 }
 
+/** Push the media of one payload entry (`image` / `file` / `video`) onto `into`. */
+function collectMedia(payload, into) {
+  if (payload?.image?.url) into.push({ type: "image", url: payload.image.url, aesKey: payload.image.aeskey });
+  if (payload?.file?.url) into.push({ type: "file", url: payload.file.url, aesKey: payload.file.aeskey, fileName: payload.file.filename });
+  // WeCom's voice payload carries only the transcription (`content`), no url - there is
+  // nothing to download, so a `voice.url` is only honoured if the platform ever adds one.
+  if (payload?.voice?.url) into.push({ type: "voice", url: payload.voice.url, aesKey: payload.voice.aeskey });
+  if (payload?.video?.url) into.push({ type: "video", url: payload.video.url, aesKey: payload.video.aeskey });
+}
+
 /**
  * Normalise a callback into the little shape the rest of the plugin uses.
+ *
+ * Every media-bearing shape the protocol defines is collected, not just the top-level
+ * one: an **image in a text message** arrives as `mixed.msg_item`, and an image the user
+ * *quoted* arrives under `quote`. Both used to be dropped silently - a mixed message
+ * carried no text either, so it was counted as unusable and never reached the model.
+ *
  * @returns {undefined|{ msgId, botId, chatId, chatType, msgType, text, media: object[] }}
  */
 export function describeBotMessage(frame) {
@@ -146,11 +162,16 @@ export function describeBotMessage(frame) {
   const chatType = body.chattype ?? (body.chatid ? "group" : "single");
   const chatId = String(body.chatid ?? body.from?.userid ?? body.userid ?? "");
   const media = [];
-  if (body.image?.url) media.push({ type: "image", url: body.image.url, aesKey: body.image.aeskey });
-  if (body.file?.url) media.push({ type: "file", url: body.file.url, aesKey: body.file.aeskey, fileName: body.file.filename });
-  if (body.voice?.url) media.push({ type: "voice", url: body.voice.url, aesKey: body.voice.aeskey });
-  if (body.video?.url) media.push({ type: "video", url: body.video.url, aesKey: body.video.aeskey });
-  const text = body.text?.content ?? body.markdown?.content ?? body.voice?.content ?? "";
+  collectMedia(body, media);
+  // 图文混排: text parts join the message text, image parts join the media.
+  const mixedText = [];
+  for (const part of Array.isArray(body.mixed?.msg_item) ? body.mixed.msg_item : []) {
+    if (part?.msgtype === "text" && part.text?.content) mixedText.push(String(part.text.content));
+    if (part?.msgtype === "image" && part.image?.url) media.push({ type: "image", url: part.image.url, aesKey: part.image.aeskey });
+  }
+  // Quoted media only: quoted *text* stays out of the prompt, as on the WeChat side.
+  collectMedia(body.quote, media);
+  const text = body.text?.content ?? body.markdown?.content ?? body.voice?.content ?? mixedText.join("\n");
   return {
     msgId: String(body.msgid ?? ""),
     botId: String(body.aibotid ?? ""),

@@ -62,6 +62,48 @@ await test("a callback is normalised for the rest of the plugin", () => {
   assert.equal(describeBotMessage(undefined), undefined);
 });
 
+await test("every media-bearing shape is collected, not just the top-level one", () => {
+  // 图文混排 (mixed): text parts are the message text, image parts are media. It used
+  // to produce neither, so such a message was counted as unusable and dropped.
+  const mixed = describeBotMessage({
+    cmd: CMDS.CALLBACK,
+    headers: {},
+    body: {
+      msgid: "m3",
+      aibotid: "b1",
+      msgtype: "mixed",
+      chatid: "c1",
+      mixed: { msg_item: [
+        { msgtype: "text", text: { content: "看这张图" } },
+        { msgtype: "image", image: { url: "https://x/mixed", aeskey: "km" } },
+      ] },
+    },
+  });
+  assert.equal(mixed.text, "看这张图");
+  assert.deepEqual(mixed.media, [{ type: "image", url: "https://x/mixed", aesKey: "km" }]);
+
+  // A quoted file/image (引用): the attachment is what the user is pointing at.
+  const quoted = describeBotMessage({
+    cmd: CMDS.CALLBACK,
+    headers: {},
+    body: {
+      msgid: "m4",
+      aibotid: "b1",
+      msgtype: "text",
+      chatid: "c1",
+      text: { content: "这个改一下" },
+      quote: { msgtype: "file", file: { url: "https://x/quoted", aeskey: "kq" }, text: { content: "被引用的文本" } },
+    },
+  });
+  assert.equal(quoted.text, "这个改一下", "quoted text must not replace the message text");
+  assert.deepEqual(quoted.media, [{ type: "file", url: "https://x/quoted", aesKey: "kq", fileName: undefined }]);
+
+  // A voice message is a transcription, with no url to download.
+  const voice = describeBotMessage({ cmd: CMDS.CALLBACK, headers: {}, body: { msgid: "m5", aibotid: "b1", msgtype: "voice", chattype: "single", from: { userid: "u1" }, voice: { content: "语音转出来的字" } } });
+  assert.equal(voice.text, "语音转出来的字");
+  assert.deepEqual(voice.media, []);
+});
+
 await test("errors name what to fix, including the code the server really sends", () => {
   assert.equal(botError({ errcode: 0 }), undefined);
   assert.equal(botError({}), undefined);

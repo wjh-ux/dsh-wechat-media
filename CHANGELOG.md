@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0
+
+- **WeCom images, files and videos are downloaded and decrypted now.** Until this release an inbound WeCom
+  attachment only reached the model as a label (`[企业微信图片：暂未下载（媒体支持待补）]`), because the long
+  connection's scheme is not the one the personal-WeChat side already had. It is implemented in the new
+  `wecom-media.js` from the official SDK's own code (`@wecom/aibot-node-sdk` v1.0.7, `src/crypto.ts` +
+  `src/api.ts`), not from guesswork:
+  - the payload's `aeskey` is **base64 of a 32-byte key**, and the bytes are **AES-256-CBC** with `iv = key[0..16]`
+    - *not* the iLink scheme (AES-128-ECB with a base64 32-hex-character key) that a reader of `ilink.js` would
+    naturally reach for;
+  - WeCom pads PKCS#7 to a **32**-byte multiple, so Node's own padding removal (16-byte blocks) throws `bad decrypt`
+    on payloads whose length is a multiple of 16: `setAutoPadding(false)` plus manual removal is required;
+  - the file name can only come from `Content-Disposition` (`filename*=UTF-8''…` first, then `filename=`), because the
+    payload carries none, and the real type is then settled by magic bytes.
+  Downloaded files land in the same inbox layout as the WeChat side (`$DSH_HOME/wechat-inbox/<date>/<chat>/`), honour
+  the same `maxMediaMiB` cap, and reach the model as a path plus a `[企业微信图片] …用 read_image 查看` hint. A failed
+  download says why (`[企业微信图片未保存] …`) instead of pretending no attachment was sent, and
+  `counters.mediaDownloaded` / `counters.mediaFailed` make both countable from `/state`.
+- **Two inbound shapes that were dropped silently are handled**: 图文混排 (`mixed.msg_item`) - a text message *with* an
+  image - carried neither text nor media to the plugin and was counted as `unusable`, and media the user **quoted**
+  (`quote.image` / `quote.file` / `quote.video`) was ignored entirely. Both are collected now; quoted *text* stays out
+  of the prompt, as on the WeChat side.
+- `media.js`'s `saveInboundMedia` drives either transport (`download` + `kind`, not just `ilink`), and
+  `describeForModel` names the app the media came from. New suite `test/wecom-media.test.mjs` (11 tests) pins the
+  cipher against a locally encrypted payload - including the 32-byte padding boundary - plus the file-name rules, the
+  size cap and every failure message. 169 tests total.
+- **Verified against real messages** before release, not only against the fixtures above: a 2880×2160 JPEG (1.05 MB)
+  arrived as a readable image (the model opened it with `read_image` and transcribed the slide in it), and a document
+  sent as `大学生心理健康教育活动方案.zip` kept its Chinese name through the RFC 5987 `filename*=UTF-8''…` branch and
+  unzipped cleanly. Counters after both: `mediaDownloaded=2 mediaFailed=0`.
+
 ## 0.4.0
 
 - **Fixed: every chat of a WeCom bot shared one DSH conversation.** `sessionIdFor()` kept the first 40 base64url

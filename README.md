@@ -152,8 +152,16 @@ whether a secret is set, never its value.
 
 **What stays impossible is the callback API.** It insists on a public HTTPS URL that the enterprise registers, so a
 bridge running on your own machine cannot receive that way; the long connection above is what makes two-way WeCom
-possible without one. Long-connection media (images, files) is not downloaded yet: such a message reaches the agent
-labelled as an undownloaded attachment rather than being dropped silently.
+possible without one.
+
+**Media arrives too.** Images, files and videos sent to the robot are downloaded, decrypted and written to the same
+inbox the WeChat side uses (`$DSH_HOME/wechat-inbox/<date>/<chat>/`), then handed to the model as a path plus a
+`[企业微信图片] …用 read_image 查看` hint, so a text-only model with a vision plugin can actually look at them. The
+scheme is the official one for the long connection (`@wecom/aibot-node-sdk`): `aeskey` is base64 of a 32-byte AES-256
+key, the bytes are AES-256-CBC with the `iv` taken from the key's first 16 bytes, PKCS#7 padded to 32 bytes, and the
+file name comes from `Content-Disposition` because the payload carries none. Note this is *not* the personal-WeChat CDN
+scheme (AES-128-ECB). A download that fails says so in the chat instead of dropping the attachment silently, and
+`/state` counts both outcomes (`counters.mediaDownloaded` / `counters.mediaFailed`).
 
 ## Diagnostics / 排障
 

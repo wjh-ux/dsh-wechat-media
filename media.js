@@ -173,26 +173,35 @@ function inboxDir(dshHome, chatId, when) {
 /**
  * Download one inbound media item into the inbox.
  *
- * The protocol client owns the download (CDN URL plus AES-128-ECB decrypt), so it
- * also picks the file name; this wrapper supplies the destination, enforces the
- * size cap, and describes the result for the model.
+ * The transport owns the download (a CDN url plus its own cipher - AES-128-ECB for
+ * iLink, AES-256-CBC for the WeCom long connection), so it also picks the file name;
+ * this wrapper supplies the destination, enforces the size cap, and describes the
+ * result for the model. Either pass the protocol client as `ilink` (its `downloadMedia`
+ * is used) or a ready `download` function with the same signature, which is how the
+ * WeCom path reuses the inbox layout, the cap and the extension sniffing.
  *
  * @param {object} options
- * @param {object} options.ilink     protocol client
- * @param {string} options.chatId    peer the message came from
- * @param {object} options.item      the raw inbound item (item_list entry)
- * @param {string} options.dshHome   $DSH_HOME
+ * @param {object} [options.ilink]    protocol client (supplies downloadMedia + item kinds)
+ * @param {Function} [options.download] downloader `({ item, destDir, fileName }) => path`
+ * @param {string} [options.kind]     the media kind, when the item is not an iLink item
+ * @param {string} options.chatId     peer the message came from
+ * @param {object} options.item       the raw inbound item (item_list entry, or WeCom media)
+ * @param {string} options.dshHome    $DSH_HOME
  * @param {number} [options.maxBytes] inbound cap, default 100 MiB
- * @param {number} [options.now]     clock, injectable for tests
+ * @param {number} [options.now]      clock, injectable for tests
  * @param {string} [options.fileName] force a file name
  * @param {string} [options.inboxPath] override the inbox root (an absolute directory)
  * @returns {Promise<{ path: string, kind: string, bytes: number, name: string }>}
  */
-export async function saveInboundMedia({ ilink, chatId, item, dshHome, maxBytes = 100 * 1024 * 1024, now, fileName, inboxPath }) {
+export async function saveInboundMedia({ ilink, download, kind, chatId, item, dshHome, maxBytes = 100 * 1024 * 1024, now, fileName, inboxPath }) {
+  const fetchMedia = typeof download === "function" ? download : ilink?.downloadMedia;
+  if (typeof fetchMedia !== "function") {
+    throw new Error("saveInboundMedia: pass a protocol client (ilink) or a download function");
+  }
   const root = typeof inboxPath === "string" && isAbsolute(inboxPath.trim()) ? inboxPath.trim() : inboxRoot(dshHome);
   const dir = dayDir(root, chatId, now);
   await mkdir(dir, { recursive: true });
-  const savedPath = await ilink.downloadMedia({
+  const savedPath = await fetchMedia({
     item,
     destDir: dir,
     ...(fileName ? { fileName } : {}),
@@ -203,8 +212,8 @@ export async function saveInboundMedia({ ilink, chatId, item, dshHome, maxBytes 
     await rm(renamed, { force: true });
     throw new Error(`inbound media is ${info.size} bytes, over the ${maxBytes} byte cap`);
   }
-  const kind = mediaKindOf(ilink, item);
-  return { path: renamed, kind, bytes: info.size, name: baseName(renamed) };
+  const resolvedKind = kind ?? mediaKindOf(ilink, item);
+  return { path: renamed, kind: resolvedKind, bytes: info.size, name: baseName(renamed) };
 }
 
 /**
@@ -230,12 +239,15 @@ export async function prepareOutbound(filePath, { maxBytes = 100 * 1024 * 1024 }
 /**
  * Render an inbound media item as the text handed to the model. A path plus the
  * facts a text-only model can use beats silently dropping the attachment.
+ *
+ * @param {object} media   what `saveInboundMedia` returned
+ * @param {string} [source] which app it came from ("微信" / "企业微信")
  */
-export function describeForModel({ kind, path, name, bytes }) {
+export function describeForModel({ kind, path, name, bytes }, source = "微信") {
   const label = kind === "image" ? "图片" : kind === "video" ? "视频" : kind === "voice" ? "语音" : "文件";
   const size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (kind === "image") {
-    return `[微信图片] ${path}\n（文件名 ${name}，${size}）用 read_image 工具查看这张图片后再回答。`;
+    return `[${source}图片] ${path}\n（文件名 ${name}，${size}）用 read_image 工具查看这张图片后再回答。`;
   }
-  return `[微信${label}] ${path}\n（文件名 ${name}，${size}）需要时直接读取这个路径。`;
+  return `[${source}${label}] ${path}\n（文件名 ${name}，${size}）需要时直接读取这个路径。`;
 }

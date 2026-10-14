@@ -83,6 +83,7 @@ import * as ilink from "./ilink.js";
 import qrcode from "./vendor/qrcode-generator.mjs";
 import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
+import { downloadWecomMedia } from "./wecom-media.js";
 import { openSessionAgent } from "./session.js";
 import * as wecom from "./wecom.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
@@ -795,7 +796,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -814,6 +815,21 @@ export function apply(ctx, config = {}) {
 
   /** Every WeCom call gets a bounded wait so a stuck request cannot hang a turn. */
   const wecomTimeoutMs = 20000;
+  /**
+   * Media downloads get a longer budget than an API call: a file can be tens of
+   * megabytes, and the url stays valid for five minutes.
+   */
+  const wecomMediaTimeoutMs = 60000;
+  /**
+   * The WeCom counterpart of `ilink.downloadMedia`, shaped for `media.saveInboundMedia`
+   * (inbox layout, size cap, extension sniffing): fetch the url, decrypt the payload
+   * with its own `aeskey` (AES-256-CBC, see wecom-media.js), write it into the inbox.
+   */
+  const wecomDownload = (options) => downloadWecomMedia({
+    ...options,
+    maxBytes: maxMediaBytes,
+    timeoutMs: wecomMediaTimeoutMs,
+  });
   const wecomTokenCache = wecom.createTokenCache();
   async function wecomToken(config) {
     const cached = wecomTokenCache.get();
@@ -992,9 +1008,29 @@ export function apply(ctx, config = {}) {
 
     const lines = [];
     if (message.text) lines.push(message.text);
+    // Images, files and videos are downloaded and decrypted into the same inbox the
+    // personal-WeChat side uses, then handed to the model as paths. A failure says so
+    // instead of pretending there was no attachment.
     for (const item of message.media ?? []) {
-      const label = item.type === "image" ? "图片" : item.type === "file" ? "文件" : item.type === "voice" ? "语音" : item.type;
-      lines.push(`[企业微信${label}：暂未下载（媒体支持待补）]`);
+      const label = item.type === "image" ? "图片" : item.type === "file" ? "文件" : item.type === "voice" ? "语音" : item.type === "video" ? "视频" : item.type;
+      try {
+        const saved = await saveInboundMedia({
+          download: wecomDownload,
+          kind: item.type,
+          chatId,
+          item,
+          dshHome,
+          maxBytes: maxMediaBytes,
+          inboxPath: await resolvedInbox(),
+        });
+        counters.mediaDownloaded += 1;
+        lines.push(describeForModel(saved, "企业微信"));
+        ctx.logger?.info?.("[dsh-wechat-media] wecom %s saved to %s (%d bytes)", item.type, saved.path, saved.bytes);
+      } catch (error) {
+        counters.mediaFailed += 1;
+        lines.push(`[企业微信${label}未保存] ${error?.message ?? error}`);
+        ctx.logger?.warn?.("[dsh-wechat-media] wecom %s download failed: %s", item.type, error?.message ?? error);
+      }
     }
     if (lines.length === 0) {
       counters.unusable += 1;
