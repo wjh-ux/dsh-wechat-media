@@ -27,7 +27,7 @@ export function clampWindowDays(value, fallback = DEFAULT_WINDOW_DAYS) {
   return Math.min(MAX_WINDOW_DAYS, Math.max(MIN_WINDOW_DAYS, days));
 }
 
-const zero = () => ({ inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, calls: 0 });
+const zero = () => ({ inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, totalTokens: 0, calls: 0 });
 
 /** A fresh, empty ledger. `now` is injected so tests do not depend on the clock. */
 export function emptyLedger({ windowDays = DEFAULT_WINDOW_DAYS, now = Date.now() } = {}) {
@@ -46,8 +46,14 @@ export function normaliseUsage(usage) {
   const output = Math.max(0, Math.round(Number(usage?.outputTokens) || 0));
   const cached = Math.max(0, Math.round(Number(usage?.cacheReadTokens) || 0) + Math.round(Number(usage?.cacheWriteTokens) || 0));
   const reasoning = Math.max(0, Math.round(Number(usage?.reasoningTokens) || 0));
-  const total = Math.max(0, Math.round(Number(usage?.totalTokens) || 0)) || input + output;
-  return { inputTokens: input, outputTokens: output, cachedTokens: cached, reasoningTokens: reasoning, totalTokens: total };
+  const reported = Math.max(0, Math.round(Number(usage?.totalTokens) || 0));
+  // Cached tokens are **not** part of `inputTokens` for these adapters: the harness computes
+  // `totalTokens = input + output + cacheRead + cacheWrite` itself (dsh-llm-deepseek,
+  // `lib/index.js`). Measured live: one first turn reported input 2191, output 2, cache 6272,
+  // so a total of input+output would understate the spend four times over. An adapter that
+  // reports its own `totalTokens` wins - it knows its provider's convention better than this
+  // module does.
+  return { inputTokens: input, outputTokens: output, cachedTokens: cached, reasoningTokens: reasoning, totalTokens: reported || input + output + cached };
 }
 
 /** Add one call's usage to one account (and one chat inside it). Returns a new ledger. */
@@ -63,14 +69,15 @@ export function accumulate(ledger, { accountId, chatId, usage, now = Date.now() 
   // stored row on top: the numbers must survive, only the shape is repaired.
   const account = { ...zero(), ...(accounts[id] ?? {}) };
   accounts[id] = account;
-  for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]) account[key] += used[key];
+  for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens", "totalTokens"]) account[key] += used[key];
   account.calls += 1;
 
   const chat = String(chatId ?? "");
   if (chat) {
     account.chats = { ...(account.chats ?? {}) };
-    const row = { ...(account.chats[chat] ?? zero()) };
-    for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]) row[key] += used[key];
+    // The `zero()` here also upgrades a per-chat row written before totals were stored.
+    const row = { ...zero(), ...(account.chats[chat] ?? {}) };
+    for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens", "totalTokens"]) row[key] += used[key];
     row.calls += 1;
     row.lastAt = new Date(now).toISOString();
     account.chats[chat] = row;
@@ -152,17 +159,21 @@ export function setWindow(ledger, windowDays, { now = Date.now() } = {}) {
   return { ...previous, windowDays: days, windowStartedAt: new Date(now).toISOString() };
 }
 
-/** Totals for one account row. */
+/** Totals for one account row (or a chat row). */
 export function accountTotals(account) {
   const input = Number(account?.inputTokens) || 0;
   const output = Number(account?.outputTokens) || 0;
+  const cached = Number(account?.cachedTokens) || 0;
+  const stored = Number(account?.totalTokens) || 0;
   return {
     inputTokens: input,
     outputTokens: output,
-    cachedTokens: Number(account?.cachedTokens) || 0,
+    cachedTokens: cached,
     reasoningTokens: Number(account?.reasoningTokens) || 0,
     calls: Number(account?.calls) || 0,
-    totalTokens: input + output,
+    // Prefer what was actually recorded (the adapter's own total when it reported one), and
+    // fall back to the parts - which include the cache, per the harness's definition.
+    totalTokens: stored || input + output + cached,
   };
 }
 
@@ -212,9 +223,10 @@ export function summarize(ledger, { now = Date.now(), locale = "zh" } = {}) {
       outputTokens: sum.outputTokens + account.outputTokens,
       totalTokens: sum.totalTokens + account.totalTokens,
       cachedTokens: sum.cachedTokens + account.cachedTokens,
+      reasoningTokens: sum.reasoningTokens + account.reasoningTokens,
       calls: sum.calls + account.calls,
     }),
-    { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedTokens: 0, calls: 0 },
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedTokens: 0, reasoningTokens: 0, calls: 0 },
   );
 
   return {
@@ -238,11 +250,20 @@ export function summaryLine(summary, locale = "zh") {
       ? `Token 统计（${summary.windowDays} 天窗口）：还没有用量，窗口 ${formatRemaining(summary.msUntilReset, locale)}清零`
       : `Tokens (${summary.windowDays}-day window): nothing yet, resets ${formatRemaining(summary.msUntilReset, "en")}`;
   }
-  const counts = `${formatTokens(total.totalTokens, locale)}（输入 ${formatTokens(total.inputTokens, locale)} / 输出 ${formatTokens(total.outputTokens, locale)}）`;
-  const cached = total.cachedTokens > 0 ? (locale === "zh" ? ` · 缓存 ${formatTokens(total.cachedTokens, locale)}` : ` · cached ${formatTokens(total.cachedTokens, locale)}`) : "";
+  // The parts add up to the total, which is what the harness means by a total: cached tokens
+  // are billed prompt tokens and are *not* inside `inputTokens` for these adapters.
+  const parts = locale === "zh"
+    ? `输入 ${formatTokens(total.inputTokens, locale)} / 输出 ${formatTokens(total.outputTokens, locale)}`
+    : `in ${formatTokens(total.inputTokens, locale)} / out ${formatTokens(total.outputTokens, locale)}`;
+  const cached = total.cachedTokens > 0
+    ? (locale === "zh" ? ` / 缓存命中 ${formatTokens(total.cachedTokens, locale)}` : ` / cache ${formatTokens(total.cachedTokens, locale)}`)
+    : "";
+  const reasoning = total.reasoningTokens > 0
+    ? (locale === "zh" ? ` / 推理 ${formatTokens(total.reasoningTokens, locale)}` : ` / reasoning ${formatTokens(total.reasoningTokens, locale)}`)
+    : "";
   return locale === "zh"
-    ? `Token 统计（${summary.windowDays} 天窗口）：共 ${counts}${cached} · ${total.calls} 次调用 · ${formatRemaining(summary.msUntilReset, locale)}清零`
-    : `Tokens (${summary.windowDays}-day window): ${counts}${cached} · ${total.calls} call(s) · resets ${formatRemaining(summary.msUntilReset, "en")}`;
+    ? `Token 统计（${summary.windowDays} 天窗口）：共 ${formatTokens(total.totalTokens, locale)}（${parts}${cached}${reasoning}）· ${total.calls} 次调用 · ${formatRemaining(summary.msUntilReset, locale)}清零`
+    : `Tokens (${summary.windowDays}-day window): ${formatTokens(total.totalTokens, locale)} (${parts}${cached}${reasoning}) · ${total.calls} call(s) · resets ${formatRemaining(summary.msUntilReset, "en")}`;
 }
 
 /** The `/tokens` answer: totals, per account, and each account's busiest chats. */

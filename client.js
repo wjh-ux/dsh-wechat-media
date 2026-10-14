@@ -159,6 +159,7 @@ window.__ModuleLoader__.load({
           tokenEmpty: "No account has used any tokens in this window.",
           tokenIn: "in",
           tokenOut: "out",
+          tokenCache: "cache",
           calls: "call(s)",
           days: "days",
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
@@ -228,6 +229,7 @@ window.__ModuleLoader__.load({
           tokenEmpty: "这个窗口内还没有任何账号产生用量。",
           tokenIn: "输入",
           tokenOut: "输出",
+          tokenCache: "缓存",
           calls: "次调用",
           days: "天",
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
@@ -606,7 +608,7 @@ window.__ModuleLoader__.load({
                 : h("div", { key: "rows", className: "dswxCard" }, (snapshot.tokens.accounts ?? []).map((row) => h("div", { key: row.accountId, className: "dswxRow" }, [
                     h("span", { key: "n", className: "dswxName" }, row.accountId),
                     h("span", { key: "v", className: "dswxMeta" },
-                      `${formatCount(row.totalTokens)} · ${t("tokenIn", "in")} ${formatCount(row.inputTokens)} / ${t("tokenOut", "out")} ${formatCount(row.outputTokens)} · ${row.calls} ${t("calls", "call(s)")}`),
+                      `${formatCount(row.totalTokens)} · ${t("tokenIn", "in")} ${formatCount(row.inputTokens)} / ${t("tokenOut", "out")} ${formatCount(row.outputTokens)}${row.cachedTokens ? ` / ${t("tokenCache", "cache")} ${formatCount(row.cachedTokens)}` : ""} · ${row.calls} ${t("calls", "call(s)")}`),
                   ]))),
             ]),
             snapshot?.lastApproval

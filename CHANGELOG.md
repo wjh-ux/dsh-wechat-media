@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.1
+
+- **Fixed: token totals understated the real spend by up to four times.** The first live turn reported
+  `inputTokens: 2191`, `outputTokens: 2` and `cacheReadTokens: 6272` - and the plugin summed only input and
+  output, printing `共 2.2k` for a turn that really cost **8.5k**. Cached prompt tokens are *not* part of
+  `inputTokens` for these adapters; the harness computes its own total as
+  `input + output + cacheRead + cacheWrite` (`@deepseek-ai/dsh-llm-deepseek`, `lib/index.js`), which is now
+  what the ledger stores per call and what every view prints. An adapter that reports its own `totalTokens`
+  still wins.
+- The displayed parts now **add up to the total** (`共 8.5k（输入 2.2k / 输出 2 / 缓存命中 6.3k）`), on the card,
+  in `/tokens` and in the `/status` line, and the per-chat rows carry the same total.
+- The regression test uses the measured numbers, so the definition cannot drift again: it asserts both that
+  the total includes the cache and that the parts sum to it.
+- 222 tests across 16 suites.
+
 ## 0.9.0
 
 - **Per-account token accounting.** The bridge now records what each WeChat/WeCom account spends, per **model

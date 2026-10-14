@@ -126,6 +126,11 @@ await test("usage is normalised, and a call with nothing in it is not recorded",
   assert.deepEqual(normaliseUsage({ inputTokens: 10, outputTokens: 4 }), { inputTokens: 10, outputTokens: 4, cachedTokens: 0, reasoningTokens: 0, totalTokens: 14 });
   assert.equal(normaliseUsage({ inputTokens: 10, outputTokens: 4, totalTokens: 99 }).totalTokens, 99, "an adapter's own total wins");
   assert.equal(normaliseUsage({ inputTokens: 10, outputTokens: 4, cacheReadTokens: 100, cacheWriteTokens: 5 }).cachedTokens, 105, "cache reads and writes are one number");
+  // The measured live case: cached prompt tokens are *not* inside inputTokens, so a total of
+  // input+output would claim 2193 for a turn that really cost 8465.
+  const live = normaliseUsage({ inputTokens: 2191, outputTokens: 2, cacheReadTokens: 6272 });
+  assert.equal(live.totalTokens, 8465, "the total must include the cache");
+  assert.equal(live.inputTokens + live.outputTokens + live.cachedTokens, live.totalTokens, "and the parts must add up to it");
   assert.equal(normaliseUsage({ inputTokens: -5, outputTokens: "x" }).totalTokens, 0, "junk becomes zero, never NaN");
 
   const ledger = emptyLedger({ now: T0 });
@@ -203,8 +208,10 @@ await test("the one-line summary is honest when nothing was used yet", () => {
   let ledger = accumulate(emptyLedger({ windowDays: 30, now: T0 }), { accountId: "a", chatId: "c", usage: usage(120_000, 30_000, { cacheReadTokens: 50_000 }), now: T0 });
   const line = summaryLine(summarize(ledger, { now: T0 + DAY }), "zh");
   assert.match(line, /30 天窗口/);
-  assert.match(line, /15\.0 万/, "120k in + 30k out");
-  assert.match(line, /缓存 5\.0 万/);
+  assert.match(line, /共 20\.0 万/, "120k in + 30k out + 50k cache: the parts add up to the total");
+  assert.match(line, /输入 12\.0 万/);
+  assert.match(line, /输出 3\.0 万/);
+  assert.match(line, /缓存命中 5\.0 万/);
   assert.match(line, /1 次调用/);
 });
 
