@@ -280,8 +280,8 @@ normal machine can decode it.
 
 | Tool | What it does |
 |---|---|
-| `wechat_send_voice` | Sends a voice message through personal WeChat (iLink's VOICE media type). |
-| `wecom_send_voice` | Sends a voice message through WeCom (uploaded over the long connection, or the self-built app). |
+| `wechat_send_voice` | Sends audio through personal WeChat - a **voice bubble** only when the file is SILK, otherwise an **audio file** (see the rule below). |
+| `wecom_send_voice` | Sends a **voice bubble** through WeCom (uploaded over the long connection, or the self-built app). |
 
 Either tool takes `text` - which is **spoken on this machine** - or `path` to an audio file that already exists. The
 speech is made locally: the system's own engine (SAPI on Windows) writes a WAV, and `ffmpeg` converts it to a chat
@@ -289,6 +289,26 @@ format (`mp3` by default, `amr` which is what WeCom specifies for voice, or `wav
 **No cloud service, no API key, nothing leaves the machine.** If either piece is missing the tool names it
 (`windows speech (System.Speech)` or `ffmpeg`) rather than failing silently, and a message it delivered counts as the
 answer being delivered (`DELIVERY_TOOLS`), so the relay does not repeat it.
+
+### A voice bubble needs SILK on WeChat - so the rule is explicit
+
+WeChat renders a voice **bubble** only for Tencent's **SILK** codec, and its API additionally requires
+`voice_item.playtime` (the duration in seconds). An mp3/amr/wav item is accepted by the API and then **dropped by the
+client** - measured here (the text arrived, the voice never did), and corroborated by an independent implementation
+with the same symptom ([hermes-agent#9971](https://github.com/NousResearch/hermes-agent/issues/9971)). ffmpeg cannot
+encode SILK at all, and this plugin deliberately bundles no dependencies - so `voiceDeliveryFor()` promises only what
+the platform can actually show:
+
+| Target | Audio | What arrives |
+|---|---|---|
+| WeCom | `amr` (default), mp3, wav | a **voice bubble** (verified by ear) |
+| personal WeChat | `.silk` | a **voice bubble** |
+| personal WeChat | anything else | an **audio file** - it arrives and it plays |
+
+`playtime` is read from the finished file with `ffprobe` (0 when it cannot be read, and the item then falls back to
+its minimum - never an invented number). The tool's reply says which of the two happened, so "sent" never quietly
+means "dropped".
+
 ## Diagnostics / 排障
 
 - The host logs one line per inbound message with the envelope's identifying fields:

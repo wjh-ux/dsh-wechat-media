@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.4
+
+- **Documentation only: the README no longer over-promises a personal-WeChat voice bubble.** It said
+  `wechat_send_voice` "sends a voice message through personal WeChat", while the truth - a bubble needs SILK, which
+  ffmpeg cannot encode and this plugin does not bundle - meant the audio actually arrives as a **file**. The README now
+  carries the rule (oiceDeliveryFor()): a bubble on WeCom (amr, verified by ear) and for a genuine `.silk` file on
+  WeChat; an **audio file** for anything else, which arrives and plays. The same rule was already in v0.18.3's
+  changelog and release notes; this release puts it where a reader actually starts.
+- Also fixed in the same file: a missing blank line before the Diagnostics heading, which had glued two sections
+  together.
+- No code changed. 280 tests across 19 suites still pass, and the three copies (working copy / release / installed)
+  are byte-identical again after the drift this replaces.
+
 ## 0.18.3
 
 - **A personal-WeChat voice message no longer disappears.** Two things were wrong, and both are now settled by
