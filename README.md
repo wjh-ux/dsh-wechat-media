@@ -302,8 +302,12 @@ the platform can actually show:
 | Target | Audio | What arrives |
 |---|---|---|
 | WeCom | `amr` (default), mp3, wav | a **voice bubble** (verified by ear) |
-| personal WeChat | `.silk` | a **voice bubble** |
+| personal WeChat | `silk` (the default here) | a **voice bubble** - SILK is produced by the vendored MIT encoder |
 | personal WeChat | anything else | an **audio file** - it arrives and it plays |
+
+The SILK encoder is [`silk-wasm`](https://www.npmjs.com/package/silk-wasm) 3.7.1 (MIT), vendored under
+`vendor/silk-wasm/` with its licence and the hash it was verified against; see [THIRD-PARTY.md](./THIRD-PARTY.md). It is
+the one piece of third-party code this plugin carries, and it is what turns "an audio file" into a real voice bubble.
 
 `playtime` is read from the finished file with `ffprobe` (0 when it cannot be read, and the item then falls back to
 its minimum - never an invented number). The tool's reply says which of the two happened, so "sent" never quietly

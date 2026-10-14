@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.0
+
+- **Personal WeChat can now send a real voice bubble.** A WeChat voice bubble requires Tencent's **SILK** codec and
+  ffmpeg cannot encode SILK, so until now the audio went as a file. The plugin now carries a SILK encoder:
+  [`silk-wasm`](https://www.npmjs.com/package/silk-wasm) 3.7.1 (**MIT**) is vendored under `vendor/silk-wasm/` -
+  bundle, `silk.wasm`, upstream `LICENSE` and a `README.md` recording the registry hash the download was verified
+  against (`sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==`) - and
+  recorded in `THIRD-PARTY.md`. Vendored rather than declared as a dependency, because this plugin is installed as a
+  directory and `npm install` never runs.
+- `voice.js` gained a `silk` format: SAPI speaks into a WAV, ffmpeg resamples it to 24 kHz mono, and the vendored
+  encoder produces `#!SILK_V3`. `voiceSupport()` reports `silk` separately, and `wechat_send_voice` now
+  **defaults to SILK** when the encoder is present, falling back to mp3 - which the delivery rule sends as a file that
+  still plays - when it is not.
+- The rule itself is unchanged and now usually resolves to a bubble: `voiceDeliveryFor()` still promises a bubble
+  only where the platform can decode it.
+- 284 tests across 19 suites, including a real SILK round trip (header `#!SILK_V3`) and a test that the vendored
+  encoder's provenance is recorded.
+
 ## 0.18.4
 
 - **Documentation only: the README no longer over-promises a personal-WeChat voice bubble.** It said

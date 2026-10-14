@@ -8,7 +8,7 @@
  * Run: node test/voice.test.mjs
  */
 import assert from "node:assert/strict";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 import { VOICE_FORMATS, probeDurationSec, quotePowerShell, synthesizeVoice, voiceDeliveryFor, voiceScript, voiceSupport } from "../voice.js";
 
@@ -145,6 +145,32 @@ await test("the playtime a voice item requires is read, not guessed", async () =
   } finally {
     await voice.cleanup();
   }
+});
+await test("SILK is produced when the vendored encoder is available", async () => {
+  const support = await voiceSupport();
+  if (!support.silk) throw skip("no SILK encoder or no ffmpeg on this machine");
+  const voice = await synthesizeVoice({ text: "这是一条 SILK 测试。", format: "silk" });
+  try {
+    assert.equal(voice.format, "silk");
+    assert.ok(voice.bytes > 1000, `expected real audio, got ${voice.bytes} bytes`);
+    assert.ok(voice.seconds > 0.3 && voice.seconds < 60, `plausible duration, got ${voice.seconds}`);
+    const head = (await readFile(voice.path)).subarray(0, 10).toString("latin1");
+    assert.match(head, /#!SILK_V3/, "the SILK v3 container signature is what WeChat expects");
+  } finally {
+    await voice.cleanup();
+  }
+});
+
+await test("the vendored encoder is recorded, not just dropped in", async () => {
+  // Third-party code in the tree must be traceable: package, version, licence and the hash it was
+  // verified against. The README beside it is what makes that checkable later.
+  const readme = await readFile(new URL("../vendor/silk-wasm/README.md", import.meta.url), "utf8");
+  assert.match(readme, /silk-wasm/);
+  assert.match(readme, /MIT/);
+  assert.match(readme, /3\.7\.1/);
+  assert.match(readme, /sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==/, "the verified hash must be recorded");
+  const licence = await readFile(new URL("../vendor/silk-wasm/LICENSE", import.meta.url), "utf8");
+  assert.match(licence, /MIT|Permission is hereby granted/i);
 });
 console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ""}`);
 process.exit(failed === 0 ? 0 : 1);

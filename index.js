@@ -2493,7 +2493,7 @@ export function apply(ctx, config = {}) {
           text: { type: "string", description: "What to say. Spoken locally, no cloud service involved." },
           path: { type: "string", description: "Absolute path of an existing audio file, used when `text` is not given." },
           to: { type: "string", description: "WeChat wxid or group id; omit to use the most recent conversation." },
-          format: { type: "string", description: "mp3 (default), amr or wav." },
+            format: { type: "string", description: "silk (default when the encoder is present - that is what a WeChat voice bubble needs), mp3, amr or wav." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 300000,
@@ -2504,8 +2504,12 @@ export function apply(ctx, config = {}) {
           const { account, chatId } = await resolvePeer(args.to ? String(args.to).trim() : undefined);
           let audio;
           if (spoken) {
+            // SILK first where it is available, because that is the only thing WeChat renders as a voice
+            // bubble; otherwise mp3, which the delivery rule sends as a file that still plays.
+            const support = await voiceSupport();
+            const wanted = String(args?.format ?? "").trim() || (support.silk ? "silk" : "mp3");
             try {
-              audio = await synthesizeVoice({ text: spoken, format: String(args?.format ?? "").trim() || "mp3" });
+              audio = await synthesizeVoice({ text: spoken, format: wanted });
             } catch (error) {
               return `could not make the voice: ${error?.message ?? error}`;
             }

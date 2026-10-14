@@ -12,7 +12,7 @@
  * exported so that property can be tested directly.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,12 +50,13 @@ export const DEFAULT_FFPROBE = "ffprobe";
 /**
  * The formats a chat accepts, best first.
  *
- * `mp3` is the safe default: both platforms take it and it plays everywhere. `amr` is what WeCom's
- * voice messages are specified in, and it is far smaller, but only some ffmpeg builds can write it -
- * so it is offered rather than assumed. `wav` needs no conversion at all and is the fallback that
- * works whenever SAPI does.
+ * `silk` is what a **WeChat voice bubble** needs and nothing else can replace it; it is produced by the
+ * vendored MIT encoder (see `vendor/silk-wasm` and THIRD-PARTY.md), fed by the 24 kHz mono WAV that
+ * `args` describes. `mp3` is the safe, dependency-free default; `amr` is what WeCom specifies for voice;
+ * `wav` needs no conversion at all and works whenever SAPI does.
  */
 export const VOICE_FORMATS = Object.freeze({
+  silk: { extension: ".silk", args: ["-ar", "24000", "-ac", "1", "-f", "wav"] },
   mp3: { extension: ".mp3", args: ["-ar", "44100", "-ac", "1", "-b:a", "64k"] },
   amr: { extension: ".amr", args: ["-ar", "8000", "-ac", "1", "-ab", "12.2k", "-f", "amr"] },
   wav: { extension: ".wav", args: ["-ar", "16000", "-ac", "1"] },
@@ -63,6 +64,19 @@ export const VOICE_FORMATS = Object.freeze({
 
 /** Every format name this module can produce. */
 export const VOICE_FORMAT_NAMES = Object.freeze(Object.keys(VOICE_FORMATS));
+
+/**
+ * The vendored SILK encoder, loaded only when SILK is actually asked for.
+ *
+ * `vendor/silk-wasm` is the MIT-licensed `silk-wasm` package (see the README beside it and THIRD-PARTY.md).
+ * It is vendored rather than declared as a dependency because this plugin is installed as a directory -
+ * an `npm install` never runs, so a dependency would simply be missing at runtime.
+ */
+async function loadSilk() {
+  const module = await import("./vendor/silk-wasm/index.mjs");
+  if (typeof module.encode !== "function") throw new Error("the vendored SILK encoder exposes no encode()");
+  return module;
+}
 
 /**
  * Quote a string as a PowerShell single-quoted literal.
@@ -133,16 +147,28 @@ export async function voiceSupport({ ffmpeg = DEFAULT_FFMPEG, powershell = DEFAU
   } catch {
     hasSpeech = false;
   }
+  // SILK needs both the vendored encoder and ffmpeg (to resample into it), so it is probed too.
+  let hasSilk = false;
+  if (hasFfmpeg) {
+    try {
+      await loadSilk();
+      hasSilk = true;
+    } catch {
+      hasSilk = false;
+    }
+  }
   const missing = [];
   if (!hasSpeech) missing.push("windows speech (System.Speech)");
   if (!hasFfmpeg) missing.push("ffmpeg");
+  const formats = hasSpeech ? (hasFfmpeg ? VOICE_FORMAT_NAMES.filter((name) => name !== "silk" || hasSilk) : ["wav"]) : [];
   return {
     ok: missing.length === 0,
     missing,
     ffmpeg: hasFfmpeg,
     speech: hasSpeech,
+    silk: hasSilk,
     // Without ffmpeg, SAPI's own WAV is still a usable voice file - so the capability is not all-or-nothing.
-    formats: hasSpeech ? (hasFfmpeg ? [...VOICE_FORMAT_NAMES] : ["wav"]) : [],
+    formats: [...formats],
   };
 }
 
@@ -187,6 +213,29 @@ export async function synthesizeVoice({
     return { path: wavPath, format: "wav", bytes: wavBytes, wavBytes, cleanup: keepWav ? async () => {} : cleanup, dir };
   }
   const target = join(dir, `speech${VOICE_FORMATS[wanted].extension}`);
+  if (wanted === "silk") {
+    // Two steps: ffmpeg resamples SAPI's WAV (the codec wants 24 kHz mono), then the vendored encoder
+    // turns that into SILK - the only format WeChat renders as a voice bubble.
+    const source = join(dir, "speech24.wav");
+    try {
+      await run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", wavPath, ...VOICE_FORMATS.silk.args, source], { timeout: 120_000, windowsHide: true });
+    } catch (error) {
+      await cleanup();
+      throw failure("resampling for SILK", error);
+    }
+    try {
+      const { encode } = await loadSilk();
+      const encoded = await encode(await readFile(source), 0);
+      if (!encoded?.data?.length) throw new Error("the encoder produced nothing");
+      await writeFile(target, encoded.data);
+      const durationMs = Number(encoded.duration) || 0;
+      const bytes = encoded.data.length;
+      return { path: target, format: "silk", bytes, wavBytes, seconds: durationMs ? Math.round(durationMs / 10) / 100 : await probeDurationSec({ path: target }), cleanup: keepWav ? async () => {} : cleanup, dir };
+    } catch (error) {
+      await cleanup();
+      throw failure("SILK encoding", error);
+    }
+  }
   try {
     await run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", wavPath, ...VOICE_FORMATS[wanted].args, target], { timeout: 120_000, windowsHide: true });
   } catch (error) {
