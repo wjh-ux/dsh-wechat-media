@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision, liveTextOf, shouldFlush } from "../index.js";
+import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision, isStaleReplyError, liveTextOf, shouldFlush } from "../index.js";
 import { WechatState } from "../state.js";
 
 const ACCOUNT = "acct-one";
@@ -60,6 +60,18 @@ const group = (text, groupId = "12345678@chatroom", from = "wxid_bob") => ({
 
 console.log("inbound pipeline");
 
+console.log("-- closing a stream --");
+
+await test("a dead reply id is told apart from a busy one", () => {
+  // 846605 (`invalid req_id`) means the passive reply's correlation id is gone - expired, or bound to
+  // a socket session that ended. Retrying cannot help, and the answer has to go out the proactive way.
+  // 6000 (`more than one caller at the same time`) is a transient race, so it is worth another attempt.
+  assert.equal(isStaleReplyError("WeCom bot 846605 - invalid req_id, hint: [1791978941286442184]"), true);
+  assert.equal(isStaleReplyError("invalid req_id"), true);
+  assert.equal(isStaleReplyError("WeCom bot 6000 - data version conflict"), false, "a race is not a dead id");
+  assert.equal(isStaleReplyError("no answer to aibot_respond_msg within 8000 ms"), false, "a timeout is not a dead id");
+  assert.equal(isStaleReplyError(undefined), false);
+});
 console.log("-- live frames --");
 
 await test("every shape of live frame is read, and reasoning never is", () => {

@@ -254,6 +254,22 @@ export function interjectDecision({ enabled = false, turnInFlight = false, agent
 }
 
 /**
+ * Is this the platform saying "that reply id is gone"?
+ *
+ * `846605` means `invalid req_id`: the id a passive reply is correlated by has expired or belonged to
+ * a socket session that has ended. Retrying is pointless - the answer has to go out the **proactive**
+ * way (`aibot_send_msg`), which needs no req_id at all. Distinguishing it from `6000` ("more than one
+ * caller at the same time", a transient race worth retrying) is what keeps the fallback quick instead
+ * of burning three attempts on a dead id.
+ *
+ * @param {unknown} message
+ * @returns {boolean}
+ */
+export function isStaleReplyError(message) {
+  return /846605|invalid req_id/i.test(String(message ?? ""));
+}
+
+/**
  * The live text a stream frame carries, whatever shape it arrives in - or "" for a frame that has
  * none (including every reasoning frame, which must never reach a chat).
  *
@@ -1357,7 +1373,7 @@ export function apply(ctx, config = {}) {
    * Deliberately synchronous: `false` from the socket (reconnecting or closed) has to
    * reach the caller's own error handling instead of becoming an unhandled rejection.
    */
-  async function replyWecomInParts(frame, text, tag = "stream", firstReqId) {
+  async function replyWecomInParts(frame, text, tag = "stream", firstReqId, chatId) {
     const parts = splitForStream(text);
     // The live streamer owns one req_id for the whole answer, and this send is what closes it. A
     // *different* id here is not a cosmetic detail: the platform then sees two messages - the
@@ -1371,14 +1387,15 @@ export function apply(ctx, config = {}) {
       const reqId = index === 0 && head ? head : generateReqId(`${tag}-${index}`);
       const closed = await closeWecomStream(frame, reqId, parts[index]);
       if (!closed) {
-        // The platform would not keep the closing frame. Leaving it there would show an unfinished
-        // fragment, so the answer goes out as its own message instead - and the fallback is counted
-        // rather than hidden.
-        counters.streamFallback += 1;
-        if (wecomBot?.reply(frame, streamBody(generateReqId(`${tag}-fallback-${index}`), parts[index], true)) === false) {
-          throw new Error("the WeCom long connection is not writable right now");
-        }
-      }
+      // The platform would not keep the closing frame, and leaving it at that shows an unfinished
+      // fragment. v0.16.0 "fell back" to the same passive reply path that had just been refused, which
+      // could not work; the answer now goes out as an ordinary **proactive** message, which needs no
+      // reply id at all. Counted, never hidden.
+      counters.streamFallback += 1;
+      const sent = chatId
+        ? wecomBot?.sendMessage(chatId, textBody(parts[index]))
+        : wecomBot?.reply(frame, markdownBody(parts[index]));
+      if (sent === false) throw new Error("the WeCom long connection is not writable right now");      }
     }
   }
 
@@ -1404,7 +1421,12 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         lastStreamFinalizeError = String(error?.message ?? error);
         counters.streamFinalizeFailed += 1;
+        streamFinalizeErrors.push(lastStreamFinalizeError);
+        if (streamFinalizeErrors.length > 6) streamFinalizeErrors.shift();
         ctx.logger?.warn?.("[dsh-wechat-media] closing the stream failed (attempt %d/%d): %s", attempt + 1, attempts, lastStreamFinalizeError);
+        // A dead reply id cannot come back: stop retrying and let the caller send the answer the
+        // proactive way.
+        if (isStaleReplyError(lastStreamFinalizeError)) break;
       }
     }
     return false;
@@ -1424,6 +1446,8 @@ export function apply(ctx, config = {}) {
 
   /** Why the last closing frame was not accepted, for `/state`. */
   let lastStreamFinalizeError = null;
+  /** The last few closing-frame failures, in order: the *sequence* says more than the last one. */
+  const streamFinalizeErrors = [];
 
   /**
    * The live preview stream of each inbound frame, while it is open: `frame -> { reqId, text }`.
@@ -1776,7 +1800,7 @@ export function apply(ctx, config = {}) {
         chatId,
         peerName,
         text: verdict.text,
-        reply: (answer) => replyWecomInParts(frame, answer, "stream-cmd").catch((error) => {
+        reply: (answer) => replyWecomInParts(frame, answer, "stream-cmd", undefined, chatId).catch((error) => {
         ctx.logger?.warn?.("[dsh-wechat-media] could not send the command reply: %s", error?.message ?? error);
       }),
       });
@@ -1853,17 +1877,17 @@ export function apply(ctx, config = {}) {
     // Never leave the chat without an answer: mirror what the personal-WeChat path
     // does when a turn errors or produces no text.
     if (outcome.error) {
-      await replyWecomInParts(frame, `❌ agent 出错：${outcome.error}`, "stream-error");
+      await replyWecomInParts(frame, `❌ agent 出错：${outcome.error}`, "stream-error", undefined, chatId);
       return;
     }
     if (!outcome.text) {
       if (outcome.deliveredByTool) { closeLiveStream(frame); return; }
-      await replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty");
+      await replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty", undefined, chatId);
       return;
     }
     // A WeCom intelligent robot only accepts `stream` for a passive reply, and one stream
     // body holds 20480 bytes; a longer answer becomes several messages.
-    await replyWecomInParts(frame, await chatBody(outcome.text), "stream");
+    await replyWecomInParts(frame, await chatBody(outcome.text), "stream", undefined, chatId);
   }
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
   // harness without it still gets the long connection instead of losing the feature.
@@ -2557,6 +2581,7 @@ export function apply(ctx, config = {}) {
               finalizeFailed: counters.streamFinalizeFailed,
               fallback: counters.streamFallback,
               lastFinalizeError: lastStreamFinalizeError,
+              finalizeErrors: [...streamFinalizeErrors],
               lastFrame: lastStreamFrame,
               unknownEvents: [...new Set(collectors.unknownEvents)],
               delivery: prefs.delivery ?? "whole",

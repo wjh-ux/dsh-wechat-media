@@ -275,7 +275,7 @@ await test("every answer is cleaned for the chat before it is sent", () => {
   // WeChat and WeCom render no markdown, so both transports must pass the answer through chatBody.
   assert.match(host, /import \{ toPlainText \} from "\.\/plain-text\.js";/, "the sanitiser must be imported");
   assert.match(host, /async function chatBody\(text\)/, "one place decides what a chat sees");
-  assert.match(host, /replyWecomInParts\(frame, await chatBody\(outcome\.text\), "stream"\)/, "the WeCom answer is cleaned");
+  assert.match(host, /replyWecomInParts\(frame, await chatBody\(outcome\.text\), "stream"/, "the WeCom answer is cleaned");
   assert.match(host, /chunkText\(await chatBody\(outcome\.text\)\)/, "the personal-WeChat answer is cleaned");
   assert.match(host, /splitForStream\(plain \? toPlainText\(live\.text\) : live\.text\)/, "the live preview is cleaned per flush");
   const state = readFileSync(join(root, "state.js"), "utf8");
@@ -295,6 +295,15 @@ await test("a stream is closed with an acknowledged frame, and never opened with
   assert.match(host, /live\.at === 0\) live\.at = Date\.now\(\)/, "the clock starts at the first delta, not at creation");
   const bot = readFileSync(join(root, "wecom-bot.js"), "utf8");
   assert.match(bot, /replyAndWait\(frame, body, \{ timeoutMs = 8000 \} = \{\}\)/, "the bot must expose the acknowledged reply");
+});
+await test("a refused close falls back to a proactive message, and a dead id is not retried", () => {
+  // v0.16.0 "fell back" to the same passive reply path that had just been refused, which cannot work.
+  // The fallback must be the proactive send (aibot_send_msg), which needs no reply id at all.
+  assert.match(host, /export function isStaleReplyError/, "one place decides what a dead reply id means");
+  assert.match(host, /if \(isStaleReplyError\(lastStreamFinalizeError\)\) break;/, "a dead id is not retried");
+  assert.match(host, /wecomBot\?\.sendMessage\(chatId, textBody\(parts\[index\]\)\)/, "the fallback must be the proactive path");
+  assert.match(host, /streamFinalizeErrors\.push\(lastStreamFinalizeError\)/, "the sequence of failures is recorded");
+  assert.match(host, /finalizeErrors: \[\.\.\.streamFinalizeErrors\]/, "...and exposed in /state");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

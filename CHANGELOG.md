@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.17.0
+
+- **The v0.16.0 fallback could not work, and the trace finally said why.** With the closing frame
+  acknowledged, the live run reported `finalizeFailed: 6, fallback: 2` and `lastFinalizeError: WeCom bot
+  846605 - invalid req_id`: **every** closing frame was refused, for the command reply as well as the answer -
+  so this was never about a slow turn. Two corrections:
+  - **The fallback now uses the proactive path** (`aibot_send_msg` via `sendMessage`), which needs no reply id
+    at all. v0.16.0's "fallback" re-sent the same passive reply that had just been refused, which could not
+    possibly work - a fallback that shares the failure mode of the thing it falls back from is not a fallback.
+  - **A dead reply id is no longer retried.** `846605` (`invalid req_id`) means the correlation id is gone -
+    expired, or bound to a socket session that has ended - so the code stops retrying and goes straight to the
+    proactive send; `6000` (`more than one caller at the same time`) is a transient race and is still retried
+    with the 250/500/750 ms backoff. `isStaleReplyError` is the one place that decides, with its own tests.
+- `/state.stream.finalizeErrors` keeps the last few closing-frame failures **in order**: the sequence says more
+  than the last one, and the sequence is what identified this bug.
+- 267 tests across 18 suites.
+
 ## 0.16.0
 
 - **Fixed the streamed answer that shrank to its opening characters once the chat was reopened.** Live it looked
