@@ -153,6 +153,10 @@ window.__ModuleLoader__.load({
           interject: "Let a new message interject while it is still answering",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
+          formatLabel: "Text",
+          formatPlain: "Cleaned (drop markdown WeChat cannot render)",
+          formatRaw: "Raw (send the model's markdown as-is)",
+          formatHint: "Bold markers, headings, code fences, table rules and math delimiters are stripped; ordinary sentences are untouched.",
           deliveryLabel: "Sending",
           deliveryWhole: "Whole answer, sent once",
           deliveryStream: "Word by word (WeCom only)",
@@ -236,6 +240,10 @@ window.__ModuleLoader__.load({
           interject: "允许插话（正在回复时新消息加入当前回合）",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
+          formatLabel: "文本处理",
+          formatPlain: "清洗（去掉微信不渲染的标记）",
+          formatRaw: "原样（保留 markdown）",
+          formatHint: "加粗星号、标题井号、代码围栏、表格分隔行、公式 $$ 都会被去掉；普通句子逐字不变。",
           deliveryLabel: "发送方式",
           deliveryWhole: "整段（写完一次发）",
           deliveryStream: "逐字（仅企微生效）",
@@ -460,6 +468,19 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** The text mode: cleaned for a chat window, or the model's markdown untouched. */
+        async function setFormat(mode) {
+          setBusy(true);
+          try {
+            await api(`/prefs?format=${encodeURIComponent(String(mode))}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** The delivery mode: send the whole answer, or show it while it is written. */
         async function setDelivery(mode) {
           setBusy(true);
@@ -662,6 +683,23 @@ window.__ModuleLoader__.load({
                 ]),
               ]),
               h("span", { key: "h", className: "dswxMeta" }, t("deliveryHint", "Word by word streams the answer while it is written; personal WeChat always receives whole answers.")),
+            ]),
+            // Text handling: WeChat and WeCom render no markdown, so the default strips it.
+            h("div", { key: "format", className: "dswxRow" }, [
+              h("label", { key: "l", className: "dswxMeta" }, [
+                `${t("formatLabel", "Text")} `,
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
+                  value: String(snapshot?.prefs?.format ?? "plain"),
+                  disabled: busy,
+                  onChange: (event) => setFormat(event.target.value),
+                }, [
+                  h("option", { key: "plain", value: "plain" }, t("formatPlain", "Cleaned (drop markdown WeChat cannot render)")),
+                  h("option", { key: "raw", value: "raw" }, t("formatRaw", "Raw (send the model's markdown as-is)")),
+                ]),
+              ]),
+              h("span", { key: "h", className: "dswxMeta" }, t("formatHint", "Bold markers, headings, code fences, table rules and math delimiters are stripped; ordinary sentences are untouched.")),
             ]),
             // The switch drops group messages without a word (that is the point), so the
             // count is the only place the silence can be seen.

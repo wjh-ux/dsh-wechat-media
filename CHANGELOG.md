@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.14.0
+
+- **New: outbound text cleaning.** WeChat and WeCom render no markdown at all, so `**bold**` arrived with its
+  asterisks, `## heading` with its hashes and `\$\^2\$\$` with the dollars. Everything that leaves for a chat now
+  goes through `toPlainText` (`plain-text.js`): emphasis markers, heading hashes, code fences, block-quote
+  markers, table separator rows, math delimiters, reasoning tags and HTML tags are removed, links become
+  `label（url）`, bullets become a middot, and images are dropped. **An ordinary sentence comes out byte-for-byte
+  identical** - the property with the most tests behind it, because a sanitiser that rewrites prose is worse than
+  none.
+- A switch, not a fait accompli: `/format plain|raw` (alias `/格式`, also accepting 清洗/原样), a **Text** menu on
+  the card, a `format` field on the prefs route (validated), and a line in `/status`. `plain` is the default,
+  `raw` sends the model's markdown untouched. The live preview is cleaned on every flush, so a marker split across
+  two frames cannot leak.
+- **Fixed a flaky test that could have failed a release for no reason.** `test/wecom-media.test.mjs` asserted that a
+  wrong key throws - but with a random key the PKCS#7 check passes roughly **1 time in 256**, so it failed
+  intermittently (it did, once, during this work). The deterministic property is now asserted instead: a wrong key
+  must **never reveal the plaintext**, tried against 24 fresh keys, plus deterministic damage cases (truncated
+  ciphertext, empty input).
+- Suite: 261 tests across 18 suites.
+
 ## 0.13.5
 
 - **Fixed the duplicate the user saw on v0.13.4: the live preview and the final answer used different

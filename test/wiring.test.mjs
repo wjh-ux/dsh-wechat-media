@@ -271,5 +271,16 @@ await test("a live preview and its answer share one req_id", () => {
   assert.match(host, /function closeLiveStream\(frame, text\)/, "a turn without a text reply must still close the stream");
   assert.match(host, /deliveredByTool\) \{ closeLiveStream\(frame\); return; \}/, "including the tool-answered path");
 });
+await test("every answer is cleaned for the chat before it is sent", () => {
+  // WeChat and WeCom render no markdown, so both transports must pass the answer through chatBody.
+  assert.match(host, /import \{ toPlainText \} from "\.\/plain-text\.js";/, "the sanitiser must be imported");
+  assert.match(host, /async function chatBody\(text\)/, "one place decides what a chat sees");
+  assert.match(host, /replyWecomInParts\(frame, await chatBody\(outcome\.text\), "stream"\)/, "the WeCom answer is cleaned");
+  assert.match(host, /chunkText\(await chatBody\(outcome\.text\)\)/, "the personal-WeChat answer is cleaned");
+  assert.match(host, /splitForStream\(plain \? toPlainText\(live\.text\) : live\.text\)/, "the live preview is cleaned per flush");
+  const state = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(state, /format: "plain"/, "the default is cleaned, not raw");
+  assert.match(host, /format must be "plain" or "raw"/, "the prefs route validates the mode");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

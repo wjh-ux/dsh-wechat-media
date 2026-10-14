@@ -84,6 +84,7 @@ import qrcode from "./vendor/qrcode-generator.mjs";
 import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
+import { toPlainText } from "./plain-text.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -1044,6 +1045,36 @@ export function apply(ctx, config = {}) {
     ].join("\n");
   }
 
+  /**
+   * The answer as a chat should see it. WeChat and WeCom render no markdown - `**bold**` arrives with
+   * the asterisks - so the default strips it; `/format raw` sends the model's text untouched.
+   */
+  async function chatBody(text) {
+    const raw = String(text ?? "");
+    if (!raw) return raw;
+    return (await state.loadPrefs()).format === "raw" ? raw : toPlainText(raw);
+  }
+
+  /** The one-line format summary `/status` prints. */
+  async function formatStatusLine() {
+    return `文本处理：${(await state.loadPrefs()).format === "raw" ? "原样（保留 markdown）" : "清洗（去掉微信不渲染的标记）"}`;
+  }
+
+  /** The `/format` listing. */
+  async function formatReport() {
+    const current = (await state.loadPrefs()).format === "raw" ? "raw" : "plain";
+    return [
+      `🧹 文本处理：${current === "raw" ? "原样" : "清洗"}（${current}）`,
+      "",
+      "· 清洗 plain：去掉微信/企微**不渲染**的标记——`**加粗**`、`## 标题`、`` `代码` ``、```围栏```、`> 引用`、",
+      "  表格分隔行、`$$公式$$`、`<think>` 与 HTML 标签；链接变成「文字（网址）」，图片直接去掉。",
+      "  普通句子**逐字不变**（有专门的测试盯着这条）。",
+      "· 原样 raw：把模型写的东西原封不动发出去（旧的默认行为）。",
+      "",
+      "用法：/format plain | raw（也接受 清洗 / 原样）",
+    ].join("\n");
+  }
+
   /** The one-line delivery summary `/status` prints. */
   async function deliveryStatusLine() {
     const mode = (await state.loadPrefs()).delivery === "stream" ? "stream" : "whole";
@@ -1143,6 +1174,7 @@ export function apply(ctx, config = {}) {
         interject: (await state.loadPrefs()).interject === true,
         authLine: await authStatusLine(),
         deliveryLine: await deliveryStatusLine(),
+        formatLine: await formatStatusLine(),
         tokenLine: await tokenStatusLine(),
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
@@ -1198,6 +1230,22 @@ export function apply(ctx, config = {}) {
         return true;
       }
       await reply(await tokenReport());
+      return true;
+    }
+
+    if (command.name === "format") {
+      const wanted = command.args.trim().toLowerCase();
+      const alias = { 清洗: "plain", 纯文本: "plain", 原样: "raw", 原始: "raw", markdown: "raw" };
+      const next = ["plain", "raw"].includes(wanted) ? wanted : alias[command.args.trim()];
+      if (next) {
+        await state.savePrefs({ format: next });
+        await reply(next === "plain"
+          ? "🧹 文本处理 → **清洗**：`**加粗**`、`## 标题`、代码围栏、表格分隔行、`$$公式$$` 这些微信不渲染的标记会被去掉；普通句子逐字不变。"
+          : "🧹 文本处理 → **原样**：模型写什么就发什么（markdown 标记会按字面出现）。");
+        noteRoute("/command", { command: "format", value: next, chatId });
+        return true;
+      }
+      await reply(wanted ? `不认识的选项「${command.args}」。\n\n${await formatReport()}` : await formatReport());
       return true;
     }
 
@@ -1371,7 +1419,7 @@ export function apply(ctx, config = {}) {
    * `finish: true`. Personal WeChat gets none of this - there is no way to edit a sent message -
    * so a WeChat chat keeps receiving whole answers, which `/delivery` says out loud.
    */
-  function wecomStreamer(frame) {
+  function wecomStreamer(frame, plain = true) {
     const live = { text: "", sent: 0, at: Date.now(), reqId: generateReqId("stream-live"), chunks: 0 };
     // One req_id per answer, shared with the final send (see replyWecomInParts).
     liveFrames.set(frame, live);
@@ -1379,7 +1427,9 @@ export function apply(ctx, config = {}) {
       push(delta) {
         live.text += delta;
         if (!shouldFlush({ accumulated: live.text.length, sent: live.sent, now: Date.now(), lastAt: live.at })) return;
-        const parts = splitForStream(live.text);
+        // The preview is the accumulated text, so cleaning it here is consistent with the final
+        // send: a marker split across two frames cannot leak, because each flush is cleaned whole.
+        const parts = splitForStream(plain ? toPlainText(live.text) : live.text);
         // A preview that no longer fits one stream body is skipped rather than truncated: the
         // final send carries the whole answer, and a cut-off preview would look like data loss.
         if (parts.length > 1) {
@@ -1741,8 +1791,10 @@ export function apply(ctx, config = {}) {
     }
     // Delivery mode: "stream" shows the answer as it is written (WeCom only), "whole" waits and
     // sends it once - which is what every earlier release did.
-    const delivery = (await state.loadPrefs()).delivery === "stream" ? "stream" : "whole";
-    const streamer = delivery === "stream" ? wecomStreamer(frame) : undefined;
+    const prefsForTurn = await state.loadPrefs();
+    const delivery = prefsForTurn.delivery === "stream" ? "stream" : "whole";
+    const plain = prefsForTurn.format !== "raw";
+    const streamer = delivery === "stream" ? wecomStreamer(frame, plain) : undefined;
     activeStreamer = streamer;
     const waiting = collectors.wait(sessionId, message2?.id);
     await agent.followup(message2);
@@ -1762,7 +1814,7 @@ export function apply(ctx, config = {}) {
     }
     // A WeCom intelligent robot only accepts `stream` for a passive reply, and one stream
     // body holds 20480 bytes; a longer answer becomes several messages.
-    replyWecomInParts(frame, outcome.text, "stream");
+    replyWecomInParts(frame, await chatBody(outcome.text), "stream");
   }
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
   // harness without it still gets the long connection instead of losing the feature.
@@ -2093,7 +2145,7 @@ export function apply(ctx, config = {}) {
       ctx.logger?.info?.("[dsh-wechat-media] reply for %s already delivered by tool", chatId);
       return;
     }
-    for (const chunk of chunkText(outcome.text)) {
+    for (const chunk of chunkText(await chatBody(outcome.text))) {
       await sendText(account, chatId, chunk).catch((error) => {
         ctx.logger?.warn?.("[dsh-wechat-media] send failed: %s", error?.message ?? error);
       });
@@ -2610,6 +2662,11 @@ export function apply(ctx, config = {}) {
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
+          if (body.format !== undefined && body.format !== "") {
+            const mode = String(body.format).trim().toLowerCase();
+            if (!["plain", "raw"].includes(mode)) return json(res, 400, { error: `format must be "plain" or "raw", got "${body.format}"` });
+            patch.format = mode;
+          }
           if (body.delivery !== undefined && body.delivery !== "") {
             const mode = String(body.delivery).trim().toLowerCase();
             if (!["whole", "stream"].includes(mode)) return json(res, 400, { error: `delivery must be "whole" or "stream", got "${body.delivery}"` });

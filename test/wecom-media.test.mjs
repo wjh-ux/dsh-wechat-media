@@ -82,13 +82,28 @@ await test("it survives the boundary Node's own padding removal would fail on", 
   }
 });
 
-await test("a wrong key or damaged ciphertext fails loudly", () => {
+await test("a wrong key never yields the plaintext, and damage fails loudly", () => {
   const key = keyOf();
-  const other = keyOf();
-  const ciphertext = encryptLikeWeCom(Buffer.from("secret"), key);
-  assert.throws(() => decryptWecomMedia(ciphertext, keyTextOf(other)), /decryption failed|padding/);
+  const secret = Buffer.from("secret");
+  const ciphertext = encryptLikeWeCom(secret, key);
+  // This used to be `assert.throws(wrong key)`, which is flaky: with a random key the PKCS#7 check
+  // passes roughly one time in 256, so the test failed for no real reason. The property that matters
+  // is deterministic - a wrong key must never reveal the plaintext - so several are tried, and each
+  // one either fails loudly or returns something that is not the secret.
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    let revealed;
+    try {
+      revealed = decryptWecomMedia(ciphertext, keyTextOf(keyOf()));
+    } catch (error) {
+      assert.match(String(error?.message ?? error), /decryption failed|padding/i, "a failure must say what failed");
+      continue;
+    }
+    assert.notEqual(revealed.toString("utf8"), secret.toString("utf8"), "a wrong key must never reveal the plaintext");
+  }
+  // Damage is deterministic: a truncated ciphertext is not whole blocks, and empty is empty.
+  assert.throws(() => decryptWecomMedia(ciphertext.subarray(0, ciphertext.length - 3), keyTextOf(key)), /decryption failed|padding|multiple|length/i);
   assert.throws(() => decryptWecomMedia(Buffer.alloc(0), keyTextOf(key)), /nothing to decrypt/);
-});
+});;
 
 console.log("-- the file name --");
 

@@ -246,6 +246,9 @@ export class WechatState {
       // it is written. Only WeCom can do that (its `stream` message is incremental); personal
       // WeChat has no way to edit a message that was already sent.
       delivery: "whole",
+      // What a chat sees: "plain" strips the markdown WeChat and WeCom cannot render, "raw" sends the
+      // model's text untouched. Plain is the default because markdown arrives as literal punctuation.
+      format: "plain",
       // Authorization level for the approval channel this plugin owns: strict / moderate /
       // full / readonly. "moderate" is exactly the behaviour of every earlier release.
       authorization: "moderate",

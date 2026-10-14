@@ -37,6 +37,12 @@ export const COMMANDS = [
     summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
   },
   {
+    name: "format",
+    aliases: ["格式", "清洗"],
+    usage: "/format [plain|raw]",
+    summary: "文本处理：plain 清洗（去掉微信不渲染的 markdown）/ raw 原样；不带参数则显示当前设置",
+  },
+  {
     name: "delivery",
     aliases: ["发送方式"],
     usage: "/delivery [whole|stream]",
@@ -171,6 +177,7 @@ function size(bytes) {
  * @param {number} [input.interjected] how many messages were steered into a running turn
  * @param {string} [input.authLine] the one-line authorization level (see index.js)
  * @param {string} [input.deliveryLine] the one-line delivery mode (see index.js)
+ * @param {string} [input.formatLine] the one-line text format mode (see index.js)
  * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
@@ -188,6 +195,7 @@ export function statusText({
   interject = false,
   authLine,
   deliveryLine,
+  formatLine,
   tokenLine,
   lastInboundAt,
   inbox,
@@ -219,7 +227,8 @@ export function statusText({
   );
   if (authLine) lines.push(authLine);
   if (deliveryLine) lines.push(deliveryLine);
+  if (formatLine) lines.push(formatLine);
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /delivery · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /delivery · /format · /tokens");
   return lines.join("\n");
 }

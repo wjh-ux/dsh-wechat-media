@@ -1,0 +1,138 @@
+/**
+ * Tests for the outbound sanitiser.
+ *
+ * WeChat and WeCom render no markdown, so everything that leaves for a chat goes through
+ * `toPlainText`. The property that matters most is the negative one: an ordinary sentence must come
+ * out byte-for-byte identical. A sanitiser that quietly rewrites prose is worse than none.
+ *
+ * Run: node test/plain-text.test.mjs
+ */
+import assert from "node:assert/strict";
+
+import { toPlainText } from "../plain-text.js";
+
+let passed = 0;
+let failed = 0;
+async function test(name, fn) {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`  ok   ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL ${name}\n       ${error?.message ?? error}`);
+  }
+}
+
+console.log("plain text");
+
+await test("ordinary prose is untouched", () => {
+  const prose = [
+    "平方差公式是 (a+b)(a-b) = a² - b²。",
+    "It works in both directions, and it is simple.",
+    "第 1 步：把 x² − 49 拆成两个因式。",
+    "a * b 是乘法，不是强调。",
+    "文件名叫 my_file_name.txt，别动它。",
+  ];
+  for (const line of prose) assert.equal(toPlainText(line), line, `"${line}" must survive unchanged`);
+});
+
+await test("bold and italic lose their markers, not their words", () => {
+  assert.equal(toPlainText("这是 **重点** 内容"), "这是 重点 内容");
+  assert.equal(toPlainText("__重点__"), "重点");
+  assert.equal(toPlainText("a *soft* word"), "a soft word");
+  assert.equal(toPlainText("**整句都是重点。**"), "整句都是重点。");
+  assert.equal(toPlainText("混合 **粗** 和 *斜* 一起"), "混合 粗 和 斜 一起");
+});
+
+await test("headings, quotes and rules become plain lines", () => {
+  assert.equal(toPlainText("## 三个例子"), "三个例子");
+  assert.equal(toPlainText("# Title\n\ntext"), "Title\n\ntext");
+  assert.equal(toPlainText("> quoted line"), "quoted line");
+  assert.equal(toPlainText("上面\n\n---\n\n下面"), "上面\n\n下面");
+  assert.equal(toPlainText("标题\n====="), "标题");
+});
+
+await test("code keeps its content and loses its fence", () => {
+  assert.equal(toPlainText("`npm run test`"), "npm run test");
+  assert.equal(toPlainText("```js\nconst a = 1;\n```"), "const a = 1;");
+  assert.equal(toPlainText("```\nplain\n```"), "plain");
+  // An unterminated fence (a turn cut off mid-answer) must still not show backticks.
+  assert.equal(toPlainText("```js\nconst a = 1;"), "const a = 1;");
+});
+
+await test("links read like a chat, images disappear", () => {
+  assert.equal(toPlainText("[文档](https://example.com/a)"), "文档（https://example.com/a）");
+  assert.equal(toPlainText("[https://example.com](https://example.com)"), "https://example.com");
+  assert.equal(toPlainText("![图](https://example.com/a.png)"), "");
+  assert.equal(toPlainText("看图 ![图](x.png) 就懂"), "看图  就懂");
+});
+
+await test("math delimiters keep the formula", () => {
+  assert.equal(toPlainText("$$x^2 - y^2$$"), "x^2 - y^2");
+  assert.equal(toPlainText("公式 $a+b$ 成立"), "公式 a+b 成立");
+  assert.equal(toPlainText("\\[x^2\\]"), "x^2");
+  assert.equal(toPlainText("\\(a-b\\)"), "a-b");
+});
+
+await test("reasoning and HTML never reach a chat", () => {
+  assert.equal(toPlainText("<thinking>internal</thinking>答案"), "答案");
+  assert.equal(toPlainText("<think>hmm</think>答案"), "答案");
+  assert.equal(toPlainText("a <b>bold</b> c"), "a bold c");
+  assert.equal(toPlainText("<!-- 注释 -->正文"), "正文");
+});
+
+await test("table rules go, cells stay readable", () => {
+  assert.equal(toPlainText("| a | b |\n| --- | --- |\n| 1 | 2 |"), "a  b\n1  2");
+});
+
+await test("bullet markers become a middot, numbered lists keep their numbers", () => {
+  assert.equal(toPlainText("- 第一点\n- 第二点"), "· 第一点\n· 第二点");
+  assert.equal(toPlainText("* 第一点"), "· 第一点");
+  assert.equal(toPlainText("1. 第一步\n2. 第二步"), "1. 第一步\n2. 第二步");
+});
+
+await test("leftover markers from a half-streamed span are dropped", () => {
+  // The streamer cleans the accumulated text, so this only happens if the turn itself was cut off.
+  assert.equal(toPlainText("重点 **"), "重点"); // trailing space is tidied away
+  assert.equal(toPlainText("a ** b"), "a  b");
+});
+
+await test("blank space is tidied, never invented", () => {
+  assert.equal(toPlainText("\n\n正文\n\n\n\n下一段\n\n"), "正文\n\n下一段");
+  assert.equal(toPlainText("   "), "");
+  assert.equal(toPlainText(""), "");
+  assert.equal(toPlainText(undefined), "");
+  assert.equal(toPlainText(null), "");
+});
+
+await test("a realistic answer comes out as a chat message", () => {
+  const answer = [
+    "## 平方差公式",
+    "",
+    "**核心**是 `(a+b)(a-b) = a² - b²`。",
+    "",
+    "三个例子：",
+    "",
+    "1. (x + 5)(x − 5) = x² − 25",
+    "- 103 × 97 = (100+3)(100−3) = **9991**",
+    "",
+    "| 项目 | 值 |",
+    "| --- | --- |",
+    "| 条件 | 两项相同、符号相反 |",
+    "",
+    "详见 [说明](https://example.com/sq)。",
+  ].join("\n");
+  const plain = toPlainText(answer);
+  for (const marker of ["##", "**", "`", "|---", "| 项目 |", "]("]) {
+    assert.ok(!plain.includes(marker), `"${marker}" must not survive:\n${plain}`);
+  }
+  assert.ok(plain.includes("平方差公式"));
+  assert.ok(plain.includes("(a+b)(a-b) = a² - b²"));
+  assert.ok(plain.includes("· 103 × 97"));
+  assert.ok(plain.includes("说明（https://example.com/sq）"));
+  assert.ok(!/\n{3,}/.test(plain), "no run of blank lines");
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed === 0 ? 0 : 1);
