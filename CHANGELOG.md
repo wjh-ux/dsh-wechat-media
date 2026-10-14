@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.4
+
+- **Found why no streaming preview ever appeared: the live frames were being discarded by shape.** The adapter's
+  bare `{ type: "text-delta", text }` is not the shape that arrives once the harness has batched the stream for the
+  session record - it arrives as `{ type: "chunk", chunk: { type: "text-delta", text } }` and as
+  `{ type: "text-chunks", texts: [...] }` (both visible in the stored `assistant/message.stream`). The collector
+  accepted only the bare shape, and counted frames *after* the filter, so "frames arrive in a shape we do not know"
+  and "no frames arrive at all" left exactly the same evidence (`deltas: 0`). `liveTextOf()` now reads every
+  shape - never a reasoning one, which must not reach a chat - and every frame is counted before any decision to
+  display it.
+- Two facts came out of the same investigation and are worth keeping: the harness **does** stream (the session's own
+  `assistant/message.stream` holds `text-chunks` with per-delta texts, inter-arrival `dt` and a `time0`), and
+  v0.12.0's `setApprovalPolicy(session, "ask")` really took effect (`approval/policy` appears in the session's
+  events).
+- 246 tests across 17 suites.
+
 ## 0.13.3
 
 - **Correction: v0.13.2 was published with red guards, and this release fixes them.** The two-channel diagnostic

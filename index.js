@@ -253,6 +253,35 @@ export function interjectDecision({ enabled = false, turnInFlight = false, agent
 }
 
 /**
+ * The live text a stream frame carries, whatever shape it arrives in - or "" for a frame that has
+ * none (including every reasoning frame, which must never reach a chat).
+ *
+ * The adapter emits bare `{ type: "text-delta", text }` frames, but the same stream is *batched*
+ * for the session record as `{ type: "chunk", chunk: { type: "text-delta", text } }` and
+ * `{ type: "text-chunks", texts: [...] }`. Accepting only the bare shape silently discarded every
+ * frame, which looked exactly like "the harness never sends any": the counter sat *after* the
+ * filter, so the drop was invisible. Both the shapes and the counting order are fixed here.
+ *
+ * @param {unknown} frame
+ * @returns {string} the text to show, or "" to show nothing
+ */
+export function liveTextOf(frame) {
+  const type = String((frame && typeof frame === "object" && frame.type) || "");
+  if (!type || /reason/i.test(type)) return "";
+  const text = frame.text;
+  if (type === "text-delta") return typeof text === "string" ? text : "";
+  if (type === "chunk") {
+    const chunk = frame.chunk;
+    if (chunk && String(chunk.type) === "text-delta" && typeof chunk.text === "string") return chunk.text;
+    return "";
+  }
+  if (type === "text-chunks" && Array.isArray(frame.texts)) {
+    return frame.texts.filter((part) => typeof part === "string").join("");
+  }
+  return "";
+}
+
+/**
  * Should a streaming update be flushed to the chat now?
  *
  * A delta can arrive per token, and a chat window does not want a message per token: flush once
@@ -663,11 +692,11 @@ export class ReplyCollector {
       if (record) record.turn = turn;
     });
     scope.on("agent/assistant-stream", ({ frame } = {}) => {
-      // The adapter's live text, one delta at a time. Where it goes is the caller's business (see
-      // the WeCom streamer); a delta that cannot be shown must never break the reply.
-      if (frame?.type !== "text-delta" || !frame.text) return;
+      // Every frame is reported, in whatever shape it arrives, and with whatever text it carries
+      // (possibly none). Deciding "is this text worth showing" here would hide the difference
+      // between "no frames arrive" and "frames arrive in a shape we do not know".
       try {
-        this.onDelta?.({ text: String(frame.text), type: String(frame.type) });
+        this.onDelta?.({ text: liveTextOf(frame), type: String(frame?.type ?? "?") });
       } catch {
         /* never let a preview take the answer down */
       }
@@ -853,11 +882,11 @@ export function apply(ctx, config = {}) {
      * than guessed at.
      */
     onDelta: ({ text, type }) => {
-      // Counted before anything else: if the preview never appears, /state must be able to say
-      // whether the deltas arrived at all, rather than leaving it a mystery.
+      // Every frame is counted, and its shape recorded, before any decision to show it: a preview
+      // that never appears must be distinguishable from frames that never arrive.
       counters.streamDeltas += 1;
-      lastStreamFrame = { type: type ?? "?", at: new Date().toISOString() };
-      activeStreamer?.push(text);
+      lastStreamFrame = { type: type ?? "?", chars: text ? text.length : 0, at: new Date().toISOString() };
+      if (text) activeStreamer?.push(text);
     },
     onUsage: ({ sessionId, usage }) => {
       const conversation = conversations.get(sessionId);

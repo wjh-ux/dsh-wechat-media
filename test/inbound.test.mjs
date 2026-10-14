@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision, shouldFlush } from "../index.js";
+import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision, liveTextOf, shouldFlush } from "../index.js";
 import { WechatState } from "../state.js";
 
 const ACCOUNT = "acct-one";
@@ -60,6 +60,23 @@ const group = (text, groupId = "12345678@chatroom", from = "wxid_bob") => ({
 
 console.log("inbound pipeline");
 
+console.log("-- live frames --");
+
+await test("every shape of live frame is read, and reasoning never is", () => {
+  // The bare adapter frame.
+  assert.equal(liveTextOf({ type: "text-delta", text: "abc" }), "abc");
+  // The batched shapes the session record uses - missing these made streaming look impossible.
+  assert.equal(liveTextOf({ type: "chunk", chunk: { type: "text-delta", text: "abc" } }), "abc");
+  assert.equal(liveTextOf({ type: "text-chunks", texts: ["a", "b", "c"] }), "abc");
+  // A chat preview must never carry the model's private reasoning.
+  assert.equal(liveTextOf({ type: "reasoning-delta", text: "thinking" }), "");
+  assert.equal(liveTextOf({ type: "reasoning-chunks", texts: ["thinking"] }), "");
+  assert.equal(liveTextOf({ type: "chunk", chunk: { type: "reasoning", text: "thinking" } }), "");
+  // Frames with nothing to show are "" rather than an error.
+  assert.equal(liveTextOf({ type: "chunk", chunk: { type: "usage" } }), "");
+  assert.equal(liveTextOf({ type: "block-start" }), "");
+  assert.equal(liveTextOf(undefined), "");
+});
 console.log("-- delivery --");
 
 await test("a streaming preview flushes on size or on time, never per token", () => {
