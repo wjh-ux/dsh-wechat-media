@@ -383,5 +383,30 @@ await test("a request that is never answered fails instead of hanging", async ()
   await assert.rejects(() => closed.bot.request("ping", {}, { timeoutMs: 25 }), /not writable/);
 });
 
+await test("the closing stream frame is acknowledged, and errcode 6000 is surfaced", async () => {
+  // Intermediate frames are fire-and-forget, but the closing one is what makes the platform keep the
+  // message - so its answer is read. Without this, a rejected close left an unfinished fragment in
+  // the chat and nothing anywhere said why.
+  const bot = new WecomBot({ botId: "bot1", secret: "sec", WebSocketImpl: FakeSocket, heartbeatMs: 100000, logger: { warn() {} } });
+  bot.connect();
+  const socket = FakeSocket.last;
+  socket.emit("open");
+  socket.emit("message", { data: JSON.stringify({ headers: { req_id: socket.sent[0].headers.req_id }, errcode: 0, errmsg: "ok" }) });
+  const inbound = { cmd: CMDS.CALLBACK, headers: { req_id: "in-1" }, body: { msgid: "m1", chatid: "c1", msgtype: "text", text: { content: "hi" } } };
+
+  const waiting = bot.replyAndWait(inbound, streamBody("s1", "the whole answer", true), { timeoutMs: 2000 });
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.cmd, "aibot_respond_msg");
+  assert.equal(sent.headers.req_id, "in-1", "the answer must be matched to the inbound request");
+  assert.equal(sent.body.stream.finish, true, "the closing frame is the one that finishes the stream");
+  assert.equal(sent.body.stream.id, "s1");
+  socket.emit("message", { data: JSON.stringify({ headers: { req_id: "in-1" }, errcode: 0, errmsg: "ok" }) });
+  await waiting; // resolves only because the platform answered
+
+  const refused = bot.replyAndWait(inbound, streamBody("s1", "the whole answer", true), { timeoutMs: 2000 });
+  socket.emit("message", { data: JSON.stringify({ headers: { req_id: "in-1" }, errcode: 6000, errmsg: "data version conflict" }) });
+  await assert.rejects(refused, /6000|data version conflict/, "a refused close must not look like success");
+  bot.close();
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1357,7 +1357,7 @@ export function apply(ctx, config = {}) {
    * Deliberately synchronous: `false` from the socket (reconnecting or closed) has to
    * reach the caller's own error handling instead of becoming an unhandled rejection.
    */
-  function replyWecomInParts(frame, text, tag = "stream", firstReqId) {
+  async function replyWecomInParts(frame, text, tag = "stream", firstReqId) {
     const parts = splitForStream(text);
     // The live streamer owns one req_id for the whole answer, and this send is what closes it. A
     // *different* id here is not a cosmetic detail: the platform then sees two messages - the
@@ -1369,10 +1369,45 @@ export function apply(ctx, config = {}) {
     const head = firstReqId ?? live?.reqId;
     for (let index = 0; index < parts.length; index += 1) {
       const reqId = index === 0 && head ? head : generateReqId(`${tag}-${index}`);
-      if (wecomBot?.reply(frame, streamBody(reqId, parts[index], true)) === false) {
-        throw new Error("the WeCom long connection is not writable right now");
+      const closed = await closeWecomStream(frame, reqId, parts[index]);
+      if (!closed) {
+        // The platform would not keep the closing frame. Leaving it there would show an unfinished
+        // fragment, so the answer goes out as its own message instead - and the fallback is counted
+        // rather than hidden.
+        counters.streamFallback += 1;
+        if (wecomBot?.reply(frame, streamBody(generateReqId(`${tag}-fallback-${index}`), parts[index], true)) === false) {
+          throw new Error("the WeCom long connection is not writable right now");
+        }
       }
     }
+  }
+
+  /**
+   * Close a stream, and do not mistake the platform's silence for success.
+   *
+   * The closing frame is what makes WeCom keep the message; sent immediately after a preview it can be
+   * refused with errcode 6000 ("more than one caller at the same time"). So: let the queue settle,
+   * read the answer, and back off before trying again. Only when every attempt fails does the caller
+   * fall back to a plain message.
+   *
+   * @returns {Promise<boolean>} true when the platform acknowledged the closing frame
+   */
+  async function closeWecomStream(frame, reqId, content, { graceMs = 250, attempts = 3 } = {}) {
+    if (!wecomBot) return false;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, graceMs * (attempt + 1)));
+      try {
+        await wecomBot.replyAndWait(frame, streamBody(reqId, content, true), { timeoutMs: 8000 });
+        counters.streamFinalized += 1;
+        lastStreamFinalizeError = null;
+        return true;
+      } catch (error) {
+        lastStreamFinalizeError = String(error?.message ?? error);
+        counters.streamFinalizeFailed += 1;
+        ctx.logger?.warn?.("[dsh-wechat-media] closing the stream failed (attempt %d/%d): %s", attempt + 1, attempts, lastStreamFinalizeError);
+      }
+    }
+    return false;
   }
 
   /**
@@ -1386,6 +1421,9 @@ export function apply(ctx, config = {}) {
 
   /** The last live frame the adapter sent, for `/state` (see counters.streamDeltas). */
   let lastStreamFrame = null;
+
+  /** Why the last closing frame was not accepted, for `/state`. */
+  let lastStreamFinalizeError = null;
 
   /**
    * The live preview stream of each inbound frame, while it is open: `frame -> { reqId, text }`.
@@ -1404,7 +1442,9 @@ export function apply(ctx, config = {}) {
     if (!live) return false;
     liveFrames.delete(frame);
     try {
-      return wecomBot?.reply(frame, streamBody(live.reqId, text ?? live.text ?? "", true)) !== false;
+      // Same acknowledged close as the normal answer: a refused close here would leave the same
+      // unfinished fragment, just on a path where no text reply follows to cover it.
+      return closeWecomStream(frame, live.reqId, text ?? live.text ?? "");
     } catch (error) {
       ctx.logger?.warn?.("[dsh-wechat-media] could not close the live stream: %s", error?.message ?? error);
       return false;
@@ -1420,12 +1460,19 @@ export function apply(ctx, config = {}) {
    * so a WeChat chat keeps receiving whole answers, which `/delivery` says out loud.
    */
   function wecomStreamer(frame, plain = true) {
-    const live = { text: "", sent: 0, at: Date.now(), reqId: generateReqId("stream-live"), chunks: 0 };
+    // `at: 0` on purpose: the clock starts at the first delta, not when the streamer is created.
+    // Measuring from creation made the *first* flush fire at once (the model takes longer than the
+    // 600 ms window to produce its first token), which opened the bubble with two characters.
+    const live = { text: "", sent: 0, at: 0, reqId: generateReqId("stream-live"), chunks: 0 };
     // One req_id per answer, shared with the final send (see replyWecomInParts).
     liveFrames.set(frame, live);
     return {
       push(delta) {
         live.text += delta;
+        if (live.at === 0) live.at = Date.now();
+        // The first preview waits for a real sentence: a two-character bubble that grows is worse
+        // than no preview at all for the first moment.
+        if (live.sent === 0 && live.text.length < 16) return;
         if (!shouldFlush({ accumulated: live.text.length, sent: live.sent, now: Date.now(), lastAt: live.at })) return;
         // The preview is the accumulated text, so cleaning it here is consistent with the final
         // send: a marker split across two frames cannot leak, because each flush is cleaned whole.
@@ -1509,7 +1556,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1729,7 +1776,9 @@ export function apply(ctx, config = {}) {
         chatId,
         peerName,
         text: verdict.text,
-        reply: (answer) => replyWecomInParts(frame, answer, "stream-cmd"),
+        reply: (answer) => replyWecomInParts(frame, answer, "stream-cmd").catch((error) => {
+        ctx.logger?.warn?.("[dsh-wechat-media] could not send the command reply: %s", error?.message ?? error);
+      }),
       });
       if (handled) return;
     }
@@ -1804,17 +1853,17 @@ export function apply(ctx, config = {}) {
     // Never leave the chat without an answer: mirror what the personal-WeChat path
     // does when a turn errors or produces no text.
     if (outcome.error) {
-      replyWecomInParts(frame, `❌ agent 出错：${outcome.error}`, "stream-error");
+      await replyWecomInParts(frame, `❌ agent 出错：${outcome.error}`, "stream-error");
       return;
     }
     if (!outcome.text) {
       if (outcome.deliveredByTool) { closeLiveStream(frame); return; }
-      replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty");
+      await replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty");
       return;
     }
     // A WeCom intelligent robot only accepts `stream` for a passive reply, and one stream
     // body holds 20480 bytes; a longer answer becomes several messages.
-    replyWecomInParts(frame, await chatBody(outcome.text), "stream");
+    await replyWecomInParts(frame, await chatBody(outcome.text), "stream");
   }
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
   // harness without it still gets the long connection instead of losing the feature.
@@ -2504,6 +2553,10 @@ export function apply(ctx, config = {}) {
               deltas: counters.streamDeltas,
               chunks: counters.streamChunks,
               refused: counters.streamRefused,
+              finalized: counters.streamFinalized,
+              finalizeFailed: counters.streamFinalizeFailed,
+              fallback: counters.streamFallback,
+              lastFinalizeError: lastStreamFinalizeError,
               lastFrame: lastStreamFrame,
               unknownEvents: [...new Set(collectors.unknownEvents)],
               delivery: prefs.delivery ?? "whole",

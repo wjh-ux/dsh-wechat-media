@@ -282,5 +282,19 @@ await test("every answer is cleaned for the chat before it is sent", () => {
   assert.match(state, /format: "plain"/, "the default is cleaned, not raw");
   assert.match(host, /format must be "plain" or "raw"/, "the prefs route validates the mode");
 });
+await test("a stream is closed with an acknowledged frame, and never opened with two characters", () => {
+  // Two defects this guards: the closing frame was fire-and-forget, so a refusal by the platform
+  // (errcode 6000 when it races the last preview) was invisible and the chat kept a fragment; and the
+  // throttle measured from the streamer's creation, so the first preview could be two characters.
+  assert.match(host, /replyAndWait\(frame, streamBody\(reqId, content, true\)/, "the closing frame must be acknowledged");
+  assert.match(host, /async function closeWecomStream\(frame, reqId, content/, "one place closes a stream");
+  assert.match(host, /graceMs = 250, attempts = 3/, "it waits for the queue to settle and retries");
+  assert.match(host, /counters\.streamFallback \+= 1/, "a close that never succeeds falls back to its own message");
+  assert.match(host, /lastStreamFinalizeError = String\(error/, "...and the reason is kept for /state");
+  assert.match(host, /live\.sent === 0 && live\.text\.length < 16/, "the first preview must be a real sentence");
+  assert.match(host, /live\.at === 0\) live\.at = Date\.now\(\)/, "the clock starts at the first delta, not at creation");
+  const bot = readFileSync(join(root, "wecom-bot.js"), "utf8");
+  assert.match(bot, /replyAndWait\(frame, body, \{ timeoutMs = 8000 \} = \{\}\)/, "the bot must expose the acknowledged reply");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.0
+
+- **Fixed the streamed answer that shrank to its opening characters once the chat was reopened.** Live it looked
+  right; in the chat history only the first fragment remained. Two defects, both in how the stream is *closed*:
+  - **The closing frame was fire-and-forget**, so a refusal by the platform was invisible. WeCom refuses the closing
+    frame with `errcode 6000` ("more than one caller at the same time") when it races the last preview, and a stream
+    that never closes is what leaves an early fragment in the history. The closing frame now goes through the bot's
+    acknowledged `replyAndWait` path, is retried with a 250/500/750 ms backoff, and reports itself in
+    `/state.stream` as `finalized` / `finalizeFailed` / `lastFinalizeError`. If every attempt is refused, the
+    answer is delivered as its own message (`counters.streamFallback`) rather than leaving the fragment behind.
+  - **The first preview could be two characters.** The flush throttle measured time from the streamer's *creation* -
+    before the model had produced anything - so the first delta arrived "600 ms late" and opened the bubble at once.
+    The clock now starts at the first delta, and the first preview waits for at least 16 characters.
+- The tool-answered path closes its stream through the same acknowledged helper instead of a bare send.
+- Protocol notes that came out of an independent implementation (`NousResearch/hermes-agent`): one `stream_id`
+  per answer, `content` is the **full accumulated text** rather than a delta, intermediate frames are fire-and-forget
+  because the platform does not answer each one - and the closing frame races the previous one, which is exactly why
+  it has to be acknowledged.
+- 266 tests across 18 suites.
+
 ## 0.15.0
 
 - **Formulas become text a person can read.** `\$\$\frac{a}{b}\$\$` used to arrive as noise with the delimiters removed

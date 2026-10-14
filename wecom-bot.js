@@ -382,6 +382,20 @@ export class WecomBot {
     return this.#send(replyFrame(frame, body));
   }
 
+  /**
+   * Reply and wait for the server's answer.
+   *
+   * Intermediate stream frames are fire-and-forget on purpose: the platform does not answer each one,
+   * and waiting would stall the stream behind network round-trips. The **closing** frame is different
+   * - it is the one that makes the platform keep the message - so its answer is read: errcode 6000
+   * ("more than one caller at the same time") arrives when it races the frame before it, and without
+   * reading this the rejection is invisible (the chat then keeps an unfinished fragment).
+   */
+  replyAndWait(frame, body, { timeoutMs = 8000 } = {}) {
+    const wire = replyFrame(frame, body);
+    return this.request(wire.cmd, wire.body, { timeoutMs, reqId: wire.headers?.req_id });
+  }
+
   /** Push a message into a chat without an inbound frame. */
   sendMessage(chatId, body) {
     return this.#send(sendFrame(chatId, body));
