@@ -242,6 +242,10 @@ export class WechatState {
       // into the running turn instead of queueing its own. Off by default - queueing is what
       // every existing chat already does, and `steer` changes what the model sees mid-turn.
       interject: false,
+      // How a reply leaves the bridge: "whole" sends the finished answer, "stream" shows it while
+      // it is written. Only WeCom can do that (its `stream` message is incremental); personal
+      // WeChat has no way to edit a message that was already sent.
+      delivery: "whole",
       // Authorization level for the approval channel this plugin owns: strict / moderate /
       // full / readonly. "moderate" is exactly the behaviour of every earlier release.
       authorization: "moderate",

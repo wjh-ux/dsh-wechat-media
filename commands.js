@@ -37,6 +37,12 @@ export const COMMANDS = [
     summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
   },
   {
+    name: "delivery",
+    aliases: ["发送方式"],
+    usage: "/delivery [whole|stream]",
+    summary: "发送方式：整段（写完一次发）/ 逐字（企微里边写边出现）；不带参数则显示当前设置",
+  },
+  {
     name: "auth",
     aliases: ["授权"],
     usage: "/auth [严格|适中|完全权限|仅查看]",
@@ -164,6 +170,7 @@ function size(bytes) {
  * @param {boolean} [input.interject] the interjection switch
  * @param {number} [input.interjected] how many messages were steered into a running turn
  * @param {string} [input.authLine] the one-line authorization level (see index.js)
+ * @param {string} [input.deliveryLine] the one-line delivery mode (see index.js)
  * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
@@ -180,6 +187,7 @@ export function statusText({
   friendOnly = false,
   interject = false,
   authLine,
+  deliveryLine,
   tokenLine,
   lastInboundAt,
   inbox,
@@ -210,7 +218,8 @@ export function statusText({
     `插话：${interject ? "开" : "关"}` + (interject ? `（已插话 ${counters.interjected ?? 0} 次）` : "（/interject on 可开）"),
   );
   if (authLine) lines.push(authLine);
+  if (deliveryLine) lines.push(deliveryLine);
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /delivery · /tokens");
   return lines.join("\n");
 }

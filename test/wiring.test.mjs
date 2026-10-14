@@ -218,7 +218,7 @@ await test("token usage is counted from the session events, not invented", () =>
   // The harness reports usage on the `assistant/message` session event; the collector turns
   // it into ledger entries per account and chat.
   const at = host.indexOf("class ReplyCollector");
-  const collector = host.slice(at, at + 2200);
+  const collector = host.slice(at, at + 3400);
   assert.match(collector, /event\.type === "assistant\/message" && event\.data\?\.usage/, "the usage event must be recognised");
   assert.match(collector, /this\.onUsage\?\.\(\{ sessionId, usage/, "...and handed to the callback before the reply bookkeeping");
   const wiring = host.slice(host.indexOf("new ReplyCollector(ctx"));

@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision } from "../index.js";
+import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision, shouldFlush } from "../index.js";
 import { WechatState } from "../state.js";
 
 const ACCOUNT = "acct-one";
@@ -60,6 +60,20 @@ const group = (text, groupId = "12345678@chatroom", from = "wxid_bob") => ({
 
 console.log("inbound pipeline");
 
+console.log("-- delivery --");
+
+await test("a streaming preview flushes on size or on time, never per token", () => {
+  // Per-token flushes would be a message per token; too few and the preview stalls.
+  assert.equal(shouldFlush({ accumulated: 10, sent: 0, now: 1000, lastAt: 999 }), false, "a short delta right after a flush waits");
+  assert.equal(shouldFlush({ accumulated: 24, sent: 0, now: 1000, lastAt: 999 }), true, "enough text flushes at once");
+  assert.equal(shouldFlush({ accumulated: 5, sent: 0, now: 2000, lastAt: 1000 }), true, "a stalled stream still flushes on time");
+  assert.equal(shouldFlush({ accumulated: 5, sent: 5, now: 9000, lastAt: 0 }), false, "nothing new, nothing to send");
+  assert.equal(shouldFlush({ accumulated: 1, sent: 0, now: 0, lastAt: 0 }), false, "the first delta alone is not a chunk");
+});
+
+await test("the delivery preference defaults to whole answers", async (state) => {
+  assert.equal((await state.loadPrefs()).delivery, "whole", "streaming is opt-in");
+});
 console.log("-- interjection --");
 
 await test("a message is only steered into a running turn when it can be", () => {

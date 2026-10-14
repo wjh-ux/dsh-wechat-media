@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.0
+
+- **New: delivery mode - whole answers or word by word.** A menu in the card and `/delivery whole|stream` in the
+  chat (`/发送方式`, also accepting 整段/逐字).
+  - **整段 whole** *(default)*: the finished answer, sent once - what every earlier release did.
+  - **逐字 stream**: the answer **as it is written**. WeCom's `stream` message is incremental, so the plugin sends
+    the accumulating text repeatedly with `finish: false` on one `req_id`, and the existing final send (which
+    carries the whole answer) closes it with `finish: true`. The adapter's live deltas come from the harness's
+    `agent/assistant-stream` frames.
+  - **Personal WeChat is deliberately unchanged**: it has no way to edit a message already sent, so it keeps
+    receiving whole answers, and both the card hint and the command reply say exactly that instead of leaving the
+    option looking broken.
+- Deltas are throttled to roughly 24 characters or 600 ms (`shouldFlush`, a pure function with its own tests)
+  because a message per token would be absurd, and a preview that would no longer fit one stream body is **skipped
+  rather than truncated** - so the invariant "a reply is never cut to its first part" still holds for the answer
+  that matters. `counters.streamChunks` counts the previews, and `/status` shows the mode.
+- 245 tests across 17 suites.
+
 ## 0.12.0
 
 - **完全权限 now really grants: the plugin approves without asking.** It used to hand the request to the GUI, which could still refuse it - not what the level says. This plugin *is* an answerer, so it returns `allowed-once` on the spot. The session is put on the `ask` approval policy when it is opened, because with DSH's own `never` policy a request is rejected before any answerer is consulted and the level could never decide.

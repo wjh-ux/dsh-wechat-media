@@ -215,5 +215,21 @@ test("the authorization menu is on the card, in both languages, wired to the hos
   assert.match(host, /setApprovalPolicy\?\.\(handle\.agent\?\.session, "ask"\)/, "chat-driven sessions must be put on the ask policy, or requests never reach us");
 });
 
+test("the delivery menu is on the card, in both languages, wired to the host", () => {
+  assert.match(code, /t\("deliveryLabel"/, "the menu must be labelled through the translator");
+  assert.match(code, /api\(`\/prefs\?delivery=/, "the menu must save to the host's prefs route");
+  assert.match(code, /snapshot\?\.prefs\?\.delivery/, "the menu must reflect the stored mode");
+  for (const key of ["deliveryLabel", "deliveryWhole", "deliveryStream", "deliveryHint"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /command\.name === "delivery"/, "the /delivery command must be handled");
+  assert.match(host, /wecomStreamer\(frame\)/, "the host must be able to stream an answer");
+  assert.match(host, /streamBody\(live\.reqId, part, false\)/, "...with finish:false, which is what makes it incremental");
+  assert.match(host, /onDelta: \(\{ text \}\) =>/, "the collector must forward the adapter's deltas");
+  assert.match(host, /activeStreamer = undefined;/, "the preview must stop when the turn ends");
+  assert.match(host, /patch\.delivery = mode/, "the prefs route must accept the mode");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

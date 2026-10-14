@@ -253,6 +253,22 @@ export function interjectDecision({ enabled = false, turnInFlight = false, agent
 }
 
 /**
+ * Should a streaming update be flushed to the chat now?
+ *
+ * A delta can arrive per token, and a chat window does not want a message per token: flush once
+ * enough text accumulated, or once enough time passed since the last flush - whichever first.
+ * Pure so the rule can be tested without a socket or a clock.
+ *
+ * @param {{ accumulated?: number, sent?: number, now?: number, lastAt?: number, chars?: number, ms?: number }} [input]
+ * @returns {boolean}
+ */
+export function shouldFlush({ accumulated = 0, sent = 0, now = Date.now(), lastAt = 0, chars = 24, ms = 600 } = {}) {
+  if (accumulated <= sent) return false;
+  if (accumulated - sent >= chars) return true;
+  return now - lastAt >= ms;
+}
+
+/**
  * Decide what an inbound message means, before anything is downloaded or
  * forwarded. Dependencies are injected so the whole decision is testable without
  * a network, a WeChat account or a harness:
@@ -619,9 +635,10 @@ export function assistantText(event) {
  * bridge ends up with replies that never leave the queue.
  */
 export class ReplyCollector {
-  constructor(scope, { onUsage } = {}) {
+  constructor(scope, { onUsage, onDelta } = {}) {
     this.scope = scope;
     this.onUsage = onUsage;
+    this.onDelta = onDelta;
     /**
      * One queue of waiters per session, not one waiter.
      *
@@ -641,6 +658,16 @@ export class ReplyCollector {
       const record = queue.find((candidate) => !candidate.turn && candidate.messageId && message?.id && candidate.messageId === message.id)
         ?? queue.find((candidate) => !candidate.turn);
       if (record) record.turn = turn;
+    });
+    scope.on("agent/assistant-stream", ({ frame } = {}) => {
+      // The adapter's live text, one delta at a time. Where it goes is the caller's business (see
+      // the WeCom streamer); a delta that cannot be shown must never break the reply.
+      if (frame?.type !== "text-delta" || !frame.text) return;
+      try {
+        this.onDelta?.({ text: String(frame.text) });
+      } catch {
+        /* never let a preview take the answer down */
+      }
     });
     scope.on("session/event", (session, event) => {
       const sessionId = String(session?.header?.id ?? session?.id ?? "");
@@ -805,6 +832,9 @@ export function apply(ctx, config = {}) {
      * turn of the same conversation, say) has no account to charge and is skipped rather
      * than guessed at.
      */
+    onDelta: ({ text }) => {
+      activeStreamer?.push(text);
+    },
     onUsage: ({ sessionId, usage }) => {
       const conversation = conversations.get(sessionId);
       if (!conversation?.accountId) return;
@@ -948,6 +978,25 @@ export function apply(ctx, config = {}) {
     return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
   }
 
+  /** The `/delivery` listing. */
+  function deliveryReport(current) {
+    return [
+      `⌨️ 发送方式：${current === "stream" ? "逐字（流式）" : "整段"}（${current}）`,
+      "",
+      "· 整段 whole：答案写完一次发出来（默认，也是旧版本行为）",
+      "· 逐字 stream：企业微信里**边写边出现**（用长连接的 stream 消息增量推送，最后一条带完整答案收尾）",
+      "  —— 个人微信没有编辑已发消息的接口，所以那边无论选哪个都是一次发完整答案。",
+      "",
+      "用法：/delivery whole | stream（也接受 整段 / 逐字）",
+    ].join("\n");
+  }
+
+  /** The one-line delivery summary `/status` prints. */
+  async function deliveryStatusLine() {
+    const mode = (await state.loadPrefs()).delivery === "stream" ? "stream" : "whole";
+    return `发送方式：${mode === "stream" ? "逐字（仅企微生效）" : "整段"}`;
+  }
+
   /** One line per level, shared by `/auth` and its "unknown level" answer. */
   function authExplain(level) {
     switch (approvalPolicyFor(level).level) {
@@ -1040,6 +1089,7 @@ export function apply(ctx, config = {}) {
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
         authLine: await authStatusLine(),
+        deliveryLine: await deliveryStatusLine(),
         tokenLine: await tokenStatusLine(),
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
@@ -1095,6 +1145,25 @@ export function apply(ctx, config = {}) {
         return true;
       }
       await reply(await tokenReport());
+      return true;
+    }
+
+    if (command.name === "delivery") {
+      const wanted = command.args.trim().toLowerCase();
+      const current = (await state.loadPrefs()).delivery === "stream" ? "stream" : "whole";
+      const alias = { 逐字: "stream", 流式: "stream", 一字一字: "stream", 打字: "stream", 整段: "whole", 一次: "whole", 完整: "whole" };
+      const next = ["stream", "whole"].includes(wanted) ? wanted : alias[command.args.trim()];
+      if (next) {
+        await state.savePrefs({ delivery: next });
+        await reply(next === "stream"
+          ? "⌨️ 发送方式 → **逐字（流式）**：企业微信里答案会边写边出现（微信没有编辑已发消息的接口，那边仍是一次发完整答案）。"
+          : "⌨️ 发送方式 → **整段**：答案写完一次发出来。");
+        noteRoute("/command", { command: "delivery", value: next, chatId });
+        return true;
+      }
+      await reply(wanted
+        ? `不认识的发送方式「${command.args}」。\n\n${deliveryReport(current)}`
+        : deliveryReport(current));
       return true;
     }
 
@@ -1196,6 +1265,47 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * The streamer that is currently allowed to show a live preview.
+   *
+   * One at a time on purpose: `agent/assistant-stream` carries no session id, so the plugin binds
+   * the preview to the turn it started. A second chat answering at the same time simply does not
+   * get a live preview (its final answer is unaffected).
+   */
+  let activeStreamer;
+
+  /**
+   * Show a WeCom answer while it is being written.
+   *
+   * The platform's `stream` message is incremental: the same req_id may be sent repeatedly with
+   * `finish: false`, and the final send (which already carries the whole answer) closes it with
+   * `finish: true`. Personal WeChat gets none of this - there is no way to edit a sent message -
+   * so a WeChat chat keeps receiving whole answers, which `/delivery` says out loud.
+   */
+  function wecomStreamer(frame) {
+    const live = { text: "", sent: 0, at: Date.now(), reqId: generateReqId("stream-live"), chunks: 0 };
+    return {
+      push(delta) {
+        live.text += delta;
+        if (!shouldFlush({ accumulated: live.text.length, sent: live.sent, now: Date.now(), lastAt: live.at })) return;
+        const parts = splitForStream(live.text);
+        // A preview that no longer fits one stream body is skipped rather than truncated: the
+        // final send carries the whole answer, and a cut-off preview would look like data loss.
+        if (parts.length > 1) return;
+        const part = parts[0] ?? "";
+        if (!part) return;
+        if (wecomBot?.reply(frame, streamBody(live.reqId, part, false)) === false) return;
+        live.sent = live.text.length;
+        live.at = Date.now();
+        live.chunks += 1;
+        counters.streamChunks += 1;
+      },
+      chunks() {
+        return live.chunks;
+      },
+    };
+  }
+
   /** Send one text message, with a lazily-fetched typing ticket. */
   async function sendText(account, chatId, text, { typing = true } = {}) {
     const accountId = account.accountId ?? account.botId;
@@ -1246,7 +1356,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1526,9 +1636,16 @@ export function apply(ctx, config = {}) {
       await agent.steer(message2);
       return;
     }
+    // Delivery mode: "stream" shows the answer as it is written (WeCom only), "whole" waits and
+    // sends it once - which is what every earlier release did.
+    const delivery = (await state.loadPrefs()).delivery === "stream" ? "stream" : "whole";
+    const streamer = delivery === "stream" ? wecomStreamer(frame) : undefined;
+    activeStreamer = streamer;
     const waiting = collectors.wait(sessionId, message2?.id);
     await agent.followup(message2);
     const outcome = await waiting;
+    activeStreamer = undefined;
+    if (streamer) ctx.logger?.info?.("[dsh-wechat-media] streamed %d chunk(s) to %s before the final answer", streamer.chunks(), chatId);
     // Never leave the chat without an answer: mirror what the personal-WeChat path
     // does when a turn errors or produces no text.
     if (outcome.error) {
@@ -2380,6 +2497,11 @@ export function apply(ctx, config = {}) {
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
+          if (body.delivery !== undefined && body.delivery !== "") {
+            const mode = String(body.delivery).trim().toLowerCase();
+            if (!["whole", "stream"].includes(mode)) return json(res, 400, { error: `delivery must be "whole" or "stream", got "${body.delivery}"` });
+            patch.delivery = mode;
+          }
           if (body.authorization !== undefined && body.authorization !== "") {
             const level = String(body.authorization).trim().toLowerCase();
             if (!AUTHORIZATION_LEVELS.includes(level)) {

@@ -153,6 +153,10 @@ window.__ModuleLoader__.load({
           interject: "Let a new message interject while it is still answering",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
+          deliveryLabel: "Sending",
+          deliveryWhole: "Whole answer, sent once",
+          deliveryStream: "Word by word (WeCom only)",
+          deliveryHint: "Word by word streams the answer while it is written; personal WeChat always receives whole answers.",
           authLabel: "Approvals",
           authStrict: "Strict - always ask, silence means no",
           authModerate: "Moderate - ask, fall back to the GUI",
@@ -232,6 +236,10 @@ window.__ModuleLoader__.load({
           interject: "允许插话（正在回复时新消息加入当前回合）",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
+          deliveryLabel: "发送方式",
+          deliveryWhole: "整段（写完一次发）",
+          deliveryStream: "逐字（仅企微生效）",
+          deliveryHint: "逐字＝边写边出现（企业微信）；个人微信没有编辑已发消息的接口，始终一次发完整答案。",
           authLabel: "授权档位",
           authStrict: "严格 — 每次都问，超时即拒绝",
           authModerate: "适中 — 问，超时转 GUI",
@@ -452,6 +460,19 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** The delivery mode: send the whole answer, or show it while it is written. */
+        async function setDelivery(mode) {
+          setBusy(true);
+          try {
+            await api(`/prefs?delivery=${encodeURIComponent(String(mode))}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** The authorization level: how this plugin handles an approval request. */
         async function setAuthorization(level) {
           setBusy(true);
@@ -622,6 +643,25 @@ window.__ModuleLoader__.load({
                 }),
                 " " + t("interject", "Let a new message interject while it is still answering"),
               ]),
+            ]),
+            // Delivery: whole answers, or shown while they are written. Only WeCom can do the
+            // latter - personal WeChat has no way to edit a message that was already sent - and the
+            // hint says so rather than letting the option look broken.
+            h("div", { key: "delivery", className: "dswxRow" }, [
+              h("label", { key: "l", className: "dswxMeta" }, [
+                `${t("deliveryLabel", "Sending")} `,
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
+                  value: String(snapshot?.prefs?.delivery ?? "whole"),
+                  disabled: busy,
+                  onChange: (event) => setDelivery(event.target.value),
+                }, [
+                  h("option", { key: "whole", value: "whole" }, t("deliveryWhole", "Whole answer, sent once")),
+                  h("option", { key: "stream", value: "stream" }, t("deliveryStream", "Word by word (WeCom only)")),
+                ]),
+              ]),
+              h("span", { key: "h", className: "dswxMeta" }, t("deliveryHint", "Word by word streams the answer while it is written; personal WeChat always receives whole answers.")),
             ]),
             // The switch drops group messages without a word (that is the point), so the
             // count is the only place the silence can be seen.

@@ -195,6 +195,7 @@ through (a blocked chat cannot run commands either).
 | `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
 | `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
 | `/friends` | `/friend`, `/好友` | Turns **only answer friends** (1:1 chats) on or off: `/friends on`, `/friends off`, or no argument to toggle. Group messages are then dropped silently and counted. |
+| `/delivery` | `/发送方式` | How a reply is sent: `whole` (the finished answer, once) or `stream` (**word by word**, WeCom only - personal WeChat cannot edit a sent message). No argument shows the current mode. |
 | `/auth` | `/授权` | Authorization level for approvals: `/auth 严格` / `适中` / `完全权限` / `仅查看` (also `strict`, `moderate`, `full`, `readonly`). No argument lists them. |
 | `/interject` | `/插话` | Turns **interjection** on or off: with it on, a message sent while the agent is still answering joins *that* turn instead of queueing its own. No argument toggles. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
@@ -246,6 +247,21 @@ card's menu, or `/auth`:
 
 **Honest scope.** DSH's own session policy - the file sandbox (`read-only` / `workspace-write` / `danger-full-access`) and whether approvals are asked *at all* - belongs to the DSH client, not to a plugin. A plugin can only decide what it does with a request it is given. So with a session policy that never asks, `仅查看` has nothing to refuse: the card and this table say so plainly, and the real read-only switch lives in DSH's own session settings.
 
+## Delivery / 发送方式
+
+How an answer leaves the bridge - the card's **Sending** menu, or `/delivery`:
+
+| Mode | What the chat sees |
+|---|---|
+| **整段** `whole` *(default)* | The finished answer, sent once. What every earlier release did. |
+| **逐字** `stream` | The answer **as it is written**: WeCom's `stream` message is incremental, so the same `req_id` is sent repeatedly with `finish: false` and the final send (which carries the whole answer) closes it with `finish: true`. |
+
+**Only WeCom gets the preview**, and that is a platform fact rather than a shortcut: personal WeChat has no way to edit a
+message that was already sent, so a WeChat chat keeps receiving whole answers whatever the setting says - `/delivery`
+and the card both say so instead of leaving the option looking broken. Deltas are throttled (roughly 24 characters or
+600 ms, whichever comes first) because one message per token would be absurd; a preview that no longer fits a single
+stream body is skipped rather than truncated, so the final answer is never cut short. `counters.streamChunks` counts
+what was sent, and `/status` shows the current mode.
 ## Diagnostics / 排障
 
 - The host logs one line per inbound message with the envelope's identifying fields:
