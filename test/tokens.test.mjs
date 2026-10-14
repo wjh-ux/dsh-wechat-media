@@ -315,5 +315,29 @@ await test("the ledger survives a restart, and the state layer applies the windo
   }
 });
 
+await test("concurrent accounting cannot lose a call", async () => {
+  // The measured live bug: six calls in the transcript, five in the ledger - one turn's 8651
+  // tokens erased by an interleaved read-modify-write. Fire-and-forget writes are exactly how
+  // that happens, so this fires twenty of them at once and insists on all twenty.
+  const root = await mkdtemp(join(tmpdir(), "wx-tokens-race-"));
+  try {
+    const state = new WechatState({ root });
+    await state.init();
+    const calls = 20;
+    const pair = usage(100, 20, { cacheReadTokens: 1000 });
+    await Promise.all(
+      Array.from({ length: calls }, (_, index) => state.addTokens({ accountId: "acct", chatId: `chat-${index % 4}`, usage: pair, now: T0 + index })),
+    );
+    const ledger = await state.loadTokens(T0 + calls);
+    assert.equal(ledger.accounts.acct.calls, calls, `every one of the ${calls} concurrent writes must survive`);
+    assert.equal(ledger.accounts.acct.inputTokens, 100 * calls);
+    assert.equal(ledger.accounts.acct.cachedTokens, 1000 * calls);
+    const chats = Object.values(ledger.accounts.acct.chats);
+    assert.equal(chats.reduce((sum, row) => sum + row.calls, 0), calls, "and the per-chat rows must add up to the same total");
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

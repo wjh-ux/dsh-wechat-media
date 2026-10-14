@@ -676,6 +676,14 @@ export function apply(ctx, config = {}) {
    * different session id) is otherwise indistinguishable from one that lost its mind.
    */
   let lastSessionIssue = null;
+  /**
+   * The last failure to write the token ledger.
+   *
+   * Accounting is fire-and-forget so a slow disk cannot delay a reply, which means a failure
+   * would otherwise be invisible - which is how one turn went missing from the ledger while the
+   * session transcript still had it. `/state` now reports it beside `inboundError`.
+   */
+  let tokenAccountingError = null;
   const collectors = new ReplyCollector(ctx, {
     /**
      * Attribute one model call to the account and chat it belongs to.
@@ -695,7 +703,13 @@ export function apply(ctx, config = {}) {
       // Fire and forget - a slow disk must not delay the reply - but a failure is logged
       // rather than swallowed, so the ledger can never quietly stop counting.
       state.addTokens({ accountId: conversation.accountId, chatId: conversation.chatId, usage })
-        .catch((error) => ctx.logger?.warn?.("[dsh-wechat-media] token accounting failed: %s", error?.message ?? error));
+        .then(() => {
+          tokenAccountingError = null;
+        })
+        .catch((error) => {
+          tokenAccountingError = { at: new Date().toISOString(), accountId: conversation.accountId, chatId: conversation.chatId, message: String(error?.message ?? error) };
+          ctx.logger?.warn?.("[dsh-wechat-media] token accounting failed: %s", error?.message ?? error);
+        });
     },
   });
   /** Injected factories resolved lazily through the loader. */
@@ -1994,6 +2008,8 @@ export function apply(ctx, config = {}) {
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
             prefs,
             tokens: summarize(await state.loadTokens()),
+            // A counter that stopped counting must be visible, not inferred from the numbers.
+            tokenAccountingError,
             peers: await state.loadPeers(),
             counters: { ...counters },
             approvals: approvals.list(),

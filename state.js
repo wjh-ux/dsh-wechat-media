@@ -253,6 +253,28 @@ export class WechatState {
   // ── token ledger ──────────────────────────────────────────────────────────
 
   /**
+   * Ledger writes are **serialised**.
+   *
+   * They are read-modify-write cycles, and the collector calls `addTokens` fire-and-forget: a
+   * turn that reports several model calls (or two turns arriving close together) would let two
+   * cycles interleave, and the later write would erase the earlier one's addition. Measured
+   * live: the transcript had six calls while the ledger kept five - one turn's 8651 tokens
+   * (267 in / 64 out / 8320 cached) simply vanished. Chaining the three writers removes that
+   * whole class rather than hoping the timing works out.
+   */
+  #tokenChain = Promise.resolve();
+
+  #serialized(work) {
+    const run = this.#tokenChain.then(work, work);
+    // The chain must survive a rejection, or one failed write would stall every later one.
+    this.#tokenChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
    * The per-account token counters, with the window's expiry already applied.
    *
    * The reset is lazy on purpose: a host that was off for a week zeroes its counters on the
@@ -266,26 +288,32 @@ export class WechatState {
 
   /** Add one model call's usage. Returns the ledger that was written. */
   async addTokens({ accountId, chatId, usage, now = Date.now() } = {}) {
-    const updated = accumulate(await this.loadTokens(now), { accountId, chatId, usage, now });
-    await this.init();
-    await writeJson(join(this.root, "tokens.json"), updated);
-    return updated;
+    return this.#serialized(async () => {
+      const updated = accumulate(await this.loadTokens(now), { accountId, chatId, usage, now });
+      await this.init();
+      await writeJson(join(this.root, "tokens.json"), updated);
+      return updated;
+    });
   }
 
   /** Zero the counters now (manual reset), keeping the window length and the account list. */
   async resetTokens({ now = Date.now(), windowDays } = {}) {
-    const updated = reset(await this.loadTokens(now), { now, windowDays });
-    await this.init();
-    await writeJson(join(this.root, "tokens.json"), updated);
-    return updated;
+    return this.#serialized(async () => {
+      const updated = reset(await this.loadTokens(now), { now, windowDays });
+      await this.init();
+      await writeJson(join(this.root, "tokens.json"), updated);
+      return updated;
+    });
   }
 
   /** Change the window length (1..30 days) and re-anchor it so the change is immediate. */
   async setTokenWindow(windowDays, { now = Date.now() } = {}) {
-    const updated = setWindow(await this.loadTokens(now), windowDays, { now });
-    await this.init();
-    await writeJson(join(this.root, "tokens.json"), updated);
-    return updated;
+    return this.#serialized(async () => {
+      const updated = setWindow(await this.loadTokens(now), windowDays, { now });
+      await this.init();
+      await writeJson(join(this.root, "tokens.json"), updated);
+      return updated;
+    });
   }
 
   // ── WeCom (企业微信) ───────────────────────────────────────────────────────

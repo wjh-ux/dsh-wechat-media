@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.3
+
+- **Fixed a lost update: token-ledger writes are now serialised.** Reconciling the ledger against the session
+  transcript found six `assistant/message` calls on disk and only five in the ledger - one turn's 8651 tokens
+  (267 in / 64 out / 8320 cached) had silently vanished. `addTokens` is called fire-and-forget from the
+  collector and every call is a read-modify-write of `tokens.json`, so two overlapping cycles lose the earlier
+  one; a turn that reports several model calls, or two turns close together, is all it takes. All three ledger
+  writers now run through one chain, and a test fires **twenty concurrent** accounting writes and insists all
+  twenty survive - counters, cache and per-chat rows alike.
+- **A failed accounting write can no longer hide**: `/state.tokenAccountingError` records it (with the account
+  and chat it belonged to), beside `inboundError`, and clears on the next successful write. Accounting stays
+  fire-and-forget so a slow disk cannot delay a reply - but "counted nothing" and "failed to count" are now
+  distinguishable.
+- The acceptance test for this feature is the reconciliation itself: the sum of the `usage` in the session
+  transcript must equal the ledger. That is what caught both this and the two arithmetic bugs before it.
+- 224 tests across 16 suites.
+
 ## 0.9.2
 
 - **Fixed the second-order version of the same mistake: the total is now derived from the parts, never stored
