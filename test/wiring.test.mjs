@@ -312,7 +312,9 @@ await test("every personal-WeChat send carries the conversation's context token"
   assert.match(host, /async function contextTokenFor\(account, chatId\)/, "one place reads the stored token");
   assert.match(host, /state\.loadContextTokens\(accountId\)/, "...from the state that inbound messages write");
   assert.match(host, /ilink\.sendText\(\{ baseUrl: account\.baseUrl, token: account\.token, toWxid: chatId, text, contextToken: await contextTokenFor/, "text sends must carry it");
-  assert.match(host, /ilink\.sendVoice\(\{[^}]*contextToken: await contextTokenFor\(account, chatId\)/, "voice sends must carry it");
+  assert.match(host, /const contextToken = await contextTokenFor\(account, chatId\);/, "the voice path reads the token once");
+  assert.match(host, /ilink\.sendVoice\(\{[^}]*contextToken \}\)/, "voice bubble sends must carry it");
+  assert.match(host, /ilink\.sendFile\(\{[^}]*contextToken \}\)/, "and so must the audio-file path");
   assert.match(host, /const common = \{[^}]*contextToken: await contextTokenFor\(account, chatId\)/, "media sends must carry it");
 });
 console.log(`\n${passed} passed, ${failed} failed`);

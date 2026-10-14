@@ -44,6 +44,8 @@ export function spokenText({ platform = "wechat", text = "" } = {}) {
 /** The two external pieces, named as commands rather than hard-coded paths. */
 export const DEFAULT_POWERSHELL = "powershell.exe";
 export const DEFAULT_FFMPEG = "ffmpeg";
+/** Reads the duration that a voice item must report. */
+export const DEFAULT_FFPROBE = "ffprobe";
 
 /**
  * The formats a chat accepts, best first.
@@ -159,6 +161,7 @@ export async function synthesizeVoice({
   voice = "",
   rate = 0,
   ffmpeg = DEFAULT_FFMPEG,
+  ffprobe = "",
   powershell = DEFAULT_POWERSHELL,
   keepWav = false,
 } = {}) {
@@ -197,7 +200,50 @@ export async function synthesizeVoice({
     await cleanup();
     throw new Error(`converting to ${wanted} produced an empty file`);
   }
-  return { path: target, format: wanted, bytes, wavBytes, cleanup: keepWav ? async () => {} : cleanup, dir };
+  // The duration is a required field of a voice item, so it is read from the file that was just written. When
+  // ffprobe cannot be found the caller gets 0 and the item falls back to its minimum - never a made-up number.
+  const probeBin = ffprobe || (ffmpeg === DEFAULT_FFMPEG ? DEFAULT_FFPROBE : ffmpeg.replace(/ffmpeg([^/\\]*)$/, "ffprobe$1"));
+  const seconds = await probeDurationSec({ path: target, ffprobe: probeBin });
+  return { path: target, format: wanted, bytes, wavBytes, seconds, cleanup: keepWav ? async () => {} : cleanup, dir };
+}
+
+/**
+ * How long a piece of audio plays, in seconds.
+ *
+ * iLink's voice item carries `playtime` (seconds) as a required field, and the platform accepts an item
+ * without it and then drops the message - so this is not cosmetic. `ffprobe` reads it; when ffprobe is
+ * missing the caller gets 0 and decides what to do rather than being handed a guess.
+ *
+ * @param {{ path?: string, ffprobe?: string }} [input]
+ * @returns {Promise<number>} seconds, rounded to two decimals, or 0 when it cannot be read
+ */
+export async function probeDurationSec({ path = "", ffprobe = DEFAULT_FFPROBE } = {}) {
+  if (!path) return 0;
+  try {
+    const { stdout } = await run(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path], { timeout: 30_000, windowsHide: true });
+    const seconds = Number.parseFloat(String(stdout).trim());
+    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 100) / 100 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * How a piece of audio should be delivered to a chat.
+ *
+ * **WeChat only renders a voice bubble for SILK**, and the iLink API additionally requires
+ * `voice_item.playtime`; anything else sent as a voice item is accepted and then silently dropped
+ * (measured: text arrived, the voice never did). WeCom is different - it takes AMR and really does show a
+ * bubble. So the rule is explicit rather than hopeful: a bubble only where the platform can decode it,
+ * and an ordinary audio file everywhere else, which does arrive and does play.
+ *
+ * @param {{ platform?: "wechat" | "wecom", extension?: string }} [input]
+ * @returns {"bubble" | "file"}
+ */
+export function voiceDeliveryFor({ platform = "wechat", extension = "" } = {}) {
+  const ext = String(extension ?? "").toLowerCase().replace(/^\./, "");
+  if (platform === "wecom") return "bubble";
+  return ext === "silk" ? "bubble" : "file";
 }
 
 /** Read a produced voice file back (used by tests and by a caller that wants the bytes). */

@@ -773,9 +773,12 @@ export async function sendVideo({ baseUrl, token, toWxid, filePath, text, contex
  * does its own transcoding. `.mp3`, `.amr` and `.wav` are what the plugin produces (see voice.js); the
  * upstream protocol's own format is SILK, which nothing on this machine can encode.
  */
-export async function sendVoice({ baseUrl, token, toWxid, filePath, text, contextToken, runId, cdnBaseUrl, timeoutMs, signal } = {}) {
+export async function sendVoice({ baseUrl, token, toWxid, filePath, text, contextToken, runId, cdnBaseUrl, timeoutMs, signal, playtime } = {}) {
   const uploaded = await uploadMedia({ baseUrl, token, toWxid, filePath, mediaType: uploadMediaTypes.VOICE, cdnBaseUrl, timeoutMs, signal });
-  const item = { type: messageItemTypes.VOICE, voice_item: { media: cdnMedia(uploaded) } };
+  // `playtime` (whole seconds) is required: an item without it is accepted and then dropped, which is how
+  // a voice message can report success and never arrive. The platform also expects SILK - see voice.js.
+  const seconds = Math.max(1, Math.round(Number(playtime) || 0));
+  const item = { type: messageItemTypes.VOICE, voice_item: { media: cdnMedia(uploaded), playtime: seconds } };
   return sendUploadedMedia({ baseUrl, token, toWxid, item, caption: text, contextToken, runId, timeoutMs, signal, uploaded });
 }
 

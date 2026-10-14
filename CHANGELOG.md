@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.3
+
+- **A personal-WeChat voice message no longer disappears.** Two things were wrong, and both are now settled by
+  evidence rather than guesswork:
+  - the voice item never carried `playtime` (the duration in seconds that iLink requires); it is now read from the
+    finished file with `ffprobe` and sent as `voice_item.playtime`;
+  - **WeChat only renders a voice *bubble* for SILK**, and ffmpeg cannot encode SILK at all - so an mp3/amr/wav item
+    is accepted by the API and then dropped by the client. That is the published finding of an independent
+    implementation with the identical symptom (`NousResearch/hermes-agent` issue #9971, which also names
+    `playtime` and SILK as the requirements).
+- **The rule is now explicit instead of hopeful** (`voiceDeliveryFor()`): a bubble is only attempted where the
+  platform can decode it - WeCom (AMR, verified by ear) and a genuine `.silk` file on WeChat. Anything else on
+  personal WeChat is delivered as an **audio file**, which arrives and plays, and the tool says so in its reply
+  rather than reporting a success that never arrived.
+- 280 tests across 19 suites.
+
 ## 0.18.2
 
 - **Fixed: every personal-WeChat send was missing the conversation's `context_token`, so the platform accepted

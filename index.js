@@ -85,7 +85,7 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
-import { synthesizeVoice, voiceSupport } from "./voice.js";
+import { synthesizeVoice, voiceDeliveryFor, voiceSupport } from "./voice.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -2510,12 +2510,23 @@ export function apply(ctx, config = {}) {
               return `could not make the voice: ${error?.message ?? error}`;
             }
           }
+          const contextToken = await contextTokenFor(account, chatId);
+          const extension = String(audio?.format ?? given).split(".").pop() ?? "";
+          const delivery = voiceDeliveryFor({ platform: "wechat", extension });
           try {
-            await ilink.sendVoice({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given, contextToken: await contextTokenFor(account, chatId) });
-            ctx.logger?.info?.("[dsh-wechat-media] voice sent to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
-            return audio
-              ? `✅ 已发送语音到 ${chatId}（${audio.format}，${audio.bytes} 字节）`
-              : `✅ 已发送语音文件到 ${chatId}`;
+            if (delivery === "bubble") {
+              await ilink.sendVoice({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given, playtime: audio?.seconds, contextToken });
+              ctx.logger?.info?.("[dsh-wechat-media] voice bubble sent to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
+              return audio
+                ? `✅ 已发送语音气泡到 ${chatId}（${audio.format}，${audio.bytes} 字节，${audio.seconds ?? "?"} 秒）`
+                : `✅ 已发送语音气泡到 ${chatId}`;
+            }
+            // WeChat only renders a voice bubble for SILK. Anything else sent as a voice item is accepted and
+            // then dropped (measured: the text arrived, the voice never did), so it goes as an audio file -
+            // which does arrive, does play, and is what this reply says.
+            await ilink.sendFile({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given, contextToken });
+            ctx.logger?.info?.("[dsh-wechat-media] audio sent as a file to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
+            return `✅ 已作为**音频文件**发送到 ${chatId}（${audio ? `${audio.format}，${audio.bytes} 字节` : given}）。个人微信的语音气泡只认 SILK 编码，本机没有 SILK 编码器，所以以文件形式送达（可播放）；语音气泡在企微那边是可用的。`;
           } catch (error) {
             ctx.logger?.warn?.("[dsh-wechat-media] voice send failed: %s", error?.message ?? error);
             return `could not send the voice: ${error?.message ?? error}`;

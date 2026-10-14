@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
 
-import { VOICE_FORMATS, quotePowerShell, synthesizeVoice, voiceScript, voiceSupport } from "../voice.js";
+import { VOICE_FORMATS, probeDurationSec, quotePowerShell, synthesizeVoice, voiceDeliveryFor, voiceScript, voiceSupport } from "../voice.js";
 
 let passed = 0;
 let failed = 0;
@@ -120,5 +120,31 @@ await test("a spoken message is labelled for the model, and a missing transcript
   assert.match(spokenText({}), /微信语音/, "the default platform is WeChat");
 });
 
+await test("a voice bubble is only promised where the platform can decode it", () => {
+  // WeChat renders a bubble only for SILK, and the iLink API needs playtime besides; anything else sent as a
+  // voice item is accepted and then dropped (measured: text arrived, the voice did not). WeCom takes AMR.
+  assert.equal(voiceDeliveryFor({ platform: "wecom", extension: "amr" }), "bubble");
+  assert.equal(voiceDeliveryFor({ platform: "wecom", extension: "mp3" }), "bubble");
+  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "silk" }), "bubble");
+  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "mp3" }), "file");
+  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: ".amr" }), "file");
+  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "wav" }), "file");
+  assert.equal(voiceDeliveryFor({}), "file", "WeChat is the default, and mp3 is not SILK");
+});
+
+await test("the playtime a voice item requires is read, not guessed", async () => {
+  const support = await voiceSupport();
+  if (!support.speech) throw skip("no System.Speech on this machine");
+  if (!support.ffmpeg) throw skip("ffprobe ships with ffmpeg, which is missing");
+  const voice = await synthesizeVoice({ text: "时长测试，读出一句话需要几秒钟。", format: "mp3" });
+  try {
+    assert.ok(voice.seconds > 0.5, `a spoken sentence lasts longer than half a second, got ${voice.seconds}`);
+    assert.ok(voice.seconds < 60, `and well under a minute, got ${voice.seconds}`);
+    assert.equal(await probeDurationSec({ path: voice.path }), voice.seconds, "the probe is what the item reports");
+    assert.equal(await probeDurationSec({ path: "no-such-file.mp3" }), 0, "an unreadable file is 0, not a guess");
+  } finally {
+    await voice.cleanup();
+  }
+});
 console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ""}`);
 process.exit(failed === 0 ? 0 : 1);
