@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2
+
+- **Streaming diagnostics now watch both channels.** The adapter provably emits `type: "text-delta"` with a `text` field (`dsh-llm-deepseek/lib/index.js`), so the filter is not the problem; either the frames never reach a plugin listener, or live text travels as a **session event** that this collector was silently ignoring. The collector now:
+  - accepts a delta-shaped session event (never a reasoning one) and feeds it to the streamer, so streaming starts working if that is where the text is;
+  - records every event type it does not handle in a bounded ring, exposed as `/state.stream.unknownEvents` - so a live-text event under an unknown name becomes visible instead of vanishing.
+- `/state.stream` also reports the current `delivery` mode next to `deltas`/`chunks`/`refused`/`lastFrame`.
+- 245 tests across 17 suites.
+
 ## 0.13.1
 
 - **The streaming preview still does not appear, and this release makes that diagnosable instead of mysterious.**

@@ -639,6 +639,9 @@ export class ReplyCollector {
     this.scope = scope;
     this.onUsage = onUsage;
     this.onDelta = onDelta;
+    // Event types this collector does not handle. A bounded ring, reported by /state: if live text
+    // arrives under a name nobody told us about, it shows up here instead of vanishing.
+    this.unknownEvents = [];
     /**
      * One queue of waiters per session, not one waiter.
      *
@@ -680,6 +683,23 @@ export class ReplyCollector {
         } catch {
           // Counting must never be the reason a reply is lost.
         }
+      }
+      // Live text may also travel as a session event (non-durable, so it never reaches the
+      // transcript). Accept a delta-shaped one, never a reasoning one, and record what came.
+      if (/delta/i.test(String(event.type)) && !/reason|think/i.test(String(event.type))) {
+        const chunk = event.data?.text ?? event.data?.delta ?? event.data?.content;
+        if (typeof chunk === "string" && chunk) {
+          this.unknownEvents.push(`${event.type}:text`);
+          if (this.unknownEvents.length > 12) this.unknownEvents.shift();
+          try {
+            this.onDelta?.({ text: chunk, type: `${event.type} (session)` });
+          } catch {
+            /* a preview must never break the reply */
+          }
+        }
+      } else if (!["tool/call", "assistant/message", "turn/end", "turn/start", "step/start", "step/end", "user/message", "request/header"].includes(String(event.type))) {
+        this.unknownEvents.push(String(event.type));
+        if (this.unknownEvents.length > 12) this.unknownEvents.shift();
       }
       const queue = this.pending.get(sessionId);
       if (!queue?.length) return;
@@ -2361,7 +2381,14 @@ export function apply(ctx, config = {}) {
             tokens: summarize(await state.loadTokens()),
             // Why a live preview did or did not appear: deltas seen, previews sent, previews the
             // streamer refused, and the shape of the last frame.
-            stream: { deltas: counters.streamDeltas, chunks: counters.streamChunks, refused: counters.streamRefused, lastFrame: lastStreamFrame },
+            stream: {
+              deltas: counters.streamDeltas,
+              chunks: counters.streamChunks,
+              refused: counters.streamRefused,
+              lastFrame: lastStreamFrame,
+              unknownEvents: [...new Set(collectors.unknownEvents)],
+              delivery: prefs.delivery ?? "whole",
+            },
             // A counter that stopped counting must be visible, not inferred from the numbers.
             tokenAccountingError,
             peers: await state.loadPeers(),
