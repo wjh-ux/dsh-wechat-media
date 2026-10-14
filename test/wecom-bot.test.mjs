@@ -101,7 +101,7 @@ await test("every media-bearing shape is collected, not just the top-level one",
 
   // A voice message is a transcription, with no url to download.
   const voice = describeBotMessage({ cmd: CMDS.CALLBACK, headers: {}, body: { msgid: "m5", aibotid: "b1", msgtype: "voice", chattype: "single", from: { userid: "u1" }, voice: { content: "语音转出来的字" } } });
-  assert.equal(voice.text, "语音转出来的字");
+  assert.match(voice.text, /\[企业微信语音（平台转写）\] 语音转出来的字/, "a transcript is labelled as speech");
   assert.deepEqual(voice.media, []);
 });
 

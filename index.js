@@ -85,6 +85,7 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
+import { synthesizeVoice, voiceSupport } from "./voice.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -115,7 +116,7 @@ const DEDUP_LIMIT = 500;
  * runs during a turn, the automatic reply relay must stand down, or the model
  * would answer twice (once through the tool, once through the relay).
  */
-const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file"]);
+const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_send_voice", "wecom_send_voice"]);
 
 export const name = "dsh-wechat-media";
 /** `agents` drives sessions; tools and the web server are optional per profile. */
@@ -2416,6 +2417,92 @@ export function apply(ctx, config = {}) {
           },
         });
 
+      /**
+       * Speak, on this machine.
+       *
+       * Both platforms take a voice file and neither offers text-to-speech, so `text` is synthesized
+       * locally (see voice.js: the system speech engine plus ffmpeg, no cloud service and no key) and
+       * `path` sends an audio file that already exists. The temporary audio is removed either way.
+       */
+      const wecomVoice = define({
+        name: "wecom_send_voice",
+        description:
+          "Send a voice message through WeCom (企业微信). Give `text` and it is spoken on this machine - the system speech engine, then ffmpeg to a chat format; nothing is sent to a cloud service - or give `path` for an existing audio file (.amr/.mp3/.wav). Over the intelligent-robot long connection it is uploaded as a voice message; with only a group-robot webhook, voice is refused with an explanation.",
+        parameters: {
+          text: { type: "string", description: "What to say. Spoken locally, no cloud service involved." },
+          path: { type: "string", description: "Absolute path of an existing audio file, used when `text` is not given." },
+          to: { type: "string", description: "The chat id for a long-connection send, or the WeCom recipients for the app path." },
+          format: { type: "string", description: "amr (what WeCom specifies for voice), mp3 or wav." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 300000,
+        async execute(args) {
+          const spoken = String(args?.text ?? "").trim();
+          const given = String(args?.path ?? "").trim();
+          if (!spoken && !given) return "nothing to send: give `text` to speak, or `path` to an audio file";
+          let audio;
+          if (spoken) {
+            try {
+              audio = await synthesizeVoice({ text: spoken, format: String(args?.format ?? "").trim() || "amr" });
+            } catch (error) {
+              return `could not make the voice: ${error?.message ?? error}`;
+            }
+          }
+          try {
+            const sent = await wecomSendMedia({ filePath: audio?.path ?? given, to: args?.to });
+            noteRoute("/wecom", sent);
+            const what = audio ? `a spoken ${audio.format} (${audio.bytes} bytes)` : given;
+            if (sent.via === "long-connection") return `sent ${what} as ${sent.kind} over the WeCom long connection to ${sent.to}`;
+            if (sent.via === "app") return `sent ${what} as ${sent.kind} through the WeCom app to ${sent.to}`;
+            return `sent ${what} as an image to the WeCom group robot`;
+          } catch (error) {
+            noteRoute("/wecom", { action: "send-voice", error: String(error?.message ?? error) });
+            return `could not send the voice: ${error?.message ?? error}`;
+          } finally {
+            await audio?.cleanup?.();
+          }
+        },
+      });
+
+      const sendVoiceTool = define({
+        name: "wechat_send_voice",
+        description:
+          "Send a voice message to a WeChat contact or group. Give `text` and it is spoken on this machine (system speech engine, then ffmpeg - nothing is sent to a cloud service), or give `path` for an existing audio file (.mp3/.amr/.wav/.silk). Use this whenever the user asks for a voice reply.",
+        parameters: {
+          text: { type: "string", description: "What to say. Spoken locally, no cloud service involved." },
+          path: { type: "string", description: "Absolute path of an existing audio file, used when `text` is not given." },
+          to: { type: "string", description: "WeChat wxid or group id; omit to use the most recent conversation." },
+          format: { type: "string", description: "mp3 (default), amr or wav." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 300000,
+        execute: async (args) => {
+          const spoken = String(args?.text ?? "").trim();
+          const given = String(args?.path ?? "").trim();
+          if (!spoken && !given) return "nothing to send: give `text` to speak, or `path` to an audio file";
+          const { account, chatId } = await resolvePeer(args.to ? String(args.to).trim() : undefined);
+          let audio;
+          if (spoken) {
+            try {
+              audio = await synthesizeVoice({ text: spoken, format: String(args?.format ?? "").trim() || "mp3" });
+            } catch (error) {
+              return `could not make the voice: ${error?.message ?? error}`;
+            }
+          }
+          try {
+            await ilink.sendVoice({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given });
+            ctx.logger?.info?.("[dsh-wechat-media] voice sent to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
+            return audio
+              ? `✅ 已发送语音到 ${chatId}（${audio.format}，${audio.bytes} 字节）`
+              : `✅ 已发送语音文件到 ${chatId}`;
+          } catch (error) {
+            ctx.logger?.warn?.("[dsh-wechat-media] voice send failed: %s", error?.message ?? error);
+            return `could not send the voice: ${error?.message ?? error}`;
+          } finally {
+            await audio?.cleanup?.();
+          }
+        },
+      });
       const sendFileTool = define({
         name: "wechat_send_file",
         description:
@@ -2475,7 +2562,7 @@ export function apply(ctx, config = {}) {
       });
 
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, statusTool, wecomText, wecomFile]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

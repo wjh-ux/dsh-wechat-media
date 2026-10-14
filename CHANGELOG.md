@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.18.0
+
+- **Voice messages can now be sent, and are spoken here.** Two tools - `wechat_send_voice` (personal WeChat,
+  iLink's VOICE media type) and `wecom_send_voice` (WeCom, uploaded over the long connection or the app) - take
+  either `text`, which is **synthesized on this machine**, or `path` to an audio file. New `voice.js` does the
+  speaking: the system's own engine (SAPI through `System.Speech` on Windows) writes a WAV and `ffmpeg` converts
+  it to a chat format (`mp3` default, `amr` which is what WeCom specifies, or `wav`). **No cloud service and no
+  key**: nothing leaves the machine. A missing piece is named (`windows speech (System.Speech)` / `ffmpeg`)
+  instead of failing quietly, and the text is passed as a PowerShell *single-quoted literal* with every `'` doubled -
+  that property has its own tests, because it is the one place this feature could be dangerous.
+- **Understanding voice is now explicit.** Both platforms transcribe voice themselves and that transcript reaches the
+  model, but it used to arrive bare - so a transcript looked like something the user typed. It is now labelled
+  (`[微信语音（平台转写）] …` / `[企业微信语音（平台转写）] …`), and a voice message the platform could not
+  transcribe says so. Personal WeChat's audio is still saved raw as `.silk`, which is what the protocol provides.
+- Both voice tools count as delivery tools, so a spoken answer is not repeated as text.
+- 276 tests across 19 suites.
+
 ## 0.17.0
 
 - **The v0.16.0 fallback could not work, and the trace finally said why.** With the closing frame

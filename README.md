@@ -262,6 +262,33 @@ and the card both say so instead of leaving the option looking broken. Deltas ar
 600 ms, whichever comes first) because one message per token would be absurd; a preview that no longer fits a single
 stream body is skipped rather than truncated, so the final answer is never cut short. `counters.streamChunks` counts
 what was sent, and `/status` shows the current mode.
+## Voice / 语音
+
+**Understanding a voice message.** Both platforms transcribe voice themselves, and it is their transcript that reaches
+the model - labelled, so the model knows it is reading *speech* rather than something typed:
+
+```
+[微信语音（平台转写）] 帮我把这周的日程整理一下
+[企业微信语音（平台转写）] 明天上午十点提醒我开会
+```
+
+When the platform sends no transcript, that is said plainly (`（平台未提供转写）`) instead of being papered over.
+Personal WeChat's audio is saved as well, raw `.silk` - that is the format the protocol hands over, and nothing on a
+normal machine can decode it.
+
+**Speaking.** Two tools, one per platform:
+
+| Tool | What it does |
+|---|---|
+| `wechat_send_voice` | Sends a voice message through personal WeChat (iLink's VOICE media type). |
+| `wecom_send_voice` | Sends a voice message through WeCom (uploaded over the long connection, or the self-built app). |
+
+Either tool takes `text` - which is **spoken on this machine** - or `path` to an audio file that already exists. The
+speech is made locally: the system's own engine (SAPI on Windows) writes a WAV, and `ffmpeg` converts it to a chat
+format (`mp3` by default, `amr` which is what WeCom specifies for voice, or `wav` which needs no conversion at all).
+**No cloud service, no API key, nothing leaves the machine.** If either piece is missing the tool names it
+(`windows speech (System.Speech)` or `ffmpeg`) rather than failing silently, and a message it delivered counts as the
+answer being delivered (`DELIVERY_TOOLS`), so the relay does not repeat it.
 ## Diagnostics / 排障
 
 - The host logs one line per inbound message with the envelope's identifying fields:

@@ -23,6 +23,7 @@
 /** The official long-connection endpoint. */
 import { createHash } from "node:crypto";
 import { MiniWebSocket } from "./ws-client.js";
+import { spokenText } from "./voice.js";
 
 export const BOT_WS_URL = "wss://openws.work.weixin.qq.com";
 
@@ -177,7 +178,12 @@ export function describeBotMessage(frame) {
   }
   // Quoted media only: quoted *text* stays out of the prompt, as on the WeChat side.
   collectMedia(body.quote, media);
-  const text = body.text?.content ?? body.markdown?.content ?? body.voice?.content ?? mixedText.join("\n");
+  // A voice message arrives as the platform's own transcription, labelled so the model knows it is
+  // reading speech rather than something typed (and can say so when there is no transcription).
+  const voiceContent = body.voice?.content;
+  const text = body.text?.content ?? body.markdown?.content
+    ?? (voiceContent !== undefined && voiceContent !== null ? spokenText({ platform: "wecom", text: voiceContent }) : undefined)
+    ?? mixedText.join("\n");
   return {
     msgId: String(body.msgid ?? ""),
     botId: String(body.aibotid ?? ""),

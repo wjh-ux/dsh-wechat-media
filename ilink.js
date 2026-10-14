@@ -73,6 +73,7 @@
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spokenText } from './voice.js';
 
 // ---------------------------------------------------------------------------
 // Constants and protocol identity
@@ -741,6 +742,19 @@ export async function sendVideo({ baseUrl, token, toWxid, filePath, text, contex
 }
 
 /**
+ * Send a local voice file.
+ *
+ * VoiceItem = media only: unlike images and videos there is no size field to mirror, and the platform
+ * does its own transcoding. `.mp3`, `.amr` and `.wav` are what the plugin produces (see voice.js); the
+ * upstream protocol's own format is SILK, which nothing on this machine can encode.
+ */
+export async function sendVoice({ baseUrl, token, toWxid, filePath, text, contextToken, runId, cdnBaseUrl, timeoutMs, signal } = {}) {
+  const uploaded = await uploadMedia({ baseUrl, token, toWxid, filePath, mediaType: uploadMediaTypes.VOICE, cdnBaseUrl, timeoutMs, signal });
+  const item = { type: messageItemTypes.VOICE, voice_item: { media: cdnMedia(uploaded) } };
+  return sendUploadedMedia({ baseUrl, token, toWxid, item, caption: text, contextToken, runId, timeoutMs, signal, uploaded });
+}
+
+/**
  * Send a local file attachment. FileItem = media + `file_name` (display name) +
  * `len` = PLAINTEXT byte count as a decimal STRING (not a number).
  */
@@ -883,7 +897,8 @@ export function describeInbound(message = {}) {
     text = String(textItem.text_item.text);
   } else if (voiceText) {
     kind = 'voice'; // transcript of a voice message
-    text = String(voiceText.voice_item.text);
+    // Labelled, not bare: the model should know it is reading speech rather than something typed.
+    text = spokenText({ platform: 'wechat', text: voiceText.voice_item.text });
   } else if (media.length) {
     // Upstream priority when several media types coexist: image > video > file > voice.
     const order = [messageItemTypes.IMAGE, messageItemTypes.VIDEO, messageItemTypes.FILE, messageItemTypes.VOICE];
