@@ -158,7 +158,7 @@ await test("both inbound paths answer /commands instead of forwarding them", () 
 await test("/new moves the chat onto a new generation, /stop cancels the turn", () => {
   const at = host.indexOf("async function runChatCommand");
   assert.ok(at > -1);
-  const body = host.slice(at, at + 6000);
+  const body = host.slice(at, at + 10000);
   assert.match(body, /const generation = previous \+ 1/, "/new must bump the generation");
   assert.match(body, /sessionIdFor\(accountId, chatId, generation\)/, "...and route to the new session id");
   assert.match(body, /conversations\.delete\(previousId\)/, "...and forget the old conversation");

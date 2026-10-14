@@ -76,6 +76,22 @@ test("an unknown command answer names it and then teaches the list", () => {
   assert.match(text, /\/help/);
 });
 
+console.log("-- authorization --");
+
+test("/auth is a command and takes the levels in both languages", () => {
+  assert.equal(parseCommand("/auth").name, "auth");
+  assert.equal(parseCommand("/auth strict").args, "strict");
+  assert.equal(parseCommand("/auth 仅查看").args, "仅查看");
+  assert.equal(parseCommand("/授权 full").name, "auth");
+  assert.equal(parseCommand("/授权 full").args, "full");
+});
+
+test("status reports the authorization level when given one", () => {
+  const text = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s", authLine: "授权档位：严格（strict）· 会在聊天里问" });
+  assert.match(text, /授权档位：严格（strict）/);
+  assert.match(text, /\/auth/, "the command list points at it");
+});
+
 console.log("-- interjection --");
 
 test("/interject is a command, with the aliases people will type", () => {

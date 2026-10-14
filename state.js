@@ -242,6 +242,9 @@ export class WechatState {
       // into the running turn instead of queueing its own. Off by default - queueing is what
       // every existing chat already does, and `steer` changes what the model sees mid-turn.
       interject: false,
+      // Authorization level for the approval channel this plugin owns: strict / moderate /
+      // full / readonly. "moderate" is exactly the behaviour of every earlier release.
+      authorization: "moderate",
       maxMediaMiB: 100,
       ...(file && typeof file === "object" ? file : {}),
     };

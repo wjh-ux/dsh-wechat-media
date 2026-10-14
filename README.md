@@ -195,6 +195,7 @@ through (a blocked chat cannot run commands either).
 | `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
 | `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
 | `/friends` | `/friend`, `/好友` | Turns **only answer friends** (1:1 chats) on or off: `/friends on`, `/friends off`, or no argument to toggle. Group messages are then dropped silently and counted. |
+| `/auth` | `/授权` | Authorization level for approvals: `/auth 严格` / `适中` / `完全权限` / `仅查看` (also `strict`, `moderate`, `full`, `readonly`). No argument lists them. |
 | `/interject` | `/插话` | Turns **interjection** on or off: with it on, a message sent while the agent is still answering joins *that* turn instead of queueing its own. No argument toggles. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
@@ -230,6 +231,20 @@ A message that arrives **while the agent is still answering** can either join th
   state and how many messages have been interjected so far.
 - Personal WeChat and WeCom behave identically, and the relay keeps a **queue of waiters per session** - a second
   message can no longer replace the first message's waiter (which is what used to lose a reply).
+
+## Authorization / 授权档位
+
+What this plugin does with an **approval request** it receives is a plugin decision, and it has four levels - the
+card's menu, or `/auth`:
+
+| Level | What the plugin does |
+|---|---|
+| **严格** `strict` | Ask in the chat for **every** request, and treat silence as **no** - it never silently falls back to the GUI. |
+| **适中** `moderate` *(default)* | Ask in the chat; if nobody answers, the GUI's own prompt stays in charge. This is exactly what earlier releases did. |
+| **完全权限** `full` | Never ask here: approvals are left to DSH (with a session policy that asks nothing, that means actions simply proceed). |
+| **仅查看** `readonly` | Ask nobody and **refuse** everything that needs an approval - fail closed. |
+
+**Honest scope.** DSH's own session policy - the file sandbox (`read-only` / `workspace-write` / `danger-full-access`) and whether approvals are asked *at all* - belongs to the DSH client, not to a plugin. A plugin can only decide what it does with a request it is given. So with a session policy that never asks, `仅查看` has nothing to refuse: the card and this table say so plainly, and the real read-only switch lives in DSH's own session settings.
 
 ## Diagnostics / 排障
 

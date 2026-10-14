@@ -37,6 +37,12 @@ export const COMMANDS = [
     summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
   },
   {
+    name: "auth",
+    aliases: ["授权"],
+    usage: "/auth [严格|适中|完全权限|仅查看]",
+    summary: "授权档位：严格（每次都问、超时即拒绝）/ 适中（问、超时转 GUI）/ 完全权限（不问）/ 仅查看（直接拒绝需授权的操作）",
+  },
+  {
     name: "interject",
     aliases: ["插话"],
     usage: "/interject [on|off]",
@@ -157,6 +163,7 @@ function size(bytes) {
  * @param {number} [input.groupsSkipped] how many group messages that switch has dropped
  * @param {boolean} [input.interject] the interjection switch
  * @param {number} [input.interjected] how many messages were steered into a running turn
+ * @param {string} [input.authLine] the one-line authorization level (see index.js)
  * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
@@ -172,6 +179,7 @@ export function statusText({
   pendingApprovals = 0,
   friendOnly = false,
   interject = false,
+  authLine,
   tokenLine,
   lastInboundAt,
   inbox,
@@ -201,7 +209,8 @@ export function statusText({
   lines.push(
     `插话：${interject ? "开" : "关"}` + (interject ? `（已插话 ${counters.interjected ?? 0} 次）` : "（/interject on 可开）"),
   );
+  if (authLine) lines.push(authLine);
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /tokens");
   return lines.join("\n");
 }

@@ -196,5 +196,23 @@ test("the interjection switch is on the card, in both languages, wired to the ho
   assert.match(host, /counters\.interjected \+= 1/, "and count what it steered");
 });
 
+test("the authorization menu is on the card, in both languages, wired to the host", () => {
+  assert.match(code, /t\("authLabel"/, "the menu must be labelled through the translator");
+  assert.match(code, /api\(`\/prefs\?authorization=/, "the menu must save to the host's prefs route");
+  assert.match(code, /snapshot\?\.prefs\?\.authorization/, "the menu must reflect the stored level");
+  for (const level of ["strict", "moderate", "full", "readonly"]) {
+    assert.match(code, new RegExp(`value: "${level}"`), `the menu must offer ${level}`);
+  }
+  for (const key of ["authLabel", "authStrict", "authModerate", "authFull", "authReadonly", "authHint"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /AUTHORIZATION_LEVELS\.includes\(level\)/, "the host must validate the level it is given");
+  assert.match(host, /command\.name === "auth"/, "the /auth command must be handled");
+  assert.match(host, /policyFor: async \(\) => approvalPolicyFor/, "the approval bridge must read the level per request");
+  assert.match(host, /return "rejected";/, "the read-only level must refuse without asking");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 
-import { approvalTarget, createApprovalBridge, formatApprovalPrompt } from "../index.js";
+import { AUTHORIZATION_LEVELS, approvalPolicyFor, approvalTarget, createApprovalBridge, formatApprovalPrompt } from "../index.js";
 
 let passed = 0;
 let failed = 0;
@@ -284,5 +284,34 @@ await test("the caller learns whether the prompt really went out", async () => {
   assert.equal(outcome, undefined);
   assert.deepEqual(failures, [[false, "window closed"]], "an undeliverable prompt reports the reason");
 });
+console.log("-- authorization levels --");
+
+await test("each level maps to what the plugin may do with a request", () => {
+  const strict = approvalPolicyFor("strict");
+  assert.deepEqual([strict.ask, strict.onTimeout, strict.decline], [true, "decline", false], "strict asks, and silence is no");
+  const moderate = approvalPolicyFor("moderate");
+  assert.deepEqual([moderate.ask, moderate.onTimeout, moderate.decline], [true, "gui", false], "moderate is the old behaviour");
+  const full = approvalPolicyFor("full");
+  assert.deepEqual([full.ask, full.onTimeout, full.decline], [false, "gui", false], "full does not ask here");
+  const readonly = approvalPolicyFor("readonly");
+  assert.deepEqual([readonly.ask, readonly.onTimeout, readonly.decline], [false, "gui", true], "read only refuses without asking");
+});
+
+await test("an unknown level falls back to moderate instead of failing open", () => {
+  // A typo must never silently mean "full": failing open on a bad value is how a permission
+  // switch becomes a hole.
+  for (const value of ["", undefined, null, "FULL?", "whatever", 42]) {
+    assert.equal(approvalPolicyFor(value).level, "moderate", `${JSON.stringify(value)} must fall back to moderate`);
+  }
+});
+
+await test("the levels are listed with human labels", () => {
+  assert.deepEqual(AUTHORIZATION_LEVELS, ["strict", "moderate", "full", "readonly"]);
+  assert.equal(approvalPolicyFor("strict").label, "严格");
+  assert.equal(approvalPolicyFor("moderate").label, "适中");
+  assert.equal(approvalPolicyFor("full").label, "完全权限");
+  assert.equal(approvalPolicyFor("readonly").label, "仅查看");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

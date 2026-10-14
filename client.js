@@ -153,6 +153,12 @@ window.__ModuleLoader__.load({
           interject: "Let a new message interject while it is still answering",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
+          authLabel: "Approvals",
+          authStrict: "Strict - always ask, silence means no",
+          authModerate: "Moderate - ask, fall back to the GUI",
+          authFull: "Full - never ask here",
+          authReadonly: "View only - refuse anything that asks",
+          authHint: "Decides only how this plugin handles an approval request; DSH's own session policy is set in DSH.",
           tokensTitle: "Token usage",
           tokenNextReset: "clears in",
           tokenResets: "cleared",
@@ -226,6 +232,12 @@ window.__ModuleLoader__.load({
           interject: "允许插话（正在回复时新消息加入当前回合）",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
+          authLabel: "授权档位",
+          authStrict: "严格 — 每次都问，超时即拒绝",
+          authModerate: "适中 — 问，超时转 GUI",
+          authFull: "完全权限 — 不在这里问",
+          authReadonly: "仅查看 — 需要授权的操作直接拒绝",
+          authHint: "只决定本插件如何处理审批请求；DSH 自己的会话策略请在 DSH 里设置。",
           tokensTitle: "Token 用量",
           tokenNextReset: "距清零",
           tokenResets: "已清零",
@@ -440,6 +452,19 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** The authorization level: how this plugin handles an approval request. */
+        async function setAuthorization(level) {
+          setBusy(true);
+          try {
+            await api(`/prefs?authorization=${encodeURIComponent(String(level))}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /**
          * The interjection switch: whether a message that arrives while the agent is still
          * answering joins that turn (`agent.steer`) or queues its own (`agent.followup`).
@@ -608,6 +633,27 @@ window.__ModuleLoader__.load({
               ? h("p", { key: "interjectNote", className: "dswxMeta" },
                   `${t("interjectOn", "Interjection is on: a message sent while the agent is working joins that turn")} · ${t("interjected", "interjected")} ${snapshot?.counters?.interjected ?? 0}`)
               : null,
+            // Authorization: what this plugin does with an approval request it receives. DSH's own
+            // session policy (the file sandbox, whether approvals are asked at all) is a client
+            // setting, not a plugin's - the hint says so rather than pretending otherwise.
+            h("div", { key: "auth", className: "dswxRow" }, [
+              h("label", { key: "l", className: "dswxMeta" }, [
+                `${t("authLabel", "Approvals")} `,
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
+                  value: String(snapshot?.prefs?.authorization ?? "moderate"),
+                  disabled: busy,
+                  onChange: (event) => setAuthorization(event.target.value),
+                }, [
+                  h("option", { key: "strict", value: "strict" }, t("authStrict", "Strict - always ask, silence means no")),
+                  h("option", { key: "moderate", value: "moderate" }, t("authModerate", "Moderate - ask, fall back to the GUI")),
+                  h("option", { key: "full", value: "full" }, t("authFull", "Full - never ask here")),
+                  h("option", { key: "readonly", value: "readonly" }, t("authReadonly", "View only - refuse anything that asks")),
+                ]),
+              ]),
+              h("span", { key: "h", className: "dswxMeta" }, t("authHint", "Decides only how this plugin handles an approval request; DSH's own session policy is set in DSH.")),
+            ]),
             (snapshot?.approvals ?? []).length > 0
               ? h("div", { key: "waiting", className: "dswxRow" }, [
                   h("span", { key: "t", className: "dswxMeta" },

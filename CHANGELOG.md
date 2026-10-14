@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0
+
+- **New: four authorization levels for approvals** - a menu in the card's authorization area and `/auth` in the
+  chat (`/授权` too), with Chinese level names accepted: `/auth 严格|适中|完全权限|仅查看`.
+  - **严格 `strict`**: every approval is asked in the chat, and **silence means no** - it never silently falls
+    back to the GUI.
+  - **适中 `moderate`** *(default)*: ask in the chat, and if nobody answers the GUI takes over. Exactly the
+    behaviour of every earlier release.
+  - **完全权限 `full`**: never ask here; approvals stay with DSH (with a session policy that asks nothing, that
+    means actions proceed).
+  - **仅查看 `readonly`**: ask nobody and **refuse** whatever needs an approval (fail closed).
+- **What a plugin can and cannot do is stated, not implied.** DSH's own session policy - the file sandbox
+  (`read-only` / `workspace-write` / `danger-full-access`) and whether approvals are asked at all - belongs to
+  the DSH client; a plugin only decides what to do with a request it receives. With a session policy that never
+  asks, `仅查看` has nothing to refuse, and the card, `/auth` and the README all say so instead of implying a
+  guarantee the plugin cannot make.
+- An unknown level falls back to `moderate`, never to `full` (failing open on a typo is how a permission switch
+  becomes a hole), and the level is read per request, so `/auth` applies immediately without a restart.
+- 241 tests across 17 suites.
+
 ## 0.10.0
 
 - **New: interjection (插话) - a message sent while the agent is answering can join that turn.** A switch on the

@@ -188,6 +188,51 @@ export function describeEnvelope(message = {}) {
 }
 
 /**
+ * The four authorization levels the card offers, and what each one means for the **approval
+ * channel this plugin owns**.
+ *
+ * Honest scope: DSH's own session policy (the file sandbox: read-only / workspace-write /
+ * danger-full-access, and whether approvals are asked at all) belongs to the DSH client and is
+ * not a plugin setting. What a plugin *can* decide is what it does with an approval request it
+ * receives: ask in the chat (and what "no answer" means), leave it to the GUI, or decline it.
+ * `readonly` therefore fails closed for everything that *does* ask - it cannot stop an action
+ * the session policy never asked about, and the card says so.
+ */
+export const AUTHORIZATION_LEVELS = ["strict", "moderate", "full", "readonly"];
+
+export const AUTHORIZATION_LABELS = {
+  strict: "严格",
+  moderate: "适中",
+  full: "完全权限",
+  readonly: "仅查看",
+};
+
+/**
+ * @param {string} level one of AUTHORIZATION_LEVELS (anything else means "moderate")
+ * @returns {{ level: string, ask: boolean, onTimeout: "gui" | "decline", decline: boolean, label: string }}
+ *   `ask` - put the question in the chat; `onTimeout` - what silence means when asking;
+ *   `decline` - refuse requests outright without asking.
+ */
+export function approvalPolicyFor(level) {
+  const wanted = AUTHORIZATION_LEVELS.includes(String(level)) ? String(level) : "moderate";
+  switch (wanted) {
+    case "strict":
+      // Every approval is asked in the chat, and silence is a no.
+      return { level: wanted, ask: true, onTimeout: "decline", decline: false, label: AUTHORIZATION_LABELS.strict };
+    case "full":
+      // Never ask in the chat: approvals (if the session policy asks for any) stay with the GUI.
+      return { level: wanted, ask: false, onTimeout: "gui", decline: false, label: AUTHORIZATION_LABELS.full };
+    case "readonly":
+      // Fail closed: anything that needs an approval is refused without asking.
+      return { level: wanted, ask: false, onTimeout: "gui", decline: true, label: AUTHORIZATION_LABELS.readonly };
+    case "moderate":
+    default:
+      // Today's behaviour: ask in the chat, and let the GUI take over if nobody answers.
+      return { level: "moderate", ask: true, onTimeout: "gui", decline: false, label: AUTHORIZATION_LABELS.moderate };
+  }
+}
+
+/**
  * Should this message be **steered into the turn that is already running**, or queued as its
  * own turn?
  *
@@ -344,7 +389,7 @@ export function approvalTarget({ conversation, account, wecomReady } = {}) {
  * testable without WeChat, a harness or a real clock: `notify` sends the prompt,
  * `consume` feeds a reply in, and `respond` is the `approval/request` handler.
  */
-export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}) {
+export function createApprovalBridge({ notify, timeoutMs = 120000, logger, policyFor } = {}) {
   /** `accountId|chatId -> { resolve, timer }`; one question per chat at a time. */
   const pending = new Map();
   const keyOf = (accountId, chatId) => `${accountId}|${chatId}`;
@@ -418,7 +463,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
      * @returns {Promise<"allowed-once" | "rejected" | undefined>} undefined means
      *   "no answer" - the caller must delegate so the GUI still gets its prompt.
      */
-    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs, accountId, onSent } = {}) {
+    async ask(account, chatId, request, { timeoutMs: limit = timeoutMs, accountId, onSent, onTimeout = "gui" } = {}) {
       if (typeof notify !== "function") {
         onSent?.(false, new Error("no notifier configured"));
         return undefined;
@@ -444,12 +489,15 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
       // Only a real timeout gets the "no answer" notice: a cancel from DSH and an
       // aborted turn have their own (or no) message, and two notices contradict.
       let timedOut = false;
+      const declaredOnTimeout = onTimeout === "decline";
       const answer = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           timedOut = true;
-          lastResult = { outcome: "timeout", chatId, toolName: request?.toolName, at: new Date().toISOString() };
+          lastResult = { outcome: declaredOnTimeout ? "rejected" : "timeout", chatId, toolName: request?.toolName, at: new Date().toISOString() };
           pending.delete(key);
-          resolve(undefined);
+          // Strict mode fails closed: no answer in the chat means "no", instead of handing the
+          // request to the GUI, where it could still be approved outside the chat.
+          resolve(declaredOnTimeout ? "rejected" : undefined);
         }, Math.max(1, Number(limit) || timeoutMs));
         // The account is kept so the answer can be confirmed in the same chat.
         pending.set(key, { resolve, timer, requestedAt: Date.now(), account, accountId: accountId ?? account?.accountId ?? account?.botId, chatId, toolName: request?.toolName });
@@ -475,7 +523,15 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
     /** The `approval/request` listener body. */
     async respond(request, next, { ignore = false, findConversation, loadAccount } = {}) {
       try {
-        if (ignore) return next();
+        // The level can change at any moment (`/auth`, the card), so it is read per request.
+        const policy = await (policyFor?.() ?? approvalPolicyFor("moderate"));
+        if (ignore || (!policy.ask && !policy.decline)) return next();
+        // "仅查看": refuse anything that needs an approval, without asking anyone.
+        if (policy.decline) {
+          lastResult = { outcome: "rejected", chatId: "", toolName: request?.toolName, at: new Date().toISOString(), reason: "authorization-level-readonly" };
+          logger?.info?.("[dsh-wechat-media] declined %s without asking (authorization level: readonly)", request?.toolName ?? "?");
+          return "rejected";
+        }
         const conversation = await findConversation?.(String(request?.agent?.session?.id ?? ""));
         if (!conversation) return next(); // not a WeChat-driven session
         // Whoever the caller can actually reach. `loadAccount` owns that judgement
@@ -483,7 +539,7 @@ export function createApprovalBridge({ notify, timeoutMs = 120000, logger } = {}
         const account = await loadAccount?.(conversation.accountId, conversation);
         if (!account) return next();
         // Undefined means "ask someone else": the GUI's own prompt stays intact.
-        return (await bridge.ask(account, conversation.chatId, request, { accountId: conversation.accountId })) ?? next();
+        return (await bridge.ask(account, conversation.chatId, request, { accountId: conversation.accountId, onTimeout: policy.onTimeout })) ?? next();
       } catch (error) {
         logger?.warn?.("[dsh-wechat-media] approval bridge failed: %s", error?.message ?? error);
         return next();
@@ -872,6 +928,38 @@ export function apply(ctx, config = {}) {
     return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
   }
 
+  /** One line per level, shared by `/auth` and its "unknown level" answer. */
+  function authExplain(level) {
+    switch (approvalPolicyFor(level).level) {
+      case "strict":
+        return "每一次需要授权的操作都会在聊天里问你；**超时或没回就当拒绝**（不会偷偷转给 GUI）。";
+      case "full":
+        return "完全不在聊天里问：需要授权的操作交给 DSH 自己的策略处理（你现在的会话策略是不询问 → 等于放行）。";
+      case "readonly":
+        return "不问、直接拒绝**所有**需要授权的操作（fail closed）。注意：会话策略若根本不询问，插件就拦不到它——真正的只读要在 DSH 会话策略里设。";
+      default:
+        return "在聊天里问；超时没人回答就转给 GUI 处理（旧版本的行为）。";
+    }
+  }
+
+  /** The `/auth` listing: every level, the current one marked. */
+  function authReport(current) {
+    const lines = [`🔐 授权档位：${approvalPolicyFor(current).label}（${current}）`, ""];
+    for (const level of AUTHORIZATION_LEVELS) {
+      const policy = approvalPolicyFor(level);
+      lines.push(`${policy.level === policy.level && level === policy.level ? (level === current ? "▶ " : "· ") : "· "}${policy.label}（${level}）：${authExplain(level)}`);
+    }
+    lines.push("", "用法：/auth <严格|适中|完全权限|仅查看>（也接受 strict/moderate/full/readonly）");
+    return lines.join("\n");
+  }
+
+  /** The one-line authorization summary `/status` prints. */
+  async function authStatusLine() {
+    const level = (await state.loadPrefs()).authorization ?? "moderate";
+    const policy = approvalPolicyFor(level);
+    return `授权档位：${policy.label}（${level}）· ${policy.ask ? "会在聊天里问" : policy.decline ? "直接拒绝" : "不问，交给 GUI"}`;
+  }
+
   /** The `/tokens` answer: the ledger, with each account labelled the way its chats name it. */
   async function tokenReport() {
     const summary = summarize(await state.loadTokens());
@@ -931,6 +1019,7 @@ export function apply(ctx, config = {}) {
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
+        authLine: await authStatusLine(),
         tokenLine: await tokenStatusLine(),
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
@@ -986,6 +1075,26 @@ export function apply(ctx, config = {}) {
         return true;
       }
       await reply(await tokenReport());
+      return true;
+    }
+
+    if (command.name === "auth") {
+      const wanted = command.args.trim().toLowerCase();
+      const current = (await state.loadPrefs()).authorization ?? "moderate";
+      if (!wanted) {
+        await reply(authReport(current));
+        return true;
+      }
+      const alias = { 严格: "strict", 适中: "moderate", 完全权限: "full", 仅查看: "readonly", readonly: "readonly", view: "readonly" };
+      const level = AUTHORIZATION_LEVELS.includes(wanted) ? wanted : alias[command.args.trim()] ?? alias[wanted];
+      if (!level) {
+        await reply(`不认识的档位「${command.args}」。\n\n${authReport(current)}`);
+        return true;
+      }
+      await state.savePrefs({ authorization: level });
+      const policy = approvalPolicyFor(level);
+      await reply(`🔐 授权档位 → ${policy.label}（${level}）\n${authExplain(level)}`);
+      noteRoute("/command", { command: "auth", level, chatId });
       return true;
     }
 
@@ -1545,6 +1654,9 @@ export function apply(ctx, config = {}) {
       : sendText(account, chatId, text, { typing: false })),
     timeoutMs: Math.max(15, Number(config.approvalTimeoutSec ?? 120)) * 1000,
     logger: ctx.logger,
+    // The authorization level decides whether the chat is asked at all, what silence means and
+    // whether requests are refused outright. Read per request, so `/auth` applies immediately.
+    policyFor: async () => approvalPolicyFor((await state.loadPrefs()).authorization),
   });
   /** The inbound pipeline's name for "did this message answer a pending request?". */
   const consumeApprovalReply = approvals.consume;
@@ -2248,6 +2360,13 @@ export function apply(ctx, config = {}) {
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
+          if (body.authorization !== undefined && body.authorization !== "") {
+            const level = String(body.authorization).trim().toLowerCase();
+            if (!AUTHORIZATION_LEVELS.includes(level)) {
+              return json(res, 400, { error: `authorization must be one of ${AUTHORIZATION_LEVELS.join(", ")}, got "${body.authorization}"` });
+            }
+            patch.authorization = level;
+          }
           if (asBool(body.autoReply) !== null) patch.autoReply = asBool(body.autoReply);
           if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
           if (body.inboxDir !== undefined) {
