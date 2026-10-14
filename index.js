@@ -868,6 +868,26 @@ export function apply(ctx, config = {}) {
     return true;
   }
 
+  /**
+   * Answer an inbound WeCom frame, in as many stream messages as the text needs.
+   *
+   * One stream body holds 20480 **bytes** (and Chinese costs three each), so this loops
+   * over every part. It used to take only the first part of `splitForStream(text)` in
+   * three places, which truncated any longer answer - silently, which is the one thing
+   * this plugin is not allowed to do. `tag` only makes the req_id traceable in a log.
+   *
+   * Deliberately synchronous: `false` from the socket (reconnecting or closed) has to
+   * reach the caller's own error handling instead of becoming an unhandled rejection.
+   */
+  function replyWecomInParts(frame, text, tag = "stream") {
+    const parts = splitForStream(text);
+    for (let index = 0; index < parts.length; index += 1) {
+      if (wecomBot?.reply(frame, streamBody(generateReqId(`${tag}-${index}`), parts[index], true)) === false) {
+        throw new Error("the WeCom long connection is not writable right now");
+      }
+    }
+  }
+
   /** Send one text message, with a lazily-fetched typing ticket. */
   async function sendText(account, chatId, text, { typing = true } = {}) {
     const accountId = account.accountId ?? account.botId;
@@ -1134,11 +1154,7 @@ export function apply(ctx, config = {}) {
         chatId,
         peerName,
         text: verdict.text,
-        reply: async (answer) => {
-          if (wecomBot?.reply(frame, streamBody(generateReqId("stream-cmd"), splitForStream(answer)[0], true)) === false) {
-            throw new Error("the WeCom long connection is not writable right now");
-          }
-        },
+        reply: (answer) => replyWecomInParts(frame, answer, "stream-cmd"),
       });
       if (handled) return;
     }
@@ -1188,33 +1204,18 @@ export function apply(ctx, config = {}) {
     const outcome = await waiting;
     // Never leave the chat without an answer: mirror what the personal-WeChat path
     // does when a turn errors or produces no text.
-    const replyWith = (body) => {
-      try {
-        // `reply` answers false when the socket is not writable (reconnecting, closed).
-        // Saying nothing about that is exactly how a reply becomes invisible.
-        if (wecomBot?.reply(frame, body) === false) {
-          ctx.logger?.warn?.("[dsh-wechat-media] wecom reply dropped: the long connection is not writable");
-        }
-      } catch (error) {
-        ctx.logger?.warn?.("[dsh-wechat-media] wecom reply failed: %s", error?.message ?? error);
-      }
-    };
     if (outcome.error) {
-      // Byte-safe: the limit is 20480 *bytes*, and Chinese costs three each.
-      replyWith(streamBody(generateReqId("stream-error"), splitForStream(`❌ agent 出错：${outcome.error}`)[0], true));
+      replyWecomInParts(frame, `❌ agent 出错：${outcome.error}`, "stream-error");
       return;
     }
     if (!outcome.text) {
       if (outcome.deliveredByTool) return;
-      replyWith(streamBody(generateReqId("stream-empty"), splitForStream(`（本轮没有文本回复：${outcome.stopReason}）`)[0], true));
+      replyWecomInParts(frame, `（本轮没有文本回复：${outcome.stopReason}）`, "stream-empty");
       return;
     }
-    // A WeCom intelligent robot only accepts `stream` for a passive reply, and one
-    // stream body holds 20480 bytes; a longer answer becomes several messages.
-    const parts = splitForStream(outcome.text);
-    for (let index = 0; index < parts.length; index += 1) {
-      replyWith(streamBody(generateReqId(`stream-${index}`), parts[index], true));
-    }
+    // A WeCom intelligent robot only accepts `stream` for a passive reply, and one stream
+    // body holds 20480 bytes; a longer answer becomes several messages.
+    replyWecomInParts(frame, outcome.text, "stream");
   }
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
   // harness without it still gets the long connection instead of losing the feature.
@@ -1507,12 +1508,20 @@ export function apply(ctx, config = {}) {
     const outcome = await waiting;
 
     if (outcome.error) {
-      await sendText(account, chatId, `❌ agent 出错：${outcome.error}`.slice(0, MAX_TEXT_CHARS)).catch(() => {});
+      // Chunked and logged rather than sliced-and-swallowed: a long error is still an
+      // answer, and a failure to deliver it must not vanish.
+      for (const chunk of chunkText(`❌ agent 出错：${outcome.error}`)) {
+        await sendText(account, chatId, chunk).catch((error) => {
+          ctx.logger?.warn?.("[dsh-wechat-media] could not deliver the error notice: %s", error?.message ?? error);
+        });
+      }
       return;
     }
     if (!outcome.text) {
       if (outcome.deliveredByTool) return; // the tool carried the answer
-      await sendText(account, chatId, `（本轮没有文本回复：${outcome.stopReason}）`).catch(() => {});
+      await sendText(account, chatId, `（本轮没有文本回复：${outcome.stopReason}）`).catch((error) => {
+        ctx.logger?.warn?.("[dsh-wechat-media] could not deliver the empty-turn notice: %s", error?.message ?? error);
+      });
       return;
     }
     if (outcome.deliveredByTool) {

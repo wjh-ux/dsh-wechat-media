@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.1
+
+- **Fixed a silent truncation on every WeCom reply path.** One `stream` body holds 20480 *bytes*, so a longer
+  answer has to be split - and three call sites sent only the first part, dropping the rest without a trace.
+  All of them (the command answer, the agent's reply, the error notice, the empty-turn notice) now go through
+  one `replyWecomInParts` helper that sends every part and raises when the socket cannot be written, so a
+  dropped reply is no longer indistinguishable from a delivered one. Found while reviewing the `/help` answer,
+  which fits in one part: the bug was waiting for the first long answer.
+- **The personal-WeChat error notice is chunked instead of sliced.** `❌ agent 出错：…` used to be cut at 2000
+  characters and its delivery failure was swallowed; it is now chunked like every other reply, and a failure to
+  deliver it is logged.
+- `test/wiring.test.mjs` grew a guard for the whole class: no reply path may send `splitForStream(...)[0]`, the
+  WeChat error notice may not be sliced, and the helper must have exactly its four call sites. 193 tests.
+
 ## 0.7.0
 
 - **Chat commands.** A message that starts with `/` is now handled by the bridge instead of being

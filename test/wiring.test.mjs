@@ -136,6 +136,16 @@ function checksResult(text, call) {
   return /===\s*false/.test(text.slice(at, at + 200));
 }
 
+await test("no reply path silently truncates to its first part", () => {
+  // One WeCom stream body is 20480 bytes and one WeChat message is ~2000 characters, so a
+  // long answer *must* be split and sent in pieces. Three call sites used to send
+  // `splitForStream(text)[0]`: the tail disappeared without a trace.
+  assert.doesNotMatch(host, /splitForStream\([^)]*\)\[0\]/, "a WeCom reply must not be cut to its first part");
+  assert.equal([...host.matchAll(/replyWecomInParts\(/g)].length, 5, "the helper plus its four call sites: the command answer and the three turn outcomes");
+  assert.doesNotMatch(host, /outcome\.error\}`\.slice\(0, MAX_TEXT_CHARS\)/, "the WeChat error notice is chunked, not sliced");
+  assert.match(host, /for \(const chunk of chunkText\(`❌ agent 出错：\$\{outcome\.error\}`\)\)/);
+});
+
 await test("both inbound paths answer /commands instead of forwarding them", () => {
   const calls = [...host.matchAll(/runChatCommand\(\{\s*transport:\s*"(\w+)"/g)].map((match) => match[1]);
   assert.deepEqual(calls.sort(), ["wechat", "wecom"], "each transport must dispatch commands");
@@ -189,8 +199,8 @@ await test("the WeCom inbound path decides exactly like the WeChat one", () => {
 await test("a dropped long-connection send is never reported as success", () => {
   const send = host.slice(host.indexOf("async function wecomSendText"));
   assert.ok(checksResult(send, "sendMessage("), "wecomSendText must check that the proactive send really happened");
-  const reply = host.slice(host.indexOf("const replyWith = (body)"));
-  assert.ok(checksResult(reply, "reply("), "replyWith must notice a dropped reply");
+  const reply = host.slice(host.indexOf("function replyWecomInParts"));
+  assert.ok(checksResult(reply, "reply("), "replyWecomInParts must notice a dropped reply");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
