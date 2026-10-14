@@ -195,10 +195,26 @@ through (a blocked chat cannot run commands either).
 | `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
 | `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
 | `/friends` | `/friend`, `/好友` | Turns **only answer friends** (1:1 chats) on or off: `/friends on`, `/friends off`, or no argument to toggle. Group messages are then dropped silently and counted. |
+| `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
 Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an
 ordinary message. Commands are counted (`counters.commands`) and recorded in `/state.recentRoutes`.
+
+## Token usage / Token 统计
+
+The bridge records what each **account** spends, per model call, from the `usage` the harness reports on the
+`assistant/message` session event - the numbers the model adapter returned, so nothing is estimated. Inside an
+account the spend is also split per chat.
+
+- **A window you choose, 1 to 30 days** (default 30). The counters clear themselves at the end of the window.
+  The reset is applied lazily whenever the ledger is read or written, so a host that was switched off for a week
+  starts a fresh window on its next breath instead of reporting a stale one - and `resets` / `lastResetAt` only
+  move when there was actually something to zero.
+- **Three ways to see it**: the card's **Token usage** section (one row per account, a window picker and
+  *Clear now*), `/tokens` in a chat, and a single line inside `/status`.
+- **Where it lives**: `$DSH_HOME/dsh-wechat-media/tokens.json`. Only counters are stored - no prompts, no
+  replies, nothing the model said.
 
 ## Diagnostics / 排障
 

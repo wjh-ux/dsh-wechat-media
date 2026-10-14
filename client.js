@@ -26,6 +26,28 @@ window.__ModuleLoader__.load({
     const react = require("react");
     const h = react.createElement;
 
+    /**
+     * Token counts and remaining time, formatted for the card.
+     *
+     * A deliberate duplicate of the host's `formatTokens`/`formatRemaining`: this bundle is a
+     * lazy-CJS module that only `require`s react, so it cannot import the host module, and
+     * shipping pre-formatted strings from the host would freeze the card into one language.
+     * Deliberately locale-neutral (`12.3k`, `3d`) - the same reading in both languages.
+     */
+    function formatCount(value) {
+      const n = Math.max(0, Math.round(Number(value) || 0));
+      if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+      if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+      return String(n);
+    }
+
+    function formatLeft(ms) {
+      const hours = Math.ceil(Math.max(0, Number(ms) || 0) / 3600000);
+      if (hours <= 1) return "<1h";
+      if (hours < 48) return `${hours}h`;
+      return `${Math.round(hours / 24)}d`;
+    }
+
     const BASE = "/dsh-wechat-media";
     const SLOT_BUNDLE_CONFIG = "plugins.bundle.config";
     const SLOT_ROW_CONFIG = "plugins.row.config";
@@ -128,6 +150,17 @@ window.__ModuleLoader__.load({
           friendOnly: "Only answer friends (1:1 chats; group messages are ignored silently)",
           friendOnlyOn: "Friends only is on: group messages are ignored silently",
           groupsSkipped: "skipped",
+          tokensTitle: "Token usage",
+          tokenNextReset: "clears in",
+          tokenResets: "cleared",
+          tokenNoUsage: "no usage yet",
+          tokenWindowLabel: "Clear every",
+          tokenReset: "Clear now",
+          tokenEmpty: "No account has used any tokens in this window.",
+          tokenIn: "in",
+          tokenOut: "out",
+          calls: "call(s)",
+          days: "days",
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           inboxLabel: "Inbound files are saved in",
@@ -186,6 +219,17 @@ window.__ModuleLoader__.load({
           friendOnly: "只处理好友私聊（群消息静默忽略）",
           friendOnlyOn: "只处理好友私聊已开启：群消息被静默忽略",
           groupsSkipped: "已跳过",
+          tokensTitle: "Token 用量",
+          tokenNextReset: "距清零",
+          tokenResets: "已清零",
+          tokenNoUsage: "还没有用量",
+          tokenWindowLabel: "清零周期",
+          tokenReset: "立即清零",
+          tokenEmpty: "这个窗口内还没有任何账号产生用量。",
+          tokenIn: "输入",
+          tokenOut: "输出",
+          calls: "次调用",
+          days: "天",
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           inboxLabel: "微信收到的文件保存在",
@@ -387,6 +431,34 @@ window.__ModuleLoader__.load({
             setBusy(false);
           }
         }
+
+        /**
+         * Token ledger controls. The window length (1..30 days) and a manual reset live in
+         * the host's ledger file, which `/tokens` also drives - one source of truth.
+         */
+        async function setTokenWindow(days) {
+          setBusy(true);
+          try {
+            await api(`/tokens?windowDays=${encodeURIComponent(String(days))}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function resetTokens() {
+          setBusy(true);
+          try {
+            await api("/tokens?reset=true");
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
         /**
          * Send the approval prompt to WeChat and wait for the 1/2 answer. This is
          * the same path a real approval takes on the WeChat side, so it verifies
@@ -505,6 +577,38 @@ window.__ModuleLoader__.load({
                     t("cancelWaiting", "Cancel")),
                 ])
               : null,
+            // Token usage: one row per account, over a window the user chooses (1..30 days).
+            // The host keeps the ledger; this card only reads and steers it.
+            h("div", { key: "tokens", className: "dswxCard" }, [
+              h("div", { key: "head", className: "dswxRow" }, [
+                h("strong", { key: "t" }, t("tokensTitle", "Token usage")),
+                h("span", { key: "u", className: "dswxMeta" },
+                  snapshot?.tokens
+                    ? `${t("tokenNextReset", "clears in")} ${formatLeft(snapshot.tokens.msUntilReset)}${snapshot.tokens.resets ? ` · ${t("tokenResets", "cleared")} ${snapshot.tokens.resets}×` : ""}`
+                    : t("tokenNoUsage", "no usage yet")),
+              ]),
+              h("div", { key: "controls", className: "dswxRow" }, [
+                h("label", { key: "l", className: "dswxMeta" }, [
+                  `${t("tokenWindowLabel", "Clear every")} `,
+                  h("select", {
+                    key: "s",
+                    className: "dswxInput",
+                    value: String(snapshot?.tokens?.windowDays ?? 30),
+                    disabled: busy,
+                    onChange: (event) => setTokenWindow(Number(event.target.value)),
+                  }, [1, 3, 7, 14, 30].map((days) => h("option", { key: days, value: String(days) }, `${days} ${t("days", "days")}`))),
+                ]),
+                h("button", { key: "r", type: "button", className: "dswxBtn", disabled: busy, onClick: () => resetTokens() },
+                  t("tokenReset", "Clear now")),
+              ]),
+              (snapshot?.tokens?.accounts ?? []).length === 0
+                ? h("p", { key: "none", className: "dswxMeta" }, t("tokenEmpty", "No account has used any tokens in this window."))
+                : h("div", { key: "rows", className: "dswxCard" }, (snapshot.tokens.accounts ?? []).map((row) => h("div", { key: row.accountId, className: "dswxRow" }, [
+                    h("span", { key: "n", className: "dswxName" }, row.accountId),
+                    h("span", { key: "v", className: "dswxMeta" },
+                      `${formatCount(row.totalTokens)} · ${t("tokenIn", "in")} ${formatCount(row.inputTokens)} / ${t("tokenOut", "out")} ${formatCount(row.outputTokens)} · ${row.calls} ${t("calls", "call(s)")}`),
+                  ]))),
+            ]),
             snapshot?.lastApproval
               ? h("p", { key: "lastApproval", className: "dswxMeta" },
                   `${t("lastApproval", "Last approval")}: ${snapshot.lastApproval.outcome} · ${snapshot.lastApproval.chatId}`)

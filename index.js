@@ -85,7 +85,8 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { openSessionAgent } from "./session.js";
-import { STOP_REASON, helpText, parseCommand, parseSwitch, statusText, unknownCommandText } from "./commands.js";
+import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
+import { clampWindowDays, summarize, summaryLine, tokensReport } from "./tokens.js";
 import * as wecom from "./wecom.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -534,8 +535,9 @@ export function assistantText(event) {
  * bridge ends up with replies that never leave the queue.
  */
 class ReplyCollector {
-  constructor(scope) {
+  constructor(scope, { onUsage } = {}) {
     this.scope = scope;
+    this.onUsage = onUsage;
     this.pending = new Map(); // sessionId -> record
     scope.on("agent/inbox/claimed", ({ agent, message, turn }) => {
       const sessionId = String(agent?.session?.id ?? agent?.id ?? "");
@@ -546,6 +548,16 @@ class ReplyCollector {
     });
     scope.on("session/event", (session, event) => {
       const sessionId = String(session?.header?.id ?? session?.id ?? "");
+      // Token usage is reported per model call, not per turn, and it is interesting even for
+      // a session no chat is waiting on (a GUI turn of the same conversation, say), so it is
+      // accounted before the `pending` bookkeeping and independently of it.
+      if (event.type === "assistant/message" && event.data?.usage) {
+        try {
+          this.onUsage?.({ sessionId, usage: event.data.usage, step: event.data?.step });
+        } catch {
+          // Counting must never be the reason a reply is lost.
+        }
+      }
       const record = this.pending.get(sessionId);
       if (!record || record.turn === undefined) return;
       if (event?.data?.turn !== record.turn) return;
@@ -664,7 +676,24 @@ export function apply(ctx, config = {}) {
    * different session id) is otherwise indistinguishable from one that lost its mind.
    */
   let lastSessionIssue = null;
-  const collectors = new ReplyCollector(ctx);
+  const collectors = new ReplyCollector(ctx, {
+    /**
+     * Attribute one model call to the account and chat it belongs to.
+     *
+     * The session event carries only the session id, so it is resolved through the
+     * conversation table the inbound paths maintain; a session nobody is bridging (a GUI
+     * turn of the same conversation, say) has no account to charge and is skipped rather
+     * than guessed at.
+     */
+    onUsage: ({ sessionId, usage }) => {
+      const conversation = conversations.get(sessionId);
+      if (!conversation?.accountId) return;
+      // Fire and forget - a slow disk must not delay the reply - but a failure is logged
+      // rather than swallowed, so the ledger can never quietly stop counting.
+      state.addTokens({ accountId: conversation.accountId, chatId: conversation.chatId, usage })
+        .catch((error) => ctx.logger?.warn?.("[dsh-wechat-media] token accounting failed: %s", error?.message ?? error));
+    },
+  });
   /** Injected factories resolved lazily through the loader. */
   const harness = { createUserMessage: undefined, defineTool: undefined };
 
@@ -779,6 +808,23 @@ export function apply(ctx, config = {}) {
     return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
   }
 
+  /** The `/tokens` answer: the ledger, with each account labelled the way its chats name it. */
+  async function tokenReport() {
+    const summary = summarize(await state.loadTokens());
+    const peers = await state.loadPeers();
+    const accountNames = {};
+    for (const row of summary.accounts) {
+      const named = Object.values(peers?.[row.accountId] ?? {}).find((peer) => peer?.name);
+      if (named?.name) accountNames[row.accountId] = `${row.accountId}（${named.name}）`;
+    }
+    return tokensReport(summary, { accountNames });
+  }
+
+  /** The one-line token summary `/status` prints. */
+  async function tokenStatusLine() {
+    return summaryLine(summarize(await state.loadTokens()));
+  }
+
   /**
    * Answer a message that is addressed to the bridge rather than to the agent.
    *
@@ -820,6 +866,7 @@ export function apply(ctx, config = {}) {
         bot: wecomBotStatus,
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
+        tokenLine: await tokenStatusLine(),
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
       }));
@@ -845,6 +892,35 @@ export function apply(ctx, config = {}) {
       }
       counters.commandsNew = (counters.commandsNew ?? 0) + 1;
       await reply(`🆕 已开始新会话（第 ${generation + 1} 段）。上一条会话的记录仍保留在磁盘上，但不会被带进新对话。`);
+      return true;
+    }
+
+    if (command.name === "tokens") {
+      const args = command.args.trim().toLowerCase();
+      if (args === "reset" || args === "清零") {
+        await state.resetTokens();
+        await reply(`🧮 Token 统计已清零（窗口长度不变，仍是 ${(await state.loadTokens()).windowDays} 天）。`);
+        return true;
+      }
+      const days = parseWindowDays(args);
+      if (days !== undefined) {
+        const clamped = clampWindowDays(days);
+        const ledger = await state.setTokenWindow(clamped);
+        await reply(
+          clamped === days
+            ? `🧮 Token 清零窗口已改为 ${clamped} 天，并从现在开始重新计时。`
+            : `🧮 只支持 1–30 天，已按最接近的 ${clamped} 天设置（你给的是 ${days}）。`,
+        );
+        ctx.logger?.info?.("[dsh-wechat-media] token window -> %d days", ledger.windowDays);
+        return true;
+      }
+      if (args && args !== "") {
+        // Something that is neither a number nor "reset": answer with the usage rather than
+        // silently doing nothing.
+        await reply(`不认识的参数「${command.args}」。用法：/tokens · /tokens reset · /tokens 7（1–30 天）\n\n${await tokenReport()}`);
+        return true;
+      }
+      await reply(await tokenReport());
       return true;
     }
 
@@ -1913,6 +1989,7 @@ export function apply(ctx, config = {}) {
             inboxRootDefault: inboxRoot(dshHome),
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
             prefs,
+            tokens: summarize(await state.loadTokens()),
             peers: await state.loadPeers(),
             counters: { ...counters },
             approvals: approvals.list(),
@@ -2076,6 +2153,28 @@ export function apply(ctx, config = {}) {
           }
           const prefs = await state.savePrefs(patch);
           json(res, 200, { ok: true, prefs });
+        },
+      },
+      {
+        // The token ledger: read it, zero it, or change how long a window lasts (1..30 days).
+        // The card and `/tokens` both go through here, so they cannot disagree.
+        kind: "exact",
+        path: "/dsh-wechat-media/tokens",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          if (asBool(body.reset) === true) {
+            await state.resetTokens();
+            noteRoute("/tokens", { action: "reset" });
+          }
+          if (body.windowDays !== undefined && body.windowDays !== "") {
+            const requested = Number(body.windowDays);
+            if (!Number.isFinite(requested)) return json(res, 400, { error: `windowDays must be a number, got "${body.windowDays}"` });
+            await state.setTokenWindow(requested);
+            noteRoute("/tokens", { action: "window", requested, applied: clampWindowDays(requested) });
+          }
+          json(res, 200, { ok: true, tokens: summarize(await state.loadTokens()) });
         },
       },
       {

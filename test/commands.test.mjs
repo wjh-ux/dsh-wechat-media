@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, parseSwitch, statusText, unknownCommandText } from "../commands.js";
+import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
 
 let passed = 0;
 let failed = 0;
@@ -74,6 +74,38 @@ test("an unknown command answer names it and then teaches the list", () => {
   const text = unknownCommandText("deploy");
   assert.match(text, /未知命令 \/deploy/);
   assert.match(text, /\/help/);
+});
+
+console.log("-- the token window --");
+
+test("/tokens takes a number of days, with or without a unit", () => {
+  assert.equal(parseWindowDays("7"), 7);
+  assert.equal(parseWindowDays(" 30 "), 30);
+  assert.equal(parseWindowDays("7天"), 7);
+  assert.equal(parseWindowDays("14 d"), 14);
+  assert.equal(parseWindowDays("1"), 1);
+  // Out of range is passed through: the command clamps it and tells the user what it did,
+  // which is more honest than silently ignoring 99.
+  assert.equal(parseWindowDays("99"), 99);
+  assert.equal(parseWindowDays(""), undefined);
+  assert.equal(parseWindowDays("reset"), undefined);
+  assert.equal(parseWindowDays("一周"), undefined, "no guesswork about Chinese units");
+});
+
+test("/tokens is a command, and its aliases work", () => {
+  assert.equal(parseCommand("/tokens").name, "tokens");
+  assert.equal(parseCommand("/tokens reset").args, "reset");
+  assert.equal(parseCommand("/tokens 7").args, "7");
+  assert.equal(parseCommand("/用量").name, "tokens");
+  assert.equal(parseCommand("/token 30").name, "tokens");
+});
+
+test("status carries the token line when it is given one", () => {
+  const withLine = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s", tokenLine: "Token 统计（7 天窗口）：共 1.5 万 · 3 次调用 · 2 天后清零" });
+  assert.match(withLine, /Token 统计（7 天窗口）/);
+  assert.match(withLine, /\/tokens/, "the command list points at it");
+  const without = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s" });
+  assert.doesNotMatch(without, /Token 统计/, "no line when the caller has none to give");
 });
 
 console.log("-- the friends-only switch --");

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.0
+
+- **Per-account token accounting.** The bridge now records what each WeChat/WeCom account spends, per **model
+  call**, from the `usage` the harness reports on the `assistant/message` session event (the numbers the model
+  adapter returned - nothing is estimated): input, output, cached and reasoning tokens plus a call count, per
+  account and per chat inside it, in `$DSH_HOME/dsh-wechat-media/tokens.json`. Only counters are stored; no
+  prompt and no reply ever lands in that file.
+- **A self-clearing window of 1 to 30 days** (default 30). The reset is applied lazily whenever the ledger is
+  read or written, so a host that was switched off for a week opens a fresh window instead of reporting a stale
+  one - and `resets`/`lastResetAt` only move when there was something to zero, so the numbers never claim a
+  reset that did not happen.
+- **Three ways to look at it**: the card's new **Token usage** section (one row per account, a window picker of
+  1/3/7/14/30 days and *Clear now*), `/tokens` in a chat (`/tokens reset`, `/tokens 7` - clamped to 1..30 with
+  an honest message when it has to clamp), and one line inside `/status`. The card and the command drive the
+  same file through the same route, so they cannot disagree.
+- New module `tokens.js` (pure: window arithmetic, accumulation, formatting) with 14 of its own tests, and a
+  wiring guard that fails if the collector stops feeding usage or if the snapshot loses the ledger.
+- 222 tests across 16 suites.
+
 ## 0.8.1
 
 - **The WeCom debug route can now synthesise a group message.** `GET /dsh-wechat-media/wecom/inbound-test?chatId=…&text=…&chatType=group`

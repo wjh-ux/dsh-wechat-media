@@ -16,6 +16,7 @@
  *   routes.json                       { "<accountId>": { "<chatId>": { sessionId, ... } } }
  *   peers.json                        { "<accountId>": { "<chatId>": { allowed, ... } } }
  *   prefs.json                        { autoReply, mediaDir, maxMediaMiB, ... }
+ *   tokens.json                       { windowDays, windowStartedAt, accounts: { … } }
  *
  * Account ids are stored normalized (`b0f5860fdecb@im.bot` -> `b0f5860fdecb-im-bot`)
  * because the platform hands out the raw form in one place and the normalized
@@ -26,6 +27,7 @@
  */
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { accumulate, due, reset, setWindow } from "./tokens.js";
 
 /** Directory name under $DSH_HOME. */
 const STATE_DIR_NAME = "dsh-wechat-media";
@@ -246,6 +248,44 @@ export class WechatState {
     await this.init();
     await writeJson(join(this.root, "prefs.json"), merged);
     return merged;
+  }
+
+  // ── token ledger ──────────────────────────────────────────────────────────
+
+  /**
+   * The per-account token counters, with the window's expiry already applied.
+   *
+   * The reset is lazy on purpose: a host that was off for a week zeroes its counters on the
+   * next read or write instead of depending on a timer that would have missed the moment
+   * anyway (and that a restart would forget).
+   */
+  async loadTokens(now = Date.now()) {
+    const file = await readJson(join(this.root, "tokens.json"), undefined);
+    return due(file, now);
+  }
+
+  /** Add one model call's usage. Returns the ledger that was written. */
+  async addTokens({ accountId, chatId, usage, now = Date.now() } = {}) {
+    const updated = accumulate(await this.loadTokens(now), { accountId, chatId, usage, now });
+    await this.init();
+    await writeJson(join(this.root, "tokens.json"), updated);
+    return updated;
+  }
+
+  /** Zero the counters now (manual reset), keeping the window length and the account list. */
+  async resetTokens({ now = Date.now(), windowDays } = {}) {
+    const updated = reset(await this.loadTokens(now), { now, windowDays });
+    await this.init();
+    await writeJson(join(this.root, "tokens.json"), updated);
+    return updated;
+  }
+
+  /** Change the window length (1..30 days) and re-anchor it so the change is immediate. */
+  async setTokenWindow(windowDays, { now = Date.now() } = {}) {
+    const updated = setWindow(await this.loadTokens(now), windowDays, { now });
+    await this.init();
+    await writeJson(join(this.root, "tokens.json"), updated);
+    return updated;
   }
 
   // ── WeCom (企业微信) ───────────────────────────────────────────────────────

@@ -37,12 +37,31 @@ export const COMMANDS = [
     summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
   },
   {
+    name: "tokens",
+    aliases: ["token", "用量"],
+    usage: "/tokens [reset|1-30]",
+    summary: "各账号 Token 用量：直接看、reset 清零、给天数改清零窗口（1–30 天）",
+  },
+  {
     name: "stop",
     aliases: ["cancel", "停止"],
     usage: "/stop",
     summary: "打断这条会话里正在跑的回合",
   },
 ];
+
+/**
+ * Read a token window (1..30 days) out of a command's arguments.
+ *
+ * @returns {number|undefined} the requested number of days, or undefined when the argument
+ *   is not a number at all (so the caller can answer with the usage instead of guessing).
+ */
+export function parseWindowDays(args) {
+  const text = String(args ?? "").trim();
+  if (!/^\d{1,3}\s*(天|d|day|days)?$/i.test(text)) return undefined;
+  const days = Number.parseInt(text, 10);
+  return Number.isFinite(days) ? days : undefined;
+}
 
 /**
  * Read a switch out of a command's arguments.
@@ -130,6 +149,7 @@ function size(bytes) {
  * @param {number} [input.pendingApprovals] questions waiting for a 1/2 answer
  * @param {boolean} [input.friendOnly] the "only answer friends" switch
  * @param {number} [input.groupsSkipped] how many group messages that switch has dropped
+ * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
  */
@@ -143,6 +163,7 @@ export function statusText({
   bot,
   pendingApprovals = 0,
   friendOnly = false,
+  tokenLine,
   lastInboundAt,
   inbox,
 } = {}) {
@@ -168,6 +189,7 @@ export function statusText({
   );
   if (lastInboundAt) lines.push(`最近一条消息：${lastInboundAt}`);
   if (inbox) lines.push(`媒体目录：${inbox}`);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends");
+  if (tokenLine) lines.push(tokenLine);
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /tokens");
   return lines.join("\n");
 }

@@ -163,5 +163,21 @@ test("the friends-only switch is on the card, in both languages, wired to the ho
   assert.match(host, /command\.name === "friends"/, "the /friends command must be handled");
 });
 
+test("the token card reads the ledger and can steer it", () => {
+  assert.match(code, /t\("tokensTitle"/, "the section must be labelled through the translator");
+  assert.match(code, /api\(`\/tokens\?windowDays=/, "the window picker must save to the host's tokens route");
+  assert.match(code, /api\("\/tokens\?reset=true"\)/, "the clear button must hit the reset");
+  assert.match(code, /snapshot\?\.tokens\?\.accounts/, "the rows must come from the ledger snapshot");
+  for (const key of ["tokensTitle", "tokenNextReset", "tokenWindowLabel", "tokenReset", "tokenEmpty", "tokenIn", "tokenOut", "calls", "days"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /path: "\/dsh-wechat-media\/tokens"/, "the host must serve the tokens route");
+  assert.match(host, /state\.resetTokens\(/, "...and be able to zero the ledger");
+  assert.match(host, /state\.setTokenWindow\(/, "...and to change the window");
+  assert.match(host, /tokens: summarize\(await state\.loadTokens\(\)\)/, "the snapshot must carry the summary");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
