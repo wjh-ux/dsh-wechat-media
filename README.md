@@ -302,12 +302,19 @@ the platform can actually show:
 | Target | Audio | What arrives |
 |---|---|---|
 | WeCom | `amr` (default), mp3, wav | a **voice bubble** (verified by ear) |
-| personal WeChat | `silk` (the default here) | a **voice bubble** - SILK is produced by the vendored MIT encoder |
-| personal WeChat | anything else | an **audio file** - it arrives and it plays |
+| personal WeChat | anything | an **audio file** - it arrives and it plays |
 
-The SILK encoder is [`silk-wasm`](https://www.npmjs.com/package/silk-wasm) 3.7.1 (MIT), vendored under
-`vendor/silk-wasm/` with its licence and the hash it was verified against; see [THIRD-PARTY.md](./THIRD-PARTY.md). It is
-the one piece of third-party code this plugin carries, and it is what turns "an audio file" into a real voice bubble.
+**A voice bubble is not deliverable on personal WeChat, and that is measured rather than assumed:** Tencent's own
+OpenClaw WeChat channel never sends the `VOICE` media type at all (image/video/file only), the equivalent issue in
+another implementation has been open and labelled `blocked` for months, and two live attempts here - mp3 inside an
+open conversation window, then SILK with `playtime` - were each accepted by the API and then dropped by the client.
+So the tool says what actually happens instead of promising a bubble.
+
+The vendored codec is used for the **other** direction, which does work: WeChat *sends* voice as SILK, and nothing
+else on a normal machine can play it, so an incoming voice message is decoded to a **playable WAV** in the inbox
+(`silkToWav()`, falling back to the raw `.silk` if decoding fails). That is the same use Tencent's own channel makes
+of [`silk-wasm`](https://www.npmjs.com/package/silk-wasm) 3.7.1 (MIT), vendored under `vendor/silk-wasm/` with its
+licence and the hash it was verified against; see [THIRD-PARTY.md](./THIRD-PARTY.md).
 
 `playtime` is read from the finished file with `ffprobe` (0 when it cannot be read, and the item then falls back to
 its minimum - never an invented number). The tool's reply says which of the two happened, so "sent" never quietly

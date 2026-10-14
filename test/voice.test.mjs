@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 
-import { VOICE_FORMATS, probeDurationSec, quotePowerShell, synthesizeVoice, voiceDeliveryFor, voiceScript, voiceSupport } from "../voice.js";
+import { VOICE_FORMATS, pcmToWav, probeDurationSec, quotePowerShell, silkToWav, synthesizeVoice, voiceDeliveryFor, voiceScript, voiceSupport } from "../voice.js";
 
 let passed = 0;
 let failed = 0;
@@ -125,7 +125,9 @@ await test("a voice bubble is only promised where the platform can decode it", (
   // voice item is accepted and then dropped (measured: text arrived, the voice did not). WeCom takes AMR.
   assert.equal(voiceDeliveryFor({ platform: "wecom", extension: "amr" }), "bubble");
   assert.equal(voiceDeliveryFor({ platform: "wecom", extension: "mp3" }), "bubble");
-  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "silk" }), "bubble");
+  // Measured, not preferred: WeChat voice items are accepted and then dropped by the client, Tencent's own
+  // WeChat channel never sends the VOICE media type at all, and the equivalent issue elsewhere is `blocked`.
+  assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "silk" }), "file");
   assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "mp3" }), "file");
   assert.equal(voiceDeliveryFor({ platform: "wechat", extension: ".amr" }), "file");
   assert.equal(voiceDeliveryFor({ platform: "wechat", extension: "wav" }), "file");
@@ -171,6 +173,36 @@ await test("the vendored encoder is recorded, not just dropped in", async () => 
   assert.match(readme, /sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==/, "the verified hash must be recorded");
   const licence = await readFile(new URL("../vendor/silk-wasm/LICENSE", import.meta.url), "utf8");
   assert.match(licence, /MIT|Permission is hereby granted/i);
+});
+await test("raw PCM is wrapped in a WAV container a player understands", () => {
+  const pcm = Buffer.alloc(1000, 3);
+  const wav = pcmToWav(pcm, 24_000);
+  assert.equal(wav.subarray(0, 4).toString("ascii"), "RIFF");
+  assert.equal(wav.subarray(8, 12).toString("ascii"), "WAVE");
+  assert.equal(wav.readUInt16LE(20), 1, "PCM format");
+  assert.equal(wav.readUInt16LE(22), 1, "mono");
+  assert.equal(wav.readUInt32LE(24), 24_000);
+  assert.equal(wav.readUInt16LE(34), 16, "16-bit samples");
+  assert.equal(wav.readUInt32LE(40), pcm.length, "data chunk length");
+  assert.equal(wav.length, 44 + pcm.length);
+  assert.equal(wav.readUInt32LE(4), 36 + pcm.length, "RIFF size");
+});
+
+await test("an incoming SILK voice message decodes into playable WAV", async () => {
+  // The reason the codec is vendored: WeChat *sends* SILK, and nothing else here can play it.
+  const support = await voiceSupport();
+  if (!support.silk) throw skip("no SILK codec or no ffmpeg on this machine");
+  const silk = await synthesizeVoice({ text: "这是一条入站语音解码测试。", format: "silk" });
+  try {
+    const decoded = await silkToWav(await readFile(silk.path));
+    assert.equal(decoded.wav.subarray(0, 4).toString("ascii"), "RIFF");
+    assert.equal(decoded.wav.subarray(8, 12).toString("ascii"), "WAVE");
+    assert.ok(decoded.wav.length > 10_000, `expected real audio, got ${decoded.wav.length} bytes`);
+    assert.ok(decoded.seconds > 0.3, `plausible duration, got ${decoded.seconds}`);
+  } finally {
+    await silk.cleanup();
+  }
+  await assert.rejects(() => silkToWav(Buffer.alloc(0)), /nothing to decode/);
 });
 console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ""}`);
 process.exit(failed === 0 ? 0 : 1);

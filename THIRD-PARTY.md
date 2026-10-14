@@ -19,10 +19,11 @@ bridge has to render the QR code itself.
 upstream `LICENSE` beside them and a `README.md` recording the registry hash they were verified against
 (`sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==`).
 
-It exists for one reason: **WeChat renders a voice bubble only for Tencent's SILK codec**, and ffmpeg cannot encode
-SILK. Without it a synthesized voice message is accepted by the platform and then dropped by the client; with it the
-bubble works. Vendored rather than declared as a dependency because this plugin is installed as a directory - an
-`npm install` never runs.
+It exists for the **incoming** direction: WeChat delivers voice as SILK and nothing else on a normal machine can
+play it, so an inbound voice message is decoded to a playable WAV (`silkToWav()`), falling back to the raw `.silk`. The
+same use is made of this module by Tencent's own WeChat channel. (The *outgoing* direction cannot use it: a WeChat
+voice bubble is not deliverable through this API - see the README.) Vendored rather than declared as a dependency,
+because this plugin is installed as a directory and an `npm install` never runs.
 ## `ilink.js`
 
 The iLink bot protocol implementation was ported to JavaScript from

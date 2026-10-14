@@ -24,7 +24,7 @@
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -85,7 +85,7 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
-import { synthesizeVoice, voiceDeliveryFor, voiceSupport } from "./voice.js";
+import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -1602,7 +1602,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -2176,7 +2176,23 @@ export function apply(ctx, config = {}) {
         });
         counters.mediaDownloaded += 1;
         counters.mediaBytes += Number(saved.bytes) || 0;
-        lines.push(describeForModel(saved));
+        // A voice message arrives as SILK, which nothing on a normal machine can play. The vendored codec
+        // turns it into WAV - the same use Tencent's own WeChat channel makes of the same module - and a
+        // failure leaves the raw SILK in place rather than losing it.
+        let usable = saved;
+        if (saved?.kind === "voice" || /\.silk$/i.test(String(saved?.path ?? ""))) {
+          try {
+            const decoded = await silkToWav(await readFile(saved.path));
+            const wavPath = String(saved.path).replace(/\.silk$/i, "") + ".wav";
+            await writeFile(wavPath, decoded.wav);
+            usable = { ...saved, path: wavPath, bytes: decoded.wav.length, seconds: decoded.seconds };
+            counters.voiceDecoded += 1;
+            ctx.logger?.info?.("[dsh-wechat-media] inbound voice decoded to WAV: %s (%s s)", wavPath, decoded.seconds);
+          } catch (error) {
+            ctx.logger?.warn?.("[dsh-wechat-media] inbound voice kept as SILK: %s", error?.message ?? error);
+          }
+        }
+        lines.push(describeForModel(usable));
       } catch (error) {
         counters.mediaFailed += 1;
         lines.push(`[微信媒体下载失败] ${item?.type ?? "media"}: ${error?.message ?? error}`);
@@ -2493,7 +2509,7 @@ export function apply(ctx, config = {}) {
           text: { type: "string", description: "What to say. Spoken locally, no cloud service involved." },
           path: { type: "string", description: "Absolute path of an existing audio file, used when `text` is not given." },
           to: { type: "string", description: "WeChat wxid or group id; omit to use the most recent conversation." },
-            format: { type: "string", description: "silk (default when the encoder is present - that is what a WeChat voice bubble needs), mp3, amr or wav." },
+            format: { type: "string", description: "mp3 (default), amr or wav. The audio is delivered as a playable file: WeChat voice bubbles are not deliverable through this API." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 300000,
@@ -2504,10 +2520,9 @@ export function apply(ctx, config = {}) {
           const { account, chatId } = await resolvePeer(args.to ? String(args.to).trim() : undefined);
           let audio;
           if (spoken) {
-            // SILK first where it is available, because that is the only thing WeChat renders as a voice
-            // bubble; otherwise mp3, which the delivery rule sends as a file that still plays.
-            const support = await voiceSupport();
-            const wanted = String(args?.format ?? "").trim() || (support.silk ? "silk" : "mp3");
+            // mp3 by default: a WeChat voice *bubble* is not deliverable through this API (see
+            // voiceDeliveryFor), so the audio goes as a file that really does arrive and play.
+            const wanted = String(args?.format ?? "").trim() || "mp3";
             try {
               audio = await synthesizeVoice({ text: spoken, format: wanted });
             } catch (error) {

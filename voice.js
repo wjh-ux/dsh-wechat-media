@@ -290,9 +290,64 @@ export async function probeDurationSec({ path = "", ffprobe = DEFAULT_FFPROBE } 
  * @returns {"bubble" | "file"}
  */
 export function voiceDeliveryFor({ platform = "wechat", extension = "" } = {}) {
-  const ext = String(extension ?? "").toLowerCase().replace(/^\./, "");
   if (platform === "wecom") return "bubble";
-  return ext === "silk" ? "bubble" : "file";
+  // Personal WeChat never gets a bubble, and that is a measured platform limit rather than a preference:
+  // Tencent's own OpenClaw WeChat channel never sends the VOICE media type at all (image/video/file only),
+  // the equivalent issue in another implementation has been open and `blocked` for months, and two live
+  // attempts here - mp3 inside an open conversation window, then SILK with `playtime` - were both accepted by
+  // the API and then dropped by the client. Audio goes as a file, which really does arrive and play.
+  return "file";
+}
+
+/**
+ * Wrap raw PCM in a WAV header.
+ *
+ * `silk-wasm`'s decoder returns bare `pcm_s16le`; a WAV container is what a player (and the model's tooling)
+ * expects. Pure, so the header can be asserted byte for byte.
+ *
+ * @param {Uint8Array | Buffer} pcm mono 16-bit little-endian samples
+ * @param {number} [sampleRate]
+ * @returns {Buffer}
+ */
+export function pcmToWav(pcm, sampleRate = 24_000) {
+  const data = Buffer.from(pcm ?? []);
+  const rate = Math.max(1, Number(sampleRate) || 24_000);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // format: PCM
+  header.writeUInt16LE(1, 22); // channels: mono
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28); // byte rate = rate * channels * bytesPerSample
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+/**
+ * Decode a SILK voice message into playable WAV.
+ *
+ * This is the direction the codec is genuinely needed for: WeChat *sends* voice as SILK, and nothing else on a
+ * normal machine can play it. Tencent's own OpenClaw WeChat channel vendors `silk-wasm` for exactly this
+ * (decoding incoming voice), which is why the same module is vendored here.
+ *
+ * @param {Uint8Array | Buffer} silk
+ * @param {{ sampleRate?: number }} [options]
+ * @returns {Promise<{ wav: Buffer, seconds: number }>}
+ */
+export async function silkToWav(silk, { sampleRate = 24_000 } = {}) {
+  const input = Buffer.from(silk ?? []);
+  if (!input.length) throw new Error("nothing to decode: the SILK buffer is empty");
+  const { decode } = await loadSilk();
+  const result = await decode(input, sampleRate);
+  if (!result?.data?.length) throw new Error("the codec decoded nothing");
+  const wav = pcmToWav(result.data, sampleRate);
+  return { wav, seconds: Number(result.duration) ? Math.round(Number(result.duration) / 10) / 100 : 0 };
 }
 
 /** Read a produced voice file back (used by tests and by a caller that wants the bytes). */

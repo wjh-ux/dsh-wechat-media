@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.1
+
+- **Correction: v0.19.0 claimed a personal-WeChat voice bubble, and that is not deliverable.** The claim was wrong and
+  is withdrawn. Three pieces of evidence, gathered rather than assumed:
+  - **Tencent's own** OpenClaw WeChat channel (`@tencent-weixin/openclaw-weixin` 2.4.10, tarball hash verified)
+    contains **zero** occurrences of the `VOICE` upload/send type - it sends image, video and file only, and uses
+    `silk-wasm` solely to **decode incoming** voice;
+  - the equivalent issue in another implementation (`NousResearch/hermes-agent#9971`) is still open and labelled
+    **`blocked`**;
+  - two live attempts here - mp3 inside an open conversation window, then SILK with `playtime` - were each accepted
+    by the API and then dropped by the client.
+  `voiceDeliveryFor()` therefore sends audio as a **file** on personal WeChat (it arrives and it plays; verified),
+  and the tool says so instead of promising a bubble. What was already true stays true: WeCom really does show a voice
+  bubble, verified by ear.
+- **The vendored codec now earns its place in the other direction.** An incoming voice message is SILK, which nothing
+  on a normal machine can play, so it is decoded to a **playable WAV** in the inbox (`silkToWav()`, with a pure
+  `pcmToWav()` header writer), falling back to the raw `.silk` when decoding fails - exactly the use Tencent's own
+  channel makes of the same module. `counters.voiceDecoded` records it.
+- 286 tests across 19 suites, including a SILK round trip (encode, then decode back to a WAV whose header is asserted)
+  and the corrected delivery rule.
+
 ## 0.19.0
 
 - **Personal WeChat can now send a real voice bubble.** A WeChat voice bubble requires Tencent's **SILK** codec and
