@@ -664,7 +664,7 @@ export class ReplyCollector {
       // the WeCom streamer); a delta that cannot be shown must never break the reply.
       if (frame?.type !== "text-delta" || !frame.text) return;
       try {
-        this.onDelta?.({ text: String(frame.text) });
+        this.onDelta?.({ text: String(frame.text), type: String(frame.type) });
       } catch {
         /* never let a preview take the answer down */
       }
@@ -832,7 +832,11 @@ export function apply(ctx, config = {}) {
      * turn of the same conversation, say) has no account to charge and is skipped rather
      * than guessed at.
      */
-    onDelta: ({ text }) => {
+    onDelta: ({ text, type }) => {
+      // Counted before anything else: if the preview never appears, /state must be able to say
+      // whether the deltas arrived at all, rather than leaving it a mystery.
+      counters.streamDeltas += 1;
+      lastStreamFrame = { type: type ?? "?", at: new Date().toISOString() };
       activeStreamer?.push(text);
     },
     onUsage: ({ sessionId, usage }) => {
@@ -1274,6 +1278,9 @@ export function apply(ctx, config = {}) {
    */
   let activeStreamer;
 
+  /** The last live frame the adapter sent, for `/state` (see counters.streamDeltas). */
+  let lastStreamFrame = null;
+
   /**
    * Show a WeCom answer while it is being written.
    *
@@ -1291,10 +1298,19 @@ export function apply(ctx, config = {}) {
         const parts = splitForStream(live.text);
         // A preview that no longer fits one stream body is skipped rather than truncated: the
         // final send carries the whole answer, and a cut-off preview would look like data loss.
-        if (parts.length > 1) return;
+        if (parts.length > 1) {
+          counters.streamRefused += 1;
+          return;
+        }
         const part = parts[0] ?? "";
-        if (!part) return;
-        if (wecomBot?.reply(frame, streamBody(live.reqId, part, false)) === false) return;
+        if (!part) {
+          counters.streamRefused += 1;
+          return;
+        }
+        if (wecomBot?.reply(frame, streamBody(live.reqId, part, false)) === false) {
+          counters.streamRefused += 1;
+          return;
+        }
         live.sent = live.text.length;
         live.at = Date.now();
         live.chunks += 1;
@@ -1356,7 +1372,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -2343,6 +2359,9 @@ export function apply(ctx, config = {}) {
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
             prefs,
             tokens: summarize(await state.loadTokens()),
+            // Why a live preview did or did not appear: deltas seen, previews sent, previews the
+            // streamer refused, and the shape of the last frame.
+            stream: { deltas: counters.streamDeltas, chunks: counters.streamChunks, refused: counters.streamRefused, lastFrame: lastStreamFrame },
             // A counter that stopped counting must be visible, not inferred from the numbers.
             tokenAccountingError,
             peers: await state.loadPeers(),

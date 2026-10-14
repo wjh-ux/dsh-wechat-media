@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.1
+
+- **The streaming preview still does not appear, and this release makes that diagnosable instead of mysterious.**
+  Measured live on v0.13.0: `/delivery stream` ran a turn in 4543 ms and `counters.streamChunks` stayed 0, while
+  `/delivery whole` correctly sent nothing extra - so the mode gating works, but no preview frame is produced. The
+  newest session transcript contains **no incremental event at all** (`assistant/message` carries a `stream`
+  field written when the step settles), which rules out sourcing deltas from `session/event`; the live source has to
+  be the harness's `agent/assistant-stream` frame, and whether those frames reach a plugin listener is exactly what
+  was unproven.
+- `/state.stream` now reports `{ deltas, chunks, refused, lastFrame }`: deltas seen from the adapter, previews
+  actually sent, previews the streamer refused (an over-long preview or an unwritable socket), and the shape of the
+  last frame received. The next run says in one line where the chain stops - no more guessing.
+- `splitForStream`'s body limit (20480 bytes) was verified not to be the cause: a 24-character preview is a single
+  part, so the "skip rather than truncate" guard cannot be swallowing every preview.
+- 245 tests across 17 suites.
+
 ## 0.13.0
 
 - **New: delivery mode - whole answers or word by word.** A menu in the card and `/delivery whole|stream` in the
