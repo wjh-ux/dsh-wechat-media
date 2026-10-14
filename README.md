@@ -144,7 +144,12 @@ exactly as on the personal-WeChat side. The agent gets two extra tools:
 | Tool | Purpose |
 |---|---|
 | `wecom_send_text` | Send text or markdown through the configured robot, long connection or app (`to` overrides the recipients). |
-| `wecom_send_file` | Upload and send a local file (app); with only a robot, images work and other types are refused with an explanation. |
+| `wecom_send_file` | Send a local file as image / file / voice / video. Over the long connection (or through a self-built app) any type works; with only a group-robot webhook, images do. |
+
+Files travel the other way too: a file sent to the robot is uploaded as a temporary WeCom asset over the long
+connection (init -> 512 KiB chunks -> finish -> `media_id`) and then sent, so no app credentials are needed. Uploads
+are capped at 100 chunks (~50 MB) and each chunk is retried twice, which is what the platform tolerates; a failure is
+reported back instead of being swallowed.
 
 Settings live in `$DSH_HOME/dsh-wechat-media/wecom.json` with mode `0600` - they contain a webhook key, a corpsecret
 and the robot secret, so they never go into `prefs.json` or a cordis patch. `GET /dsh-wechat-media/state` reports

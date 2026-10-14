@@ -1130,6 +1130,66 @@ export function apply(ctx, config = {}) {
     }
     return { via: "long-connection", kind: "markdown", to: chatId };
   }
+
+  /**
+   * Send a local file through whichever WeCom path is configured.
+   *
+   * Order: the intelligent-robot long connection (upload as a temporary asset, then send
+   * it - no app credentials needed), then the self-built app (media/upload), then the
+   * group-robot webhook (images only). The long connection is what makes the tool work on
+   * a bot-only setup, which is how this machine is configured.
+   */
+  async function wecomSendMedia({ filePath, to, text } = {}) {
+    const prepared = await prepareOutbound(String(filePath ?? "").trim(), { maxBytes: maxMediaBytes });
+    const config = await state.loadWecom();
+    const type = wecom.wecomUploadType(prepared.path);
+
+    const hasApp = Boolean(config.corpSecret && config.agentId);
+    const accountId = wecomAccountId(config.botId);
+    const botChat = String(to ?? "").trim() || lastInbound.get(accountId)?.chatId || "";
+
+    if (!hasApp && wecomBot && wecomBotStatus.authenticated && botChat) {
+      if (text) await sendWecomProactive(botChat, text);
+      const uploaded = await wecomBot.uploadMedia(await readFile(prepared.path), {
+        type,
+        filename: prepared.name,
+        timeoutMs: 120000,
+      });
+      await wecomBot.sendMediaMessage(botChat, type, uploaded.mediaId, { title: prepared.name });
+      return { via: "long-connection", kind: type, to: botChat, bytes: prepared.bytes, chunks: uploaded.chunks };
+    }
+
+    if (hasApp) {
+      const token = await wecomToken(config);
+      const recipients = to ?? config.toUser;
+      if (text) {
+        await wecom.sendAppMessage({ token, agentId: config.agentId, toUser: recipients, payload: wecom.appTextPayload(String(text)), timeoutMs: wecomTimeoutMs });
+      }
+      const { mediaId } = await wecom.uploadMedia({ token, filePath: prepared.path, type, timeoutMs: wecomTimeoutMs });
+      await wecom.sendAppMessage({
+        token,
+        agentId: config.agentId,
+        toUser: recipients,
+        payload: wecom.appMediaPayload(type, mediaId),
+        timeoutMs: wecomTimeoutMs,
+      });
+      return { via: "app", kind: type, to: recipients, bytes: prepared.bytes };
+    }
+
+    const webhookUrl = String(config.webhookUrl ?? "").trim();
+    if (!webhookUrl) {
+      throw new Error(
+        wecomBot && wecomBotStatus.authenticated
+          ? "no WeCom chat to send to yet: write to the robot once, or pass `to`"
+          : "WeCom is not configured: set a group-robot webhook, corpid/corpsecret/agentid, or the intelligent-robot long connection",
+      );
+    }
+    if (type !== "image") {
+      throw new Error(`a group-robot webhook can only send images; ${prepared.name} looks like ${type}`);
+    }
+    await wecom.sendWebhook({ webhookUrl, payload: wecom.imagePayload(await readFile(prepared.path)), timeoutMs: wecomTimeoutMs });
+    return { via: "webhook", kind: "image", to: "group-robot webhook", bytes: prepared.bytes };
+  }
   /**
    * The last few control-route calls, so "I clicked and nothing happened" can be
    * answered from the server side: did the request arrive, and what did it do?
@@ -1481,44 +1541,27 @@ export function apply(ctx, config = {}) {
         const wecomFile = define({
           name: "wecom_send_file",
           description:
-            "Send a local file through WeCom (企业微信). With a self-built app it is uploaded and sent as image/file/video/voice; with only a group-robot webhook, images are supported and other types are refused with an explanation.",
+            "Send a local file through WeCom (企业微信). Over the intelligent-robot long connection (or with a self-built app) it is uploaded and sent as image/file/video/voice; with only a group-robot webhook, images are supported and other types are refused with an explanation.",
           parameters: {
             path: { type: "string", required: true, description: "Absolute path of the local file." },
-            to: { type: "string", description: "Application recipients; app path only." },
+            to: { type: "string", description: "The chat id for a long-connection send, or the WeCom recipients (userid list, department, @all) for the app path." },
             text: { type: "string", description: "Optional text message sent before the file." },
           },
           output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
-          timeoutMs: 180000,
+          timeoutMs: 300000,
           async execute(args) {
             const filePath = String(args?.path ?? args?.filePath ?? "");
             if (!filePath) return "nothing to send: `path` is empty";
-            const config = await state.loadWecom();
-            const type = wecom.wecomUploadType(filePath);
-            const hasApp = Boolean(config.corpSecret && config.agentId);
-            if (!hasApp) {
-              const webhookUrl = String(config.webhookUrl ?? "").trim();
-              if (!webhookUrl) return "WeCom is not configured: set a group-robot webhook, or corpid/corpsecret/agentid for files";
-              if (type !== "image") {
-                return `a group-robot webhook can only send images; ${filePath} looks like ${type}. Configure corpid/corpsecret/agentid to send it.`;
-              }
-              await wecom.sendWebhook({ webhookUrl, payload: wecom.imagePayload(await readFile(filePath)), timeoutMs: wecomTimeoutMs });
-              noteRoute("/wecom", { via: "webhook", kind: "image" });
+            try {
+              const sent = await wecomSendMedia({ filePath, to: args?.to, text: args?.text });
+              noteRoute("/wecom", sent);
+              if (sent.via === "long-connection") return `sent ${filePath} as ${sent.kind} over the WeCom long connection to ${sent.to}`;
+              if (sent.via === "app") return `sent ${filePath} as ${sent.kind} through the WeCom app to ${sent.to}`;
               return `sent ${filePath} as an image to the WeCom group robot`;
+            } catch (error) {
+              noteRoute("/wecom", { action: "send-file", error: String(error?.message ?? error) });
+              return `could not send ${filePath}: ${error?.message ?? error}`;
             }
-            const token = await wecomToken(config);
-            if (args?.text) {
-              await wecom.sendAppMessage({ token, agentId: config.agentId, toUser: args?.to ?? config.toUser, payload: wecom.appTextPayload(String(args.text)), timeoutMs: wecomTimeoutMs });
-            }
-            const { mediaId } = await wecom.uploadMedia({ token, filePath, type, timeoutMs: wecomTimeoutMs });
-            await wecom.sendAppMessage({
-              token,
-              agentId: config.agentId,
-              toUser: args?.to ?? config.toUser,
-              payload: wecom.appMediaPayload(type, mediaId),
-              timeoutMs: wecomTimeoutMs,
-            });
-            noteRoute("/wecom", { via: "app", kind: type });
-            return `sent ${filePath} as ${type} through the WeCom app`;
           },
         });
 

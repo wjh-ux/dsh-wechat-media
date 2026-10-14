@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0
+
+- **WeCom media now travels both ways.** `wecom_send_file` can upload a local file as a temporary WeCom asset and
+  send it as image / file / voice / video over the intelligent-robot **long connection** - no corpid/corpsecret/
+  agentid needed, which is what makes the tool work on a bot-only setup. The three-step handshake is the official
+  one (`@wecom/aibot-node-sdk` v1.0.7, `client.ts`): `aibot_upload_media_init` (`type`, `filename`, `total_size`,
+  `total_chunks`, `md5`) -> one `aibot_upload_media_chunk` per 512 KiB slice, base64 - up to 100 chunks (~50 MB),
+  sent with the same bounded concurrency the SDK uses because the platform answers `system error` to a burst, each
+  chunk retried twice -> `aibot_upload_media_finish` -> `media_id` -> `aibot_send_msg` (or `aibot_respond_msg` for a
+  passive reply) with the media body. Path preference is now long connection -> self-built app -> group-robot webhook
+  (images only), and a failure is reported to the caller instead of being swallowed.
+- **Fixed the request/response correlation the upload depends on.** The client matched answers through a guessed
+  `headers.reply_to`, which the platform never sends back for our own commands; it now matches the `req_id` we
+  invent, exactly as the SDK does. New `WecomBot#request()` rejects on a non-zero `errcode`, on a socket that is not
+  writable, and on silence after a timeout - so `uploadMedia` can actually obtain its `upload_id` and `media_id`.
+- **Fixed two awaited timers that were `unref()`ed** (the request timeout and the chunk-retry backoff). An unref'd
+  timer is not guaranteed to fire once nothing else keeps the event loop alive, so a request could hang forever
+  instead of timing out and a scheduled retry could never happen. A test that awaited them in isolation found it.
+- `test/wecom-bot.test.mjs` grew to 18 tests: the whole upload handshake against a fake server (frame shapes, the
+  md5 the platform checks, chunks reassembling to the file byte for byte, the 100-chunk cap, a refused chunk being
+  retried, a chunk that never succeeds, and the media reply/send bodies), plus the three failure modes of `request`.
+  176 tests total.
+
 ## 0.5.0
 
 - **WeCom images, files and videos are downloaded and decrypted now.** Until this release an inbound WeCom

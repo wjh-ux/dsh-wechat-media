@@ -6,6 +6,7 @@
  * Run: node test/wecom-bot.test.mjs
  */
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 
 import { CMDS, WecomBot, authFrame, botError, describeBotMessage, heartbeatFrame, markdownBody, mediaBody, parseFrame, replyFrame, sendFrame, splitForStream, streamBody, textBody } from "../wecom-bot.js";
 import { acceptKey, decodeFrames, encodeFrame } from "../ws-client.js";
@@ -215,6 +216,171 @@ await test("a server error is surfaced and the client reconnects", async () => {
   socket.emit("close", { code: 1006 });
   assert.ok(statuses.some((s) => s.attempts === 1), "a reconnect is scheduled");
   bot.close();
+});
+
+console.log("-- media upload (outbound) --");
+
+/**
+ * Drive a bot whose server side answers each upload step, so the whole handshake is
+ * exercised: the fake socket replies to whatever cmd it receives for our req_id.
+ */
+function connectedBot(handlers = {}) {
+  const bot = new WecomBot({ botId: "b", secret: "s", WebSocketImpl: FakeSocket, logger: { warn() {} }, ...handlers });
+  bot.connect();
+  const socket = FakeSocket.last;
+  socket.emit("open");
+  return { bot, socket, answer: (frame) => socket.emit("message", { data: JSON.stringify(frame) }) };
+}
+
+/**
+ * Answer every frame the client sends until `isDone()` says the handshake ended (or the
+ * deadline passes). Keeps the tests independent of how many frames a handshake needs and
+ * of how the chunks are interleaved by the bounded concurrency.
+ */
+async function serve(socket, answer, onFrame, { isDone = () => false, timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const handled = new Set();
+  while (Date.now() < deadline) {
+    for (const frame of socket.sent) {
+      const id = frame.headers?.req_id;
+      if (!id || handled.has(id)) continue;
+      handled.add(id);
+      onFrame(frame);
+    }
+    if (isDone()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 3));
+  }
+  return isDone();
+}
+
+const ok = (frame, body = {}) => ({ headers: { req_id: frame.headers.req_id }, errcode: 0, errmsg: "ok", body });
+const fail = (frame, errcode, errmsg) => ({ headers: { req_id: frame.headers.req_id }, errcode, errmsg });
+
+await test("uploadMedia runs init -> chunks -> finish and returns the media_id", async () => {
+  const { bot, socket, answer } = connectedBot();
+  const bytes = randomBytes(1200 * 1024); // 3 chunks at 512 KiB
+  const progress = [];
+  const seen = [];
+  let finished = false;
+  const promise = bot.uploadMedia(bytes, { type: "file", filename: "报告.zip", retryDelayMs: 5, onProgress: (p) => progress.push(p) });
+  await serve(socket, answer, (frame) => {
+    seen.push(frame);
+    if (frame.cmd === CMDS.UPLOAD_INIT) answer(ok(frame, { upload_id: "up-1" }));
+    else if (frame.cmd === CMDS.UPLOAD_FINISH) {
+      finished = true;
+      answer(ok(frame, { type: "file", media_id: "media-9", created_at: "now" }));
+    } else answer(ok(frame));
+  }, { isDone: () => finished });
+
+  const result = await promise;
+  assert.deepEqual(result, { mediaId: "media-9", uploadId: "up-1", chunks: 3, bytes: bytes.length, type: "file" });
+
+  const init = seen.find((f) => f.cmd === CMDS.UPLOAD_INIT);
+  assert.equal(init.body.type, "file");
+  assert.equal(init.body.filename, "报告.zip");
+  assert.equal(init.body.total_size, bytes.length);
+  assert.equal(init.body.total_chunks, 3);
+  assert.equal(init.body.md5, createHash("md5").update(bytes).digest("hex"), "the md5 the platform checks");
+
+  const chunks = seen.filter((f) => f.cmd === CMDS.UPLOAD_CHUNK).sort((a, b) => a.body.chunk_index - b.body.chunk_index);
+  assert.deepEqual(chunks.map((c) => c.body.chunk_index), [0, 1, 2]);
+  for (const chunk of chunks) {
+    assert.equal(chunk.body.upload_id, "up-1");
+    assert.ok(chunk.body.base64_data.length > 0);
+  }
+  assert.deepEqual(
+    Buffer.concat(chunks.map((c) => Buffer.from(c.body.base64_data, "base64"))),
+    bytes,
+    "the chunks reassemble to the file, byte for byte",
+  );
+  assert.equal(seen.filter((f) => f.cmd === CMDS.UPLOAD_FINISH).length, 1);
+  assert.equal(progress.length, 3);
+  bot.close();
+});
+
+await test("uploadMedia refuses an empty file and anything over 100 chunks", async () => {
+  const { bot } = connectedBot();
+  await assert.rejects(() => bot.uploadMedia(Buffer.alloc(0)), /nothing to upload/);
+  await assert.rejects(() => bot.uploadMedia(Buffer.alloc(100 * 512 * 1024 + 1)), /over the 100 limit/);
+  bot.close();
+});
+
+await test("uploadMedia retries a refused chunk instead of failing the upload", async () => {
+  const { bot, socket, answer } = connectedBot();
+  const bytes = Buffer.alloc(700, 1); // one chunk
+  let chunkAttempts = 0;
+  let refused = 0;
+  let finished = false;
+  const promise = bot.uploadMedia(bytes, { type: "image", filename: "a.png", retryDelayMs: 5 });
+  await serve(socket, answer, (frame) => {
+    if (frame.cmd === CMDS.UPLOAD_INIT) answer(ok(frame, { upload_id: "up-2" }));
+    else if (frame.cmd === CMDS.UPLOAD_CHUNK) {
+      chunkAttempts += 1;
+      // refuse the very first attempt once, as the platform does under load
+      if (refused === 0) {
+        refused += 1;
+        answer(fail(frame, 45009, "rate limit"));
+      } else answer(ok(frame));
+    } else if (frame.cmd === CMDS.UPLOAD_FINISH) {
+      finished = true;
+      answer(ok(frame, { type: "image", media_id: "m-img" }));
+    }
+  }, { isDone: () => finished });
+
+  const result = await promise;
+  assert.equal(result.mediaId, "m-img");
+  assert.equal(chunkAttempts, 2, "the refused chunk was retried rather than failing the whole upload");
+  bot.close();
+});
+
+await test("a chunk that keeps failing fails the whole upload with a readable message", async () => {
+  const { bot, socket, answer } = connectedBot();
+  // 600 KiB -> two chunks, so the message names the chunk it gave up on
+  const promise = bot.uploadMedia(Buffer.alloc(600 * 1024, 2), { type: "file", filename: "x.bin", retryDelayMs: 5 });
+  promise.catch(() => {}); // the rejection is asserted below, after the fake server has replied
+  await serve(socket, answer, (frame) => {
+    if (frame.cmd === CMDS.UPLOAD_INIT) answer(ok(frame, { upload_id: "up-3" }));
+    else if (frame.cmd === CMDS.UPLOAD_CHUNK) answer(fail(frame, 40001, "nope"));
+  }, { timeoutMs: 800 });
+  await assert.rejects(() => promise, /chunk \d+\/2 failed/);
+  bot.close();
+});
+
+await test("media replies and sends carry the right command and body", async () => {
+  const { bot, socket, answer } = connectedBot();
+  const inbound = { cmd: "aibot_msg_callback", headers: { req_id: "in-77" }, body: { msgid: "m1", chatid: "c1", chattype: "group", msgtype: "text", text: { content: "hi" } } };
+  socket.emit("message", { data: JSON.stringify(inbound) });
+  const reply = bot.replyMedia({ headers: { req_id: "in-77" } }, "image", "media-1");
+  const sentReply = socket.sent.at(-1);
+  assert.equal(sentReply.cmd, "aibot_respond_msg");
+  assert.equal(sentReply.headers.req_id, "in-77");
+  assert.deepEqual(sentReply.body, { msgtype: "image", image: { media_id: "media-1" } });
+  answer({ headers: { req_id: "in-77" }, errcode: 0, body: {} });
+  await reply;
+
+  const active = bot.sendMediaMessage("c1", "file", "media-2");
+  const sentActive = socket.sent.at(-1);
+  assert.equal(sentActive.cmd, "aibot_send_msg");
+  assert.deepEqual(sentActive.body, { chatid: "c1", msgtype: "file", file: { media_id: "media-2" } });
+  answer({ headers: { req_id: sentActive.headers.req_id }, errcode: 0, body: {} });
+  await active;
+
+  // video carries title/description; a rejection is surfaced, not swallowed
+  const video = bot.sendMediaMessage("c1", "video", "media-3", { title: "t", description: "d" });
+  const sentVideo = socket.sent.at(-1);
+  assert.deepEqual(sentVideo.body.video, { media_id: "media-3", title: "t", description: "d" });
+  answer({ headers: { req_id: sentVideo.headers.req_id }, errcode: 45009, errmsg: "rate limit" });
+  await assert.rejects(() => video, /45009|rate limit/);
+  bot.close();
+});
+
+await test("a request that is never answered fails instead of hanging", async () => {
+  const { bot } = connectedBot();
+  await assert.rejects(() => bot.request("aibot_upload_media_init", {}, { timeoutMs: 25 }), /no answer to aibot_upload_media_init within 25 ms/);
+  bot.close();
+  const closed = connectedBot();
+  closed.bot.close();
+  await assert.rejects(() => closed.bot.request("ping", {}, { timeoutMs: 25 }), /not writable/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -21,9 +21,15 @@
  */
 
 /** The official long-connection endpoint. */
+import { createHash } from "node:crypto";
 import { MiniWebSocket } from "./ws-client.js";
 
 export const BOT_WS_URL = "wss://openws.work.weixin.qq.com";
+
+/** Media upload limits, as the official SDK implements them. */
+export const UPLOAD_CHUNK_BYTES = 512 * 1024;
+export const UPLOAD_MAX_CHUNKS = 100;
+export const UPLOAD_CHUNK_RETRIES = 2;
 
 /**
  * The two extra fields the official WeCom integration puts in the auth frame.
@@ -294,6 +300,17 @@ export class WecomBot {
   #onMessage(raw) {
     const frame = parseFrame(raw);
     if (!frame) return;
+    // An answer to something *we* asked for (upload init/chunk/finish, an acknowledged
+    // reply) is matched by req_id - the same correlation the official SDK uses. This comes
+    // first because a failed answer carries an errcode and must reject its waiter instead
+    // of just being logged.
+    const reqId = String(frame.headers?.req_id ?? "");
+    const waiting = reqId ? this.pending.get(reqId) : undefined;
+    if (waiting) {
+      this.pending.delete(reqId);
+      waiting(frame);
+      return;
+    }
     const error = botError(frame);
     if (frame.cmd === undefined && !error) {
       // An answer to auth or a heartbeat.
@@ -316,10 +333,12 @@ export class WecomBot {
       this.onEvent?.(frame);
       return;
     }
-    const waiting = frame.headers?.reply_to ? this.pending.get(frame.headers.reply_to) : undefined;
-    if (waiting) {
+    // A `reply_to` correlation is kept as a fallback: some answers name the frame they
+    // belong to instead of echoing a req_id we invented.
+    const waitingByReplyTo = frame.headers?.reply_to ? this.pending.get(frame.headers.reply_to) : undefined;
+    if (waitingByReplyTo) {
       this.pending.delete(frame.headers.reply_to);
-      waiting(frame);
+      waitingByReplyTo(frame);
     }
   }
 
@@ -366,6 +385,136 @@ export class WecomBot {
   /** Push a message into a chat without an inbound frame. */
   sendMessage(chatId, body) {
     return this.#send(sendFrame(chatId, body));
+  }
+
+  /**
+   * Send one command frame and resolve with the server's answer for it.
+   *
+   * The answer is matched by the `req_id` we invent, which is how the official SDK does it
+   * (`WsConnectionManager.sendReply`): a frame carrying our req_id resolves the waiter, an
+   * `errcode` rejects it, and silence rejects it after `timeoutMs`. This is what makes the
+   * media upload possible at all - it needs the server's `upload_id` and `media_id`.
+   *
+   * @returns {Promise<object>} the answer frame
+   */
+  request(cmd, body, { timeoutMs = 30000, reqId = generateReqId(cmd) } = {}) {
+    return new Promise((resolve, reject) => {
+      if (!this.#send({ cmd, headers: { req_id: reqId }, body })) {
+        reject(new Error(`${cmd} could not be sent: the long connection is not writable`));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(reqId);
+        reject(new Error(`no answer to ${cmd} within ${timeoutMs} ms`));
+      }, timeoutMs);
+      // Deliberately NOT unref'd: the caller is awaiting this promise, and an unref'd timer
+      // is not guaranteed to fire (nothing else would keep the event loop alive).
+      this.pending.set(reqId, (frame) => {
+        clearTimeout(timer);
+        const failure = botError(frame);
+        if (failure) {
+          reject(new Error(failure));
+          return;
+        }
+        resolve(frame);
+      });
+    });
+  }
+
+  /**
+   * Upload one file as a temporary WeCom media asset and return its `media_id`.
+   *
+   * Three steps over the long connection, exactly as the official SDK implements them:
+   * `aibot_upload_media_init` (type, filename, total_size, total_chunks, md5) -> one
+   * `aibot_upload_media_chunk` per 512 KiB slice (base64) -> `aibot_upload_media_finish`.
+   * Chunks are limited to 100 (~50 MB) and sent with bounded concurrency, because the
+   * platform answers `system error` to a burst of chunks (the SDK caps it at 2-3 for larger
+   * files). Each chunk is retried twice; a failure surfaces rather than half-uploading.
+   *
+   * @param {Buffer} buffer file contents (already read; this does no filesystem work)
+   * @param {{type?: string, filename?: string, timeoutMs?: number, onProgress?: Function}} [options]
+   * @returns {Promise<{mediaId: string, uploadId: string, chunks: number, bytes: number, type: string}>}
+   */
+  async uploadMedia(buffer, { type = "file", filename = "file.bin", timeoutMs = 60000, retryDelayMs = 500, onProgress } = {}) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+      throw new Error("uploadMedia: there is nothing to upload");
+    }
+    const totalChunks = Math.ceil(buffer.length / UPLOAD_CHUNK_BYTES);
+    if (totalChunks > UPLOAD_MAX_CHUNKS) {
+      throw new Error(
+        `uploadMedia: ${buffer.length} bytes needs ${totalChunks} chunks, over the ${UPLOAD_MAX_CHUNKS} limit (~50 MB)`,
+      );
+    }
+    const md5 = createHash("md5").update(buffer).digest("hex");
+
+    const init = await this.request(
+      CMDS.UPLOAD_INIT,
+      { type, filename: String(filename), total_size: buffer.length, total_chunks: totalChunks, md5 },
+      { timeoutMs },
+    );
+    const uploadId = init?.body?.upload_id;
+    if (!uploadId) throw new Error(`uploadMedia: the server sent no upload_id (${JSON.stringify(init?.body ?? {})})`);
+
+    const sendChunk = async (index) => {
+      const slice = buffer.subarray(index * UPLOAD_CHUNK_BYTES, Math.min((index + 1) * UPLOAD_CHUNK_BYTES, buffer.length));
+      let lastError;
+      for (let attempt = 0; attempt <= UPLOAD_CHUNK_RETRIES; attempt += 1) {
+        try {
+          await this.request(
+            CMDS.UPLOAD_CHUNK,
+            { upload_id: uploadId, chunk_index: index, base64_data: slice.toString("base64") },
+            { timeoutMs },
+          );
+          onProgress?.({ sent: index + 1, total: totalChunks, bytes: slice.length });
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < UPLOAD_CHUNK_RETRIES) {
+            // Not unref'd: a scheduled retry must actually happen.
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+          }
+        }
+      }
+      throw new Error(`uploadMedia: chunk ${index + 1}/${totalChunks} failed - ${lastError?.message ?? lastError}`);
+    };
+
+    // Bounded concurrency, as in the SDK: 1-4 chunks can all go at once, 5-10 at three,
+    // anything larger at two.
+    const concurrency = totalChunks <= 4 ? Math.max(1, totalChunks) : totalChunks <= 10 ? 3 : 2;
+    let next = 0;
+    const workers = Array.from({ length: Math.min(concurrency, totalChunks) }, async () => {
+      while (next < totalChunks) {
+        const index = next;
+        next += 1;
+        await sendChunk(index);
+      }
+    });
+    await Promise.all(workers);
+
+    const finish = await this.request(CMDS.UPLOAD_FINISH, { upload_id: uploadId }, { timeoutMs });
+    const mediaId = finish?.body?.media_id;
+    if (!mediaId) throw new Error(`uploadMedia: the server sent no media_id (${JSON.stringify(finish?.body ?? {})})`);
+    return { mediaId, uploadId, chunks: totalChunks, bytes: buffer.length, type: finish?.body?.type ?? type };
+  }
+
+  /**
+   * Answer an inbound frame with a media message (the passive path). Waits for the ack, so
+   * a refusal is reported instead of being lost.
+   */
+  replyMedia(frame, mediaType, mediaId, videoOptions, { timeoutMs = 20000 } = {}) {
+    const reqId = String(frame?.headers?.req_id ?? "");
+    if (!reqId) return Promise.reject(new Error("replyMedia: the inbound frame carries no req_id"));
+    return this.request(CMDS.RESPONSE, mediaBody(mediaType, mediaId, videoOptions), { reqId, timeoutMs });
+  }
+
+  /**
+   * Push a media message into a chat without an inbound frame (the active path, which is
+   * what the `wecom_send_file` tool uses).
+   */
+  sendMediaMessage(chatId, mediaType, mediaId, videoOptions, { timeoutMs = 20000 } = {}) {
+    const chat = String(chatId ?? "").trim();
+    if (!chat) return Promise.reject(new Error("sendMediaMessage: a chat id is required"));
+    return this.request(CMDS.SEND_MSG, { chatid: chat, ...mediaBody(mediaType, mediaId, videoOptions) }, { timeoutMs });
   }
 
   close() {

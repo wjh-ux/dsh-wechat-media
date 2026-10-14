@@ -136,6 +136,17 @@ function checksResult(text, call) {
   return /===\s*false/.test(text.slice(at, at + 200));
 }
 
+await test("the WeCom outbound media path uploads over the long connection", () => {
+  const at = host.indexOf("async function wecomSendMedia");
+  assert.ok(at > -1, "wecomSendMedia must exist");
+  const body = host.slice(at, at + 2600);
+  assert.match(body, /wecomBot\.uploadMedia\(/, "it must upload through the long connection");
+  assert.match(body, /sendMediaMessage\(/, "...and send the resulting media_id");
+  const tool = host.indexOf('name: "wecom_send_file"');
+  assert.ok(tool > -1, "the wecom_send_file tool must exist");
+  assert.match(host.slice(tool, tool + 1400), /wecomSendMedia\(/, "the tool must go through that helper");
+});
+
 await test("approvals in a WeCom chat go out over the long connection", () => {
   const at = host.indexOf("const approvals = createApprovalBridge");
   assert.ok(at > -1, "the approval bridge must be created in index.js");
