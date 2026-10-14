@@ -188,6 +188,19 @@ await test("approvals in a WeCom chat go out over the long connection", () => {
   assert.match(host, /async function sendWecomProactive\(/, "sendWecomProactive must exist");
 });
 
+await test("the debug routes report the session the chat actually runs in", () => {
+  // A chat restarted with `/new` runs on generation 1; echoing the generation-0 id sent a
+  // reader after a session that was no longer in use (the live transcript had moved on).
+  const wecom = host.slice(host.indexOf('path: "/dsh-wechat-media/wecom/inbound-test"'), host.indexOf('path: "/dsh-wechat-media/wecom"'));
+  assert.match(wecom, /const generation = await generationOf\(accountId, chatId\)/, "the WeCom echo must resolve the generation");
+  assert.match(wecom, /sessionId: sessionIdFor\(accountId, chatId, generation\)/, "...and hash the id with it");
+  assert.match(wecom, /generation,\n/, "the answer must say which generation it used");
+  assert.doesNotMatch(wecom, /sessionId: sessionIdFor\(accountId, chatId\),/, "the bare, generation-0 echo must be gone");
+  // The personal-WeChat route echoes the route entry itself, which already carries the real id.
+  const wechat = host.slice(host.indexOf('path: "/dsh-wechat-media/debug/inbound"'));
+  assert.match(wechat.slice(0, 1600), /route: after\[accountId\]\?\.\[chatId\]/, "the WeChat echo must come from the stored route");
+});
+
 await test("token usage is counted from the session events, not invented", () => {
   // The harness reports usage on the `assistant/message` session event; the collector turns
   // it into ledger entries per account and chat.
@@ -210,7 +223,7 @@ await test("the debug inbound routes can synthesise a group message", () => {
   const wecom = host.slice(host.indexOf('path: "/dsh-wechat-media/wecom/inbound-test"'), host.indexOf('path: "/dsh-wechat-media/wecom"'));
   assert.match(wecom, /args\.chatType/, "the WeCom route must take a chatType");
   assert.match(wecom, /chattype: chatType/, "...and put it on the frame it injects");
-  assert.match(wecom, /chatType, sessionId/, "the answer must echo what it injected");
+  assert.match(wecom, /chatType,/, "the answer must echo what it injected");
   const wechat = host.slice(host.indexOf('path: "/dsh-wechat-media/debug/inbound"'));
   assert.match(wechat.slice(0, 1200), /syntheticInbound\(/, "the WeChat route synthesises an envelope");
   const synthetic = host.slice(host.indexOf("export function syntheticInbound"));

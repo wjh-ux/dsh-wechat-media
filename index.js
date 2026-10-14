@@ -2524,7 +2524,19 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
           const message = describeBotMessage(frame);
           const started = Date.now();
           await handleWecomInbound(accountId, message, frame);
-          json(res, 200, { ok: true, chatId, chatType, sessionId: sessionIdFor(accountId, chatId), ms: Date.now() - started, inboundError: wecomInboundError });
+          // The router resolves a chat's session from its `/new` generation, so the echo has to
+          // do the same: it used to print the generation-0 id, which sent a reader chasing a
+          // session the chat had left behind (it did, for a good hour).
+          const generation = await generationOf(accountId, chatId);
+          json(res, 200, {
+            ok: true,
+            chatId,
+            chatType,
+            generation,
+            sessionId: sessionIdFor(accountId, chatId, generation),
+            ms: Date.now() - started,
+            inboundError: wecomInboundError,
+          });
         },
       },
       {

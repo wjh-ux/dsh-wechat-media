@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.4
+
+- **Fixed: the WeCom debug route reported the wrong session id.** `GET /dsh-wechat-media/wecom/inbound-test`
+  echoed `sessionIdFor(accountId, chatId)` - the **generation-0** id - while the router runs the chat on the
+  generation its `/new` history left it on. A chat restarted with `/new` therefore answered with an id no
+  longer in use, which sent this session's own diagnosis chasing a transcript that had been idle for hours.
+  The echo now resolves the generation exactly like `ensureAgent` does and reports `generation` alongside the
+  id. (The personal-WeChat route was already correct: it echoes the stored route entry, which carries the real
+  id.) A wiring guard keeps both honest.
+- 225 tests across 16 suites.
+
 ## 0.9.3
 
 - **Fixed a lost update: token-ledger writes are now serialised.** Reconciling the ledger against the session
