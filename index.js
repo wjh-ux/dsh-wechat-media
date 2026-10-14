@@ -1532,7 +1532,28 @@ export function apply(ctx, config = {}) {
   }
 
   /** Send one text message, with a lazily-fetched typing ticket. */
-  async function sendText(account, chatId, text, { typing = true } = {}) {
+    /**
+     * The context token iLink needs in order to deliver a message.
+     *
+     * The protocol requires the token that arrived with a recent inbound message: **without it the platform
+     * accepts the send and then drops it**, which is exactly how a whole round of testing looked like "the
+     * API said success but nothing was received". The token was already being stored on every inbound message
+     * (state.saveContextToken) - it was simply never read back.
+     */
+    async function contextTokenFor(account, chatId) {
+      const accountId = account?.accountId ?? account?.botId;
+      if (!accountId || !chatId) return undefined;
+      try {
+        const tokens = await state.loadContextTokens(accountId);
+        const token = tokens?.[chatId] ?? tokens?.[String(chatId)];
+        return typeof token === "string" && token ? token : undefined;
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] could not read the stored context token: %s", error?.message ?? error);
+        return undefined;
+      }
+    }
+
+    async function sendText(account, chatId, text, { typing = true } = {}) {
     const accountId = account.accountId ?? account.botId;
     // Typing indicators need `getconfig`'s ticket; both calls are optional, so a
     // protocol client without them simply skips the indicator.
@@ -1555,7 +1576,7 @@ export function apply(ctx, config = {}) {
     }
     let result;
     try {
-      result = await ilink.sendText({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, text });
+      result = await ilink.sendText({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, text, contextToken: await contextTokenFor(account, chatId) });
     } finally {
       if (canType) {
         try {
@@ -2490,7 +2511,7 @@ export function apply(ctx, config = {}) {
             }
           }
           try {
-            await ilink.sendVoice({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given });
+            await ilink.sendVoice({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given, contextToken: await contextTokenFor(account, chatId) });
             ctx.logger?.info?.("[dsh-wechat-media] voice sent to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
             return audio
               ? `✅ 已发送语音到 ${chatId}（${audio.format}，${audio.bytes} 字节）`
@@ -2516,7 +2537,7 @@ export function apply(ctx, config = {}) {
         execute: async (args) => {
           const prepared = await prepareOutbound(String(args.path).trim(), { maxBytes: maxMediaBytes });
           const { account, chatId } = await resolvePeer(args.to ? String(args.to).trim() : undefined);
-          const common = { baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: prepared.path };
+          const common = { baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: prepared.path, contextToken: await contextTokenFor(account, chatId) };
           if (prepared.kind === "image") await ilink.sendImage(common);
           else if (prepared.kind === "video") await ilink.sendVideo(common);
           else await ilink.sendFile(common);

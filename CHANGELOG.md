@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.2
+
+- **Fixed: every personal-WeChat send was missing the conversation's `context_token`, so the platform accepted
+  the message and then dropped it.** The token was already being saved on every inbound message
+  (`state.saveContextToken`) and the send helpers already accepted it - it was simply **never read back**
+  (`loadContextTokens` appeared only in `state.js`). `contextTokenFor()` now loads it for the target chat and all
+  three send paths use it: text, media (image/video/file) and voice.
+  - What this looked like from outside: the tool reported `✅ sent` and **nothing arrived** - for plain text just as
+    much as for a voice message, which is exactly the control that ruled the audio format out and pointed at the send
+    entry itself.
+  - It is the same shape of lesson as the WeCom `846605` one: **a success from the platform's API is not a
+    delivery.** Only the receiving end can say that.
+- A guard test asserts that each send path carries the token, so this cannot silently regress.
+- 278 tests across 19 suites.
+
 ## 0.18.1
 
 - **A send failure now says what to do about it.** iLink answers with a bare code - `sendMessage ret=-2
