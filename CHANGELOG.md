@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.2
+
+- **The voice tool's reply now says what is actually true.** It still blamed a missing SILK encoder - which this
+  plugin has had since v0.19.0 - for a limitation that is a platform rule. It now states the real reason (personal
+  WeChat does not accept voice-type messages, which is why Tencent's own WeChat channel never sends one) and adds the
+  **conversation-window caveat**: iLink delivers only inside a window opened by a recent inbound message, so a send
+  made outside one is accepted by the API and then dropped, invisible. "If it did not arrive, ask them to write to the
+  bot first" is the actionable half of that.
+- Documentation only; no behaviour changed. 284 tests across 19 suites.
+
 ## 0.19.1
 
 - **Correction: v0.19.0 claimed a personal-WeChat voice bubble, and that is not deliverable.** The claim was wrong and

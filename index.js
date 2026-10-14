@@ -2545,7 +2545,7 @@ export function apply(ctx, config = {}) {
             // which does arrive, does play, and is what this reply says.
             await ilink.sendFile({ baseUrl: account.baseUrl, token: account.token, toWxid: chatId, filePath: audio?.path ?? given, contextToken });
             ctx.logger?.info?.("[dsh-wechat-media] audio sent as a file to %s (%s)", chatId, audio ? `${audio.format}, ${audio.bytes} bytes` : given);
-            return `✅ 已作为**音频文件**发送到 ${chatId}（${audio ? `${audio.format}，${audio.bytes} 字节` : given}）。个人微信的语音气泡只认 SILK 编码，本机没有 SILK 编码器，所以以文件形式送达（可播放）；语音气泡在企微那边是可用的。`;
+            return `✅ 已作为**音频文件**发送到 ${chatId}（${audio ? `${audio.format}，${audio.bytes} 字节` : given}）。个人微信不接受语音类型的消息（Tencent 自己的微信渠道也不发它），所以音频以文件形式送达：能收到、能播放。语音气泡在企微那边是可用的。`;
           } catch (error) {
             ctx.logger?.warn?.("[dsh-wechat-media] voice send failed: %s", error?.message ?? error);
             return `could not send the voice: ${error?.message ?? error}`;
