@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.2
+
+- **Fixed the second-order version of the same mistake: the total is now derived from the parts, never stored
+  beside them.** The next live turn after v0.9.1 reported `total 8548` against parts that added up to `17013`:
+  the row had been written by v0.9.0 (parts, no total), was *displayed* by falling back to its parts, and then a
+  v0.9.1 call added its own total to a field that had never been filled in - so the stored total covered only
+  the newer call while the parts covered both. `totalTokens` is now computed as
+  `input + output + cacheRead + cacheWrite` on every read, the way the harness computes it, which makes "the
+  parts add up to the total" true by construction. A stale stored total from the affected versions is dropped
+  when the row is next written.
+- **An adapter whose own total disagrees with its parts is now reported** (`usageDisagreement`), so a provider
+  with a different convention shows up in the log instead of silently changing what the number means.
+- The regression test reproduces the live case with the measured figures - a legacy row continued by a new
+  call - and asserts the invariant that had broken.
+- 223 tests across 16 suites.
+
 ## 0.9.1
 
 - **Fixed: token totals understated the real spend by up to four times.** The first live turn reported

@@ -196,9 +196,10 @@ await test("token usage is counted from the session events, not invented", () =>
   assert.match(collector, /event\.type === "assistant\/message" && event\.data\?\.usage/, "the usage event must be recognised");
   assert.match(collector, /this\.onUsage\?\.\(\{ sessionId, usage/, "...and handed to the callback before the reply bookkeeping");
   const wiring = host.slice(host.indexOf("new ReplyCollector(ctx"));
-  assert.match(wiring.slice(0, 1200), /conversations\.get\(sessionId\)/, "the event's session id must be resolved to an account");
-  assert.match(wiring.slice(0, 1200), /state\.addTokens\(/, "...and written to the ledger");
-  assert.match(wiring.slice(0, 1200), /token accounting failed/, "a failure to count must be logged, not swallowed");
+  assert.match(wiring.slice(0, 1600), /conversations\.get\(sessionId\)/, "the event's session id must be resolved to an account");
+  assert.match(wiring.slice(0, 1600), /state\.addTokens\(/, "...and written to the ledger");
+  assert.match(wiring.slice(0, 1600), /token accounting failed/, "a failure to count must be logged, not swallowed");
+  assert.match(wiring.slice(0, 1600), /usageDisagreement\(usage\)/, "a provider whose total disagrees with its parts must be reported");
   assert.match(host, /command\.name === "tokens"/, "the /tokens command must be handled");
   assert.match(host, /tokenLine: await tokenStatusLine\(\)/, "/status must include the token line");
 });

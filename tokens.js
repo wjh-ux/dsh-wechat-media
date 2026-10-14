@@ -27,7 +27,7 @@ export function clampWindowDays(value, fallback = DEFAULT_WINDOW_DAYS) {
   return Math.min(MAX_WINDOW_DAYS, Math.max(MIN_WINDOW_DAYS, days));
 }
 
-const zero = () => ({ inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, totalTokens: 0, calls: 0 });
+const zero = () => ({ inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, calls: 0 });
 
 /** A fresh, empty ledger. `now` is injected so tests do not depend on the clock. */
 export function emptyLedger({ windowDays = DEFAULT_WINDOW_DAYS, now = Date.now() } = {}) {
@@ -40,20 +40,50 @@ export function emptyLedger({ windowDays = DEFAULT_WINDOW_DAYS, now = Date.now()
   };
 }
 
-/** Tokens the adapter charged for one call, normalised. */
+/**
+ * Tokens the adapter charged for one call, normalised.
+ *
+ * The total is **derived** from the parts, never taken from the adapter:
+ * `input + output + cacheRead + cacheWrite`, which is how the harness itself computes it
+ * (`@deepseek-ai/dsh-llm-deepseek`, `lib/index.js`) because cached prompt tokens are not part
+ * of `inputTokens` there. Measured live: one turn reported input 2191, output 2, cache 6272 -
+ * a total of input+output would have understated it four times over.
+ *
+ * Storing a separate total beside the parts is what caused the *second* bug, on the very next
+ * live turn: a row written before totals were stored fell back to its parts for display, and
+ * then a later call added its own total to a field that had never been filled - so the stored
+ * total covered only the newer call while the parts covered both. Deriving the total makes
+ * "the parts add up to the total" true by construction. `reportedTotal` keeps the adapter's
+ * own number solely for the disagreement check in `usageDisagreement`.
+ */
 export function normaliseUsage(usage) {
   const input = Math.max(0, Math.round(Number(usage?.inputTokens) || 0));
   const output = Math.max(0, Math.round(Number(usage?.outputTokens) || 0));
   const cached = Math.max(0, Math.round(Number(usage?.cacheReadTokens) || 0) + Math.round(Number(usage?.cacheWriteTokens) || 0));
   const reasoning = Math.max(0, Math.round(Number(usage?.reasoningTokens) || 0));
-  const reported = Math.max(0, Math.round(Number(usage?.totalTokens) || 0));
-  // Cached tokens are **not** part of `inputTokens` for these adapters: the harness computes
-  // `totalTokens = input + output + cacheRead + cacheWrite` itself (dsh-llm-deepseek,
-  // `lib/index.js`). Measured live: one first turn reported input 2191, output 2, cache 6272,
-  // so a total of input+output would understate the spend four times over. An adapter that
-  // reports its own `totalTokens` wins - it knows its provider's convention better than this
-  // module does.
-  return { inputTokens: input, outputTokens: output, cachedTokens: cached, reasoningTokens: reasoning, totalTokens: reported || input + output + cached };
+  const reportedTotal = Math.max(0, Math.round(Number(usage?.totalTokens) || 0));
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    cachedTokens: cached,
+    reasoningTokens: reasoning,
+    totalTokens: input + output + cached,
+    reportedTotal,
+  };
+}
+
+/**
+ * Does the adapter's own total disagree with the sum of its parts?
+ *
+ * @returns {string|undefined} a message for the log, or undefined when they agree - the normal
+ *   case, since every adapter in this harness computes exactly that sum. It exists so that a
+ *   provider whose convention differs becomes visible in the log instead of silently changing
+ *   what the numbers mean.
+ */
+export function usageDisagreement(usage) {
+  const used = normaliseUsage(usage);
+  if (!used.reportedTotal || used.reportedTotal === used.totalTokens) return undefined;
+  return `usage total ${used.reportedTotal} != input ${used.inputTokens} + output ${used.outputTokens} + cache ${used.cachedTokens} = ${used.totalTokens}`;
 }
 
 /** Add one call's usage to one account (and one chat inside it). Returns a new ledger. */
@@ -68,16 +98,17 @@ export function accumulate(ledger, { accountId, chatId, usage, now = Date.now() 
   // `zero()` first so a row written by an older version still has every counter, then the
   // stored row on top: the numbers must survive, only the shape is repaired.
   const account = { ...zero(), ...(accounts[id] ?? {}) };
+  delete account.totalTokens; // a 0.9.0/0.9.1 row may carry a partial stored total; parts rule
   accounts[id] = account;
-  for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens", "totalTokens"]) account[key] += used[key];
+  for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]) account[key] += used[key];
   account.calls += 1;
 
   const chat = String(chatId ?? "");
   if (chat) {
     account.chats = { ...(account.chats ?? {}) };
-    // The `zero()` here also upgrades a per-chat row written before totals were stored.
     const row = { ...zero(), ...(account.chats[chat] ?? {}) };
-    for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens", "totalTokens"]) row[key] += used[key];
+    delete row.totalTokens;
+    for (const key of ["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]) row[key] += used[key];
     row.calls += 1;
     row.lastAt = new Date(now).toISOString();
     account.chats[chat] = row;
@@ -159,21 +190,20 @@ export function setWindow(ledger, windowDays, { now = Date.now() } = {}) {
   return { ...previous, windowDays: days, windowStartedAt: new Date(now).toISOString() };
 }
 
-/** Totals for one account row (or a chat row). */
+/** Totals for one account row (or a chat row). Always derived from the parts. */
 export function accountTotals(account) {
   const input = Number(account?.inputTokens) || 0;
   const output = Number(account?.outputTokens) || 0;
   const cached = Number(account?.cachedTokens) || 0;
-  const stored = Number(account?.totalTokens) || 0;
   return {
     inputTokens: input,
     outputTokens: output,
     cachedTokens: cached,
     reasoningTokens: Number(account?.reasoningTokens) || 0,
     calls: Number(account?.calls) || 0,
-    // Prefer what was actually recorded (the adapter's own total when it reported one), and
-    // fall back to the parts - which include the cache, per the harness's definition.
-    totalTokens: stored || input + output + cached,
+    // Derived, not stored: the parts always add up to the total (see normaliseUsage for why
+    // a stored total next to the parts produced a wrong number in practice).
+    totalTokens: input + output + cached,
   };
 }
 

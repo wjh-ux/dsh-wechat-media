@@ -30,6 +30,7 @@ import {
   summarize,
   summaryLine,
   tokensReport,
+  usageDisagreement,
   windowEndsAt,
 } from "../tokens.js";
 import { WechatState } from "../state.js";
@@ -123,8 +124,19 @@ await test("usage is added per account and per chat, one entry per model call", 
 });
 
 await test("usage is normalised, and a call with nothing in it is not recorded", () => {
-  assert.deepEqual(normaliseUsage({ inputTokens: 10, outputTokens: 4 }), { inputTokens: 10, outputTokens: 4, cachedTokens: 0, reasoningTokens: 0, totalTokens: 14 });
-  assert.equal(normaliseUsage({ inputTokens: 10, outputTokens: 4, totalTokens: 99 }).totalTokens, 99, "an adapter's own total wins");
+  assert.deepEqual(
+    { ...normaliseUsage({ inputTokens: 10, outputTokens: 4 }), reportedTotal: "ignored" },
+    { inputTokens: 10, outputTokens: 4, cachedTokens: 0, reasoningTokens: 0, totalTokens: 14, reportedTotal: "ignored" },
+  );
+  assert.equal(
+    normaliseUsage({ inputTokens: 10, outputTokens: 4, totalTokens: 99 }).totalTokens,
+    14,
+    "the total is derived from the parts, never taken from the adapter",
+  );
+  assert.equal(normaliseUsage({ inputTokens: 10, outputTokens: 4, totalTokens: 99 }).reportedTotal, 99, "the adapter's own number is kept for the disagreement check");
+  assert.match(usageDisagreement({ inputTokens: 10, outputTokens: 4, totalTokens: 99 }) ?? "", /total 99 != input 10 \+ output 4 \+ cache 0 = 14/);
+  assert.equal(usageDisagreement({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }), undefined, "the harness's own formula agrees, so there is nothing to report");
+  assert.equal(usageDisagreement({ inputTokens: 10, outputTokens: 4 }), undefined, "an adapter that reports no total is fine");
   assert.equal(normaliseUsage({ inputTokens: 10, outputTokens: 4, cacheReadTokens: 100, cacheWriteTokens: 5 }).cachedTokens, 105, "cache reads and writes are one number");
   // The measured live case: cached prompt tokens are *not* inside inputTokens, so a total of
   // input+output would claim 2193 for a turn that really cost 8465.
@@ -136,6 +148,42 @@ await test("usage is normalised, and a call with nothing in it is not recorded",
   const ledger = emptyLedger({ now: T0 });
   assert.deepEqual(accumulate(ledger, { accountId: "a", chatId: "c", usage: {}, now: T0 }).accounts, {});
   assert.deepEqual(accumulate(ledger, { usage: usage(1, 1), now: T0 }).accounts, {}, "an event without an account is skipped, not guessed");
+});
+
+await test("a row written by an older version keeps its parts and gains no stale total", () => {
+  // The second live bug, reproduced: v0.9.0 wrote parts with no total, v0.9.1 added its own
+  // total to the same row, so the stored total covered only the newer call while the parts
+  // covered both - 8548 stored against 17013 of parts.
+  const legacy = {
+    windowDays: 30,
+    windowStartedAt: new Date(T0).toISOString(),
+    lastResetAt: null,
+    resets: 0,
+    accounts: {
+      a: {
+        inputTokens: 2191,
+        outputTokens: 2,
+        cachedTokens: 6272,
+        reasoningTokens: 0,
+        calls: 1,
+        chats: { c: { inputTokens: 2191, outputTokens: 2, cachedTokens: 6272, reasoningTokens: 0, calls: 1, totalTokens: 8548 } },
+      },
+    },
+  };
+  const after = accumulate(legacy, { accountId: "a", chatId: "c", usage: { inputTokens: 184, outputTokens: 44, cacheReadTokens: 8320 }, now: T0 });
+  const summary = summarize(after, { now: T0 });
+  assert.equal(summary.total.inputTokens, 2375);
+  assert.equal(summary.total.outputTokens, 46);
+  assert.equal(summary.total.cachedTokens, 14592);
+  assert.equal(summary.total.totalTokens, 17013, "both calls, cache included");
+  assert.equal(
+    summary.total.inputTokens + summary.total.outputTokens + summary.total.cachedTokens,
+    summary.total.totalTokens,
+    "the invariant the stored total broke",
+  );
+  assert.equal(after.accounts.a.totalTokens, undefined, "the stale stored total must be dropped");
+  assert.equal(after.accounts.a.chats.c.totalTokens, undefined, "and so must the per-chat one");
+  assert.match(summaryLine(summary), /共 1\.7 万/, "the line prints the derived total");
 });
 
 await test("summarize totals everything and sorts by usage", () => {

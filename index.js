@@ -86,7 +86,7 @@ import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, i
 import { downloadWecomMedia } from "./wecom-media.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
-import { clampWindowDays, summarize, summaryLine, tokensReport } from "./tokens.js";
+import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -688,6 +688,10 @@ export function apply(ctx, config = {}) {
     onUsage: ({ sessionId, usage }) => {
       const conversation = conversations.get(sessionId);
       if (!conversation?.accountId) return;
+      // Totals are derived from the parts; if a provider ever reports a total that disagrees,
+      // say so rather than quietly changing what the numbers mean.
+      const disagreement = usageDisagreement(usage);
+      if (disagreement) ctx.logger?.warn?.("[dsh-wechat-media] token %s", disagreement);
       // Fire and forget - a slow disk must not delay the reply - but a failure is logged
       // rather than swallowed, so the ledger can never quietly stop counting.
       state.addTokens({ accountId: conversation.accountId, chatId: conversation.chatId, usage })
