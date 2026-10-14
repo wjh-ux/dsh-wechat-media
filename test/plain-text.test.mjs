@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 
-import { toPlainText } from "../plain-text.js";
+import { mathToText, toPlainText } from "../plain-text.js";
 
 let passed = 0;
 let failed = 0;
@@ -69,9 +69,9 @@ await test("links read like a chat, images disappear", () => {
 });
 
 await test("math delimiters keep the formula", () => {
-  assert.equal(toPlainText("$$x^2 - y^2$$"), "x^2 - y^2");
+  assert.equal(toPlainText("$$x^2 - y^2$$"), "x² - y²"); // exponents become real superscripts
   assert.equal(toPlainText("公式 $a+b$ 成立"), "公式 a+b 成立");
-  assert.equal(toPlainText("\\[x^2\\]"), "x^2");
+  assert.equal(toPlainText("\\[x^2\\]"), "x²");
   assert.equal(toPlainText("\\(a-b\\)"), "a-b");
 });
 
@@ -83,7 +83,12 @@ await test("reasoning and HTML never reach a chat", () => {
 });
 
 await test("table rules go, cells stay readable", () => {
-  assert.equal(toPlainText("| a | b |\n| --- | --- |\n| 1 | 2 |"), "a  b\n1  2");
+  // A two-column table reads as labelled lines: "· key：value" is far easier to scan in a chat than
+// two words with whitespace between them.
+  assert.equal(toPlainText("| a | b |\n| --- | --- |\n| 1 | 2 |"), "· a：b\n· 1：2");
+  assert.equal(toPlainText("| 条件 | 说明 |\n| --- | --- |\n| 两项相同 | 符号相反 |"), "· 条件：说明\n· 两项相同：符号相反");
+  // Three or more columns keep their spacing, still marked as a row.
+  assert.equal(toPlainText("| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |"), "· a  b  c\n· 1  2  3");
 });
 
 await test("bullet markers become a middot, numbered lists keep their numbers", () => {
@@ -92,6 +97,42 @@ await test("bullet markers become a middot, numbered lists keep their numbers", 
   assert.equal(toPlainText("1. 第一步\n2. 第二步"), "1. 第一步\n2. 第二步");
 });
 
+await test("a formula becomes text a person can read", () => {
+  assert.equal(mathToText("\\frac{a}{b}"), "a/b");
+  assert.equal(mathToText("\\frac{x+1}{y-2}"), "(x+1)/(y-2)");
+  assert.equal(mathToText("\\frac{\\frac{a}{b}}{c}"), "(a/b)/c");
+  assert.equal(mathToText("\\sqrt{x}"), "√x");
+  assert.equal(mathToText("\\sqrt{x^2+y^2}"), "√(x²+y²)");
+  assert.equal(mathToText("x^2 + a_1"), "x² + a₁");
+  assert.equal(mathToText("a^{n+1}"), "aⁿ⁺¹"); // every character here has a superscript form
+  assert.equal(mathToText("e^{i\\pi}"), "e^(iπ)"); // not every character does, so the bracket form is used
+  assert.equal(mathToText("\\alpha + \\beta \\times \\gamma"), "α + β × γ");
+  assert.equal(mathToText("x \\le y \\ne z"), "x ≤ y ≠ z");
+  assert.equal(mathToText("\\text{cm}^2"), "cm²");
+  assert.equal(mathToText("90^\\circ"), "90°");
+  assert.equal(mathToText("\\sum_{i=1}^{n} i"), "Σᵢ₌₁ⁿ i"); // every character has a subscript form, so no brackets
+  assert.equal(mathToText("\\int_0^1 x\\,dx"), "∫₀¹ x dx");
+  assert.equal(mathToText("\\left(\\frac{a}{2}\\right)"), "(a/2)");
+});
+
+await test("the delimiters go and the formula stays", () => {
+  assert.equal(toPlainText("$$\\frac{a}{b}$$"), "a/b");
+  assert.equal(toPlainText("公式 $x^2$ 成立"), "公式 x² 成立");
+  assert.equal(toPlainText("\\[\\sqrt{2}\\]"), "√2");
+  assert.equal(toPlainText("\\(\\alpha\\)"), "α");
+});
+
+await test("a Windows path is never treated as LaTeX", () => {
+  // The one way this feature could do real damage: mangling paths and file names.
+  for (const line of [
+    "日志在 C:\\Users\\Administrator\\.dsh\\plugins 下面",
+    "改 my_file_name.txt 就行",
+    "正则 \\d+ 匹配数字",
+    "裸的 \\frac{a}{b} 不在数学定界符里，所以不动它",
+  ]) {
+    assert.equal(toPlainText(line), line, `"${line}" must survive unchanged`);
+  }
+});
 await test("leftover markers from a half-streamed span are dropped", () => {
   // The streamer cleans the accumulated text, so this only happens if the turn itself was cut off.
   assert.equal(toPlainText("重点 **"), "重点"); // trailing space is tidied away

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.15.0
+
+- **Formulas become text a person can read.** `\$\$\frac{a}{b}\$\$` used to arrive as noise with the delimiters removed
+  and the backslashes left behind. The math is now rendered: `\frac{a}{b}` -> `a/b` (compound parts keep brackets:
+  `(x+1)/(y-2)`), `\sqrt{x^2+y^2}` -> `√(x²+y²)`, `x^2` -> `x²`, `a_1` -> `a₁`,
+  `\sum_{i=1}^{n}` -> `Σᵢ₌₁ⁿ`, `\int_0^1` -> `∫₀¹`, `\alpha + \beta \times \gamma` -> `α + β × γ`,
+  `\le`/`\ne` -> `≤`/`≠`, `90^\circ` -> `90°`, `\text{cm}` -> `cm`. Fractions resolve repeatedly
+  (a `\frac` inside a `\frac` still comes out right), a subscript or exponent whose characters all have Unicode
+  forms loses its brackets while the others keep them (`a^{n+1}` -> `aⁿ⁺¹` but `e^{i\pi}` -> `e^(iπ)`), and an
+  unknown command keeps its name instead of a stray backslash.
+- **A two-column table reads as labelled lines**: `| 条件 | 说明 |` rows become `· 条件：说明` instead of two words
+  with whitespace between them; wider tables keep their spacing, still marked as a row.
+- **A Windows path is never treated as LaTeX** - the one way this could do real damage. The math pass runs only inside
+  math delimiters, so `C:\Users\Administrator\.dsh\plugins`, `my_file_name.txt`, a bare `\d+` and a `\frac`
+  outside delimiters all survive byte-for-byte. Asserted explicitly.
+- Fixed while testing: the fallback bracket form (`^(...)`) had one of its own brackets eaten by the single-character
+  exponent rule, so `e^{i\pi}` came out as `e⁽iπ)`.
+- 264 tests across 18 suites.
+
 ## 0.14.0
 
 - **New: outbound text cleaning.** WeChat and WeCom render no markdown at all, so `**bold**` arrived with its
