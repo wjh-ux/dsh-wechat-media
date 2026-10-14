@@ -150,6 +150,9 @@ window.__ModuleLoader__.load({
           friendOnly: "Only answer friends (1:1 chats; group messages are ignored silently)",
           friendOnlyOn: "Friends only is on: group messages are ignored silently",
           groupsSkipped: "skipped",
+          interject: "Let a new message interject while it is still answering",
+          interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
+          interjected: "interjected",
           tokensTitle: "Token usage",
           tokenNextReset: "clears in",
           tokenResets: "cleared",
@@ -220,6 +223,9 @@ window.__ModuleLoader__.load({
           friendOnly: "只处理好友私聊（群消息静默忽略）",
           friendOnlyOn: "只处理好友私聊已开启：群消息被静默忽略",
           groupsSkipped: "已跳过",
+          interject: "允许插话（正在回复时新消息加入当前回合）",
+          interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
+          interjected: "已插话",
           tokensTitle: "Token 用量",
           tokenNextReset: "距清零",
           tokenResets: "已清零",
@@ -435,6 +441,23 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * The interjection switch: whether a message that arrives while the agent is still
+         * answering joins that turn (`agent.steer`) or queues its own (`agent.followup`).
+         * Same preference as `/interject`, stored by the host.
+         */
+        async function setInterject(interject) {
+          setBusy(true);
+          try {
+            await api(`/prefs?interject=${interject ? "true" : "false"}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
          * Token ledger controls. The window length (1..30 days) and a manual reset live in
          * the host's ledger file, which `/tokens` also drives - one source of truth.
          */
@@ -564,12 +587,26 @@ window.__ModuleLoader__.load({
                 }),
                 " " + t("friendOnly", "Only answer friends (1:1 chats; group messages are ignored silently)"),
               ]),
+              h("label", { key: "i", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  checked: Boolean(snapshot?.prefs?.interject),
+                  disabled: busy,
+                  onChange: (event) => setInterject(event.target.checked),
+                }),
+                " " + t("interject", "Let a new message interject while it is still answering"),
+              ]),
             ]),
             // The switch drops group messages without a word (that is the point), so the
             // count is the only place the silence can be seen.
             snapshot?.prefs?.friendOnly
               ? h("p", { key: "friendNote", className: "dswxMeta" },
                   `${t("friendOnlyOn", "Friends only is on: group messages are ignored silently")} · ${t("groupsSkipped", "skipped")} ${snapshot?.counters?.groupsSkipped ?? 0}`)
+              : null,
+            snapshot?.prefs?.interject
+              ? h("p", { key: "interjectNote", className: "dswxMeta" },
+                  `${t("interjectOn", "Interjection is on: a message sent while the agent is working joins that turn")} · ${t("interjected", "interjected")} ${snapshot?.counters?.interjected ?? 0}`)
               : null,
             (snapshot?.approvals ?? []).length > 0
               ? h("div", { key: "waiting", className: "dswxRow" }, [

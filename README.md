@@ -195,6 +195,7 @@ through (a blocked chat cannot run commands either).
 | `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
 | `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
 | `/friends` | `/friend`, `/好友` | Turns **only answer friends** (1:1 chats) on or off: `/friends on`, `/friends off`, or no argument to toggle. Group messages are then dropped silently and counted. |
+| `/interject` | `/插话` | Turns **interjection** on or off: with it on, a message sent while the agent is still answering joins *that* turn instead of queueing its own. No argument toggles. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
@@ -215,6 +216,20 @@ account the spend is also split per chat.
   *Clear now*), `/tokens` in a chat, and a single line inside `/status`.
 - **Where it lives**: `$DSH_HOME/dsh-wechat-media/tokens.json`. Only counters are stored - no prompts, no
   replies, nothing the model said.
+
+## Interjection / 插话
+
+A message that arrives **while the agent is still answering** can either join that turn or wait for its own.
+
+- **Off by default** - the message queues as its own turn, which is what every chat already does.
+- **On** (the card's checkbox, or `/interject on`): the message is handed to the running turn with the harness's
+  own `agent.steer()`, so it lands in that turn's `next-step` inbox and the model sees it at its next step rather
+  than after the answer. (`followup()` - the queueing path - puts it in `next-turn` instead.)
+- The switch only steers when there really *is* a turn in flight for that chat and a live agent to steer;
+  otherwise the message queues, because "interject" must never mean "dropped on the floor". `/status` shows the
+  state and how many messages have been interjected so far.
+- Personal WeChat and WeCom behave identically, and the relay keeps a **queue of waiters per session** - a second
+  message can no longer replace the first message's waiter (which is what used to lose a reply).
 
 ## Diagnostics / 排障
 

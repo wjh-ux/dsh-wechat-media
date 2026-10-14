@@ -76,6 +76,25 @@ test("an unknown command answer names it and then teaches the list", () => {
   assert.match(text, /\/help/);
 });
 
+console.log("-- interjection --");
+
+test("/interject is a command, with the aliases people will type", () => {
+  assert.equal(parseCommand("/interject").name, "interject");
+  assert.equal(parseCommand("/interject on").args, "on");
+  assert.equal(parseCommand("/插话 off").name, "interject");
+  assert.equal(parseCommand("/插话 off").args, "off");
+});
+
+test("status reports the interjection switch and how often it fired", () => {
+  const on = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s", interject: true, counters: { interjected: 4 } });
+  assert.match(on, /插话：开/);
+  assert.match(on, /已插话 4 次/);
+  assert.match(on, /\/interject/, "the command list points at it");
+  const off = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s" });
+  assert.match(off, /插话：关/);
+  assert.match(off, /\/interject on 可开/);
+});
+
 console.log("-- the token window --");
 
 test("/tokens takes a number of days, with or without a unit", () => {

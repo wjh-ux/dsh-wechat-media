@@ -238,6 +238,10 @@ export class WechatState {
       // friendship flag, so this means 1:1 chats only, with group messages skipped
       // silently. Off by default: an upgrade must not change who the bot answers.
       friendOnly: false,
+      // Interjection: a message that arrives while the agent is still answering is steered
+      // into the running turn instead of queueing its own. Off by default - queueing is what
+      // every existing chat already does, and `steer` changes what the model sees mid-turn.
+      interject: false,
       maxMediaMiB: 100,
       ...(file && typeof file === "object" ? file : {}),
     };

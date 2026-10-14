@@ -188,6 +188,24 @@ export function describeEnvelope(message = {}) {
 }
 
 /**
+ * Should this message be **steered into the turn that is already running**, or queued as its
+ * own turn?
+ *
+ * `steer` is the harness's own word for interjecting: `agent.steer(input)` puts the message in
+ * the running turn's `next-step` inbox, so the model sees it at its next step, while
+ * `followup` queues a separate turn. The switch is off by default, and it only applies when
+ * there really is a turn in flight for this chat and a live agent to steer - otherwise
+ * "interject" would mean dropping the message on the floor.
+ *
+ * @param {{ enabled?: boolean, turnInFlight?: boolean, agentAvailable?: boolean }} [input]
+ * @returns {"steer" | "queue"}
+ */
+export function interjectDecision({ enabled = false, turnInFlight = false, agentAvailable = false } = {}) {
+  if (!enabled || !turnInFlight || !agentAvailable) return "queue";
+  return "steer";
+}
+
+/**
  * Decide what an inbound message means, before anything is downloaded or
  * forwarded. Dependencies are injected so the whole decision is testable without
  * a network, a WeChat account or a harness:
@@ -534,17 +552,29 @@ export function assistantText(event) {
  * session the human is also using never goes idle, which is the classic way a
  * bridge ends up with replies that never leave the queue.
  */
-class ReplyCollector {
+export class ReplyCollector {
   constructor(scope, { onUsage } = {}) {
     this.scope = scope;
     this.onUsage = onUsage;
-    this.pending = new Map(); // sessionId -> record
+    /**
+     * One queue of waiters per session, not one waiter.
+     *
+     * A second message arriving while the first is still being answered used to *replace* the
+     * pending record, so the first reply could never be relayed and the replacement was
+     * resolved by the wrong turn. Interjection makes that path normal (the second message is
+     * steered into the running turn) and queueing keeps it correct (the second message waits
+     * for its own turn).
+     */
+    this.pending = new Map(); // sessionId -> record[]
     scope.on("agent/inbox/claimed", ({ agent, message, turn }) => {
       const sessionId = String(agent?.session?.id ?? agent?.id ?? "");
-      const record = this.pending.get(sessionId);
-      if (!record) return;
-      if (record.messageId && message?.id && message.id !== record.messageId) return;
-      record.turn = turn;
+      const queue = this.pending.get(sessionId);
+      if (!queue?.length) return;
+      // Prefer the record that asked for exactly this message; otherwise the oldest, which is
+      // the one whose turn this claim represents.
+      const record = queue.find((candidate) => !candidate.turn && candidate.messageId && message?.id && candidate.messageId === message.id)
+        ?? queue.find((candidate) => !candidate.turn);
+      if (record) record.turn = turn;
     });
     scope.on("session/event", (session, event) => {
       const sessionId = String(session?.header?.id ?? session?.id ?? "");
@@ -558,37 +588,51 @@ class ReplyCollector {
           // Counting must never be the reason a reply is lost.
         }
       }
-      const record = this.pending.get(sessionId);
-      if (!record || record.turn === undefined) return;
-      if (event?.data?.turn !== record.turn) return;
+      const queue = this.pending.get(sessionId);
+      if (!queue?.length) return;
+      // The text of a turn belongs to the record that turn was claimed for.
+      const forTurn = queue.filter((record) => record.turn !== undefined && record.turn === event?.data?.turn);
       if (event.type === "tool/call") {
         // A delivery tool already answered this turn: remember it so the relay
         // does not send the same answer a second time.
-        if (DELIVERY_TOOLS.has(String(event.data?.name ?? ""))) record.deliveredByTool = true;
+        if (DELIVERY_TOOLS.has(String(event.data?.name ?? ""))) for (const record of forTurn) record.deliveredByTool = true;
         return;
       }
       if (event.type === "assistant/message") {
         const text = assistantText(event);
-        if (text) record.parts.push(text);
+        if (text) for (const record of forTurn) record.parts.push(text);
         return;
       }
       if (event.type === "turn/end") {
-        this.#settle(record, { text: record.parts.join("").trim(), stopReason: event.data?.reason?.kind ?? "end_turn" });
+        for (const record of forTurn) {
+          this.#settle(record, { text: record.parts.join("").trim(), stopReason: event.data?.reason?.kind ?? "end_turn" });
+        }
       }
     });
     scope.on("agent/error", ({ agent, turn, error }) => {
       const sessionId = String(agent?.session?.id ?? agent?.id ?? "");
-      const record = this.pending.get(sessionId);
-      if (!record || record.turn === undefined || turn !== record.turn) return;
-      this.#settle(record, { text: record.parts.join("").trim(), error: String(error?.message ?? error), stopReason: "error" });
+      const queue = this.pending.get(sessionId);
+      if (!queue?.length) return;
+      for (const record of queue.filter((candidate) => candidate.turn !== undefined && candidate.turn === turn)) {
+        this.#settle(record, { text: record.parts.join("").trim(), error: String(error?.message ?? error), stopReason: "error" });
+      }
     });
+  }
+
+  /** Is a reply for this session still being awaited? (`/interject` asks exactly this.) */
+  isWaiting(sessionId) {
+    return (this.pending.get(String(sessionId)) ?? []).length > 0;
   }
 
   #settle(record, outcome) {
     if (record.settled) return;
     record.settled = true;
     clearTimeout(record.timer);
-    this.pending.delete(record.sessionId);
+    clearTimeout(record.claimTimer);
+    const queue = this.pending.get(record.sessionId) ?? [];
+    const remaining = queue.filter((candidate) => candidate !== record);
+    if (remaining.length > 0) this.pending.set(record.sessionId, remaining);
+    else this.pending.delete(record.sessionId);
     record.resolve({ ...outcome, deliveredByTool: Boolean(record.deliveredByTool) });
   }
 
@@ -609,9 +653,11 @@ class ReplyCollector {
         resolve,
         timer: setTimeout(() => this.#settle(record, { text: record.parts.join("").trim(), stopReason: "timeout" }), timeoutMs),
       };
-      this.pending.set(sessionId, record);
+      const queue = this.pending.get(sessionId) ?? [];
+      queue.push(record);
+      this.pending.set(sessionId, queue);
       // If the inbox never claims it (admission gate), do not wait forever.
-      setTimeout(() => {
+      record.claimTimer = setTimeout(() => {
         if (!record.settled && record.turn === undefined) {
           this.#settle(record, { text: record.parts.join("").trim(), stopReason: "not-claimed" });
         }
@@ -884,6 +930,7 @@ export function apply(ctx, config = {}) {
         bot: wecomBotStatus,
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
+        interject: (await state.loadPrefs()).interject === true,
         tokenLine: await tokenStatusLine(),
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
@@ -939,6 +986,18 @@ export function apply(ctx, config = {}) {
         return true;
       }
       await reply(await tokenReport());
+      return true;
+    }
+
+    if (command.name === "interject") {
+      const wanted = parseSwitch(command.args);
+      const current = (await state.loadPrefs()).interject === true;
+      const next = wanted ?? !current;
+      await state.savePrefs({ interject: next });
+      await reply(next
+        ? "💬 插话功能 → 开。agent 还在回复时你发的消息会**立即插进当前回合**（它下一步就能看到），而不是排队等下一轮。关掉就在私聊里发 /interject off 或取消卡片上的勾选。"
+        : "💬 插话功能 → 关。正在回复时发来的消息会**排队成下一轮**，等这轮说完再处理。");
+      noteRoute("/command", { command: "interject", value: next, chatId });
       return true;
     }
 
@@ -1058,7 +1117,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1323,6 +1382,21 @@ export function apply(ctx, config = {}) {
     // `DeepSeek Messages transport failed` on every turn.
     const prompt = `[${peerName}]\n${lines.join("\n\n")}`;
     const message2 = await userMessage(prompt);
+    // Interjection: if a turn is already running for this chat and the switch is on, hand this
+    // message to *that* turn (`steer`) instead of queueing a second one. The running handler
+    // relays the turn's reply, so no waiter is registered here - which is what keeps the two
+    // from fighting over one session.
+    const interject = interjectDecision({
+      enabled: (await state.loadPrefs()).interject === true,
+      turnInFlight: collectors.isWaiting(sessionId),
+      agentAvailable: typeof agent.steer === "function",
+    });
+    if (interject === "steer") {
+      counters.interjected += 1;
+      ctx.logger?.info?.("[dsh-wechat-media] steered a wecom message into the running turn for %s", chatId);
+      await agent.steer(message2);
+      return;
+    }
     const waiting = collectors.wait(sessionId, message2?.id);
     await agent.followup(message2);
     const outcome = await waiting;
@@ -1628,6 +1702,18 @@ export function apply(ctx, config = {}) {
     const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
     const prompt = `[微信 ${peerName} ${chatId}]\n${lines.join("\n\n")}`;
     const message2 = await userMessage(prompt);
+    // Same rule as the WeCom path: interject into the running turn, or queue your own.
+    const interject = interjectDecision({
+      enabled: (await state.loadPrefs()).interject === true,
+      turnInFlight: collectors.isWaiting(sessionId),
+      agentAvailable: typeof agent.steer === "function",
+    });
+    if (interject === "steer") {
+      counters.interjected += 1;
+      ctx.logger?.info?.("[dsh-wechat-media] steered a message into the running turn for %s", chatId);
+      await agent.steer(message2);
+      return;
+    }
     const waiting = collectors.wait(sessionId, message2?.id);
     agent.followup(message2);
     const outcome = await waiting;
@@ -2161,6 +2247,7 @@ export function apply(ctx, config = {}) {
           const patch = {};
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
+          if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
           if (asBool(body.autoReply) !== null) patch.autoReply = asBool(body.autoReply);
           if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
           if (body.inboxDir !== undefined) {
@@ -2401,6 +2488,10 @@ export function apply(ctx, config = {}) {
             await state.savePrefs({ friendOnly: args.friendOnly === "true" });
             note = `只处理好友私聊 → ${args.friendOnly === "true" ? "开（群消息静默忽略）" : "关（群消息照常处理）"}`;
             noteRoute("/panel", { action: "friendOnly", value: args.friendOnly });
+          } else if (args.interject) {
+            await state.savePrefs({ interject: args.interject === "true" });
+            note = `插话功能 → ${args.interject === "true" ? "开（正在回复时新消息插进当前回合）" : "关（新消息排队成下一轮）"}`;
+            noteRoute("/panel", { action: "interject", value: args.interject });
           } else if (args.cancel) {
             const chatId = chatFallback();
             const cancelled = chatId ? approvals.cancel(accountId, chatId) : false;

@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyInbound, classifyWecomInbound, describeEnvelope } from "../index.js";
+import { classifyInbound, classifyWecomInbound, describeEnvelope, interjectDecision } from "../index.js";
 import { WechatState } from "../state.js";
 
 const ACCOUNT = "acct-one";
@@ -59,6 +59,23 @@ const group = (text, groupId = "12345678@chatroom", from = "wxid_bob") => ({
 });
 
 console.log("inbound pipeline");
+
+console.log("-- interjection --");
+
+await test("a message is only steered into a running turn when it can be", () => {
+  // `steer` puts the message into the turn that is already running; anything else must queue,
+  // because steering with no turn in flight (or no live agent) would drop the message.
+  assert.equal(interjectDecision({ enabled: true, turnInFlight: true, agentAvailable: true }), "steer");
+  assert.equal(interjectDecision({ enabled: false, turnInFlight: true, agentAvailable: true }), "queue", "off by default");
+  assert.equal(interjectDecision({ enabled: true, turnInFlight: false, agentAvailable: true }), "queue", "nothing to interject into");
+  assert.equal(interjectDecision({ enabled: true, turnInFlight: true, agentAvailable: false }), "queue", "no agent to steer");
+  assert.equal(interjectDecision(), "queue", "no options at all");
+  assert.equal(interjectDecision({ enabled: true, turnInFlight: true }), "queue", "agentAvailable must be explicit");
+});
+
+await test("interjection is off in a fresh profile", async (state) => {
+  assert.equal((await state.loadPrefs()).interject, false);
+});
 
 console.log("-- friends only --");
 

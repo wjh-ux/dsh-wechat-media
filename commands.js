@@ -37,6 +37,12 @@ export const COMMANDS = [
     summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
   },
   {
+    name: "interject",
+    aliases: ["插话"],
+    usage: "/interject [on|off]",
+    summary: "插话开关：agent 正在回复时新消息插进当前回合（关=排队成下一轮）；不带参数则切换",
+  },
+  {
     name: "tokens",
     aliases: ["token", "用量"],
     usage: "/tokens [reset|1-30]",
@@ -149,6 +155,8 @@ function size(bytes) {
  * @param {number} [input.pendingApprovals] questions waiting for a 1/2 answer
  * @param {boolean} [input.friendOnly] the "only answer friends" switch
  * @param {number} [input.groupsSkipped] how many group messages that switch has dropped
+ * @param {boolean} [input.interject] the interjection switch
+ * @param {number} [input.interjected] how many messages were steered into a running turn
  * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
@@ -163,6 +171,7 @@ export function statusText({
   bot,
   pendingApprovals = 0,
   friendOnly = false,
+  interject = false,
   tokenLine,
   lastInboundAt,
   inbox,
@@ -189,7 +198,10 @@ export function statusText({
   );
   if (lastInboundAt) lines.push(`最近一条消息：${lastInboundAt}`);
   if (inbox) lines.push(`媒体目录：${inbox}`);
+  lines.push(
+    `插话：${interject ? "开" : "关"}` + (interject ? `（已插话 ${counters.interjected ?? 0} 次）` : "（/interject on 可开）"),
+  );
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /tokens");
   return lines.join("\n");
 }

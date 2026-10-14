@@ -179,5 +179,22 @@ test("the token card reads the ledger and can steer it", () => {
   assert.match(host, /tokens: summarize\(await state\.loadTokens\(\)\)/, "the snapshot must carry the summary");
 });
 
+test("the interjection switch is on the card, in both languages, wired to the host", () => {
+  assert.match(code, /t\("interject"/, "the checkbox must be labelled through the translator");
+  assert.match(code, /api\(`\/prefs\?interject=/, "the card must save it to the host's prefs route");
+  assert.match(code, /snapshot\?\.prefs\?\.interject/, "the checkbox must reflect the stored preference");
+  assert.match(code, /counters\?\.interjected/, "the card must show how often it fired");
+  for (const key of ["interject", "interjectOn", "interjected"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /patch\.interject = asBool\(body\.interject\)/, "the prefs route must accept the switch");
+  assert.match(host, /command\.name === "interject"/, "the /interject command must be handled");
+  assert.match(host, /agent\.steer\(message2\)/, "the host must steer into the running turn");
+  assert.match(host, /collectors\.isWaiting\(sessionId\)/, "...only when a turn is really in flight");
+  assert.match(host, /counters\.interjected \+= 1/, "and count what it steered");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

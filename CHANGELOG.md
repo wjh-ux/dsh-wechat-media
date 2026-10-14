@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0
+
+- **New: interjection (插话) - a message sent while the agent is answering can join that turn.** A switch on the
+  card and `/interject on|off` in the chat (alias `/插话`). With it **on**, an inbound message is handed to the
+  running turn with the harness's own `agent.steer()`, so it lands in that turn's `next-step` inbox and the model
+  sees it at its next step; with it **off** (the default, and what every existing chat does) the message queues
+  as its own turn via `agent.followup()`. It only steers when a turn really is in flight for that chat and a live
+  agent exists to steer - otherwise the message queues, because "interject" must never mean "dropped". `/status`
+  reports the switch and how many messages have been interjected (`counters.interjected`).
+- **Fixed a latent reply-loss bug the feature made routine: the collector kept one waiter per session.** A second
+  message arriving while the first was still being answered *replaced* the pending record, so the first reply
+  could never be relayed and the replacement was settled by the wrong turn. Waiters are now a **queue per
+  session**, matched to the turn that was claimed for their message, and a turn nobody asked for no longer
+  consumes a waiter. Covered by a new `test/collector.test.mjs` (five cases, including the delivery-tool flag
+  reaching every waiter of a turn and a throwing usage callback not taking a reply down with it).
+- The counter `counters.interjected`, the `/status` line and the card's note make the switch's effect visible;
+  the plain control panel accepts `interject` beside `friendOnly`.
+- 235 tests across 17 suites.
+
 ## 0.9.4
 
 - **Fixed: the WeCom debug route reported the wrong session id.** `GET /dsh-wechat-media/wecom/inbound-test`
