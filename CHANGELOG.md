@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1
+
+- **The WeCom debug route can now synthesise a group message.** `GET /dsh-wechat-media/wecom/inbound-test?chatId=…&text=…&chatType=group`
+  pushes a callback with `chattype: "group"` through the **real** inbound path (allowlist, friends-only, `/commands`,
+  media, the agent) and echoes the `chatType` it used in its JSON answer; it defaults to `single` as before. This
+  exists because the group-only rules are otherwise untestable against the live platform without a second person in
+  a real group - which is exactly the gap the "only answer friends" switch left behind. The README's diagnostics
+  section documents both debug routes, and a wiring guard keeps the parameter from quietly disappearing.
+- 203 tests across 15 suites.
+
 ## 0.8.0
 
 - **New: "Only answer friends" / 只处理好友私聊.** A second checkbox on the card (and `/friends on|off`, with

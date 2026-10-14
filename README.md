@@ -212,6 +212,12 @@ ordinary message. Commands are counted (`counters.commands`) and recorded in `/s
   answering this chat?": the first is the last failure while handling an inbound WeCom message, the second records
   what had to be done when a stored conversation could not simply be resumed (`resume`, `create`, `retryResume` and
   any replacement id). Both are also shown on the `/dsh-wechat-media/wecom` page.
+- `GET /dsh-wechat-media/wecom/inbound-test?chatId=…&text=…&chatType=group` pushes one synthetic callback through
+  the **real** inbound path (allowlist, `friends only`, `/commands`, media, the agent). `chatType` defaults to
+  `single`; `group` is how a group-only rule is checked without a second person in a real group. The JSON answer
+  echoes the `chatType` it used, plus `inboundError` when handling failed. The personal-WeChat twin is
+  `GET /dsh-wechat-media/debug/inbound?chatId=…&text=…`, where a chat id ending in `@chatroom` means a group and a
+  paired account is required.
 
 ## Where things live / 文件位置
 

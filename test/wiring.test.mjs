@@ -188,6 +188,19 @@ await test("approvals in a WeCom chat go out over the long connection", () => {
   assert.match(host, /async function sendWecomProactive\(/, "sendWecomProactive must exist");
 });
 
+await test("the debug inbound routes can synthesise a group message", () => {
+  // Group-only rules cannot be checked against the live platform without a second person
+  // in a real group, so the synthetic routes have to be able to produce one.
+  const wecom = host.slice(host.indexOf('path: "/dsh-wechat-media/wecom/inbound-test"'), host.indexOf('path: "/dsh-wechat-media/wecom"'));
+  assert.match(wecom, /args\.chatType/, "the WeCom route must take a chatType");
+  assert.match(wecom, /chattype: chatType/, "...and put it on the frame it injects");
+  assert.match(wecom, /chatType, sessionId/, "the answer must echo what it injected");
+  const wechat = host.slice(host.indexOf('path: "/dsh-wechat-media/debug/inbound"'));
+  assert.match(wechat.slice(0, 1200), /syntheticInbound\(/, "the WeChat route synthesises an envelope");
+  const synthetic = host.slice(host.indexOf("export function syntheticInbound"));
+  assert.match(synthetic.slice(0, 700), /@chatroom/, "...which marks a group by its chat id");
+});
+
 await test("the WeCom inbound path decides exactly like the WeChat one", () => {
   const at = host.indexOf("async function handleWecomInboundInner");
   assert.ok(at > -1);

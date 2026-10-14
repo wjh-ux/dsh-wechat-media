@@ -2385,6 +2385,10 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
           if (!cfg.botId) return json(res, 400, { error: "no WeCom bot configured" });
           const accountId = wecomAccountId(cfg.botId);
           const chatId = String(args.chatId ?? "debug-wecom-chat");
+          // `chatType=group` makes the synthesised callback a group message, which is the
+          // only way to exercise group-only rules ("only answer friends", the group part of
+          // the allowlist) without a second person in a real group. Anything else is a 1:1.
+          const chatType = String(args.chatType ?? args.chattype ?? "").toLowerCase() === "group" ? "group" : "single";
           const stamp = Date.now();
           const frame = {
             cmd: "aibot_msg_callback",
@@ -2393,7 +2397,7 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
               msgid: `debug-${stamp}`,
               aibotid: cfg.botId,
               chatid: chatId,
-              chattype: "single",
+              chattype: chatType,
               msgtype: "text",
               text: { content: String(args.text ?? "(debug) inbound from the debug route") },
             },
@@ -2401,7 +2405,7 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
           const message = describeBotMessage(frame);
           const started = Date.now();
           await handleWecomInbound(accountId, message, frame);
-          json(res, 200, { ok: true, chatId, sessionId: sessionIdFor(accountId, chatId), ms: Date.now() - started, inboundError: wecomInboundError });
+          json(res, 200, { ok: true, chatId, chatType, sessionId: sessionIdFor(accountId, chatId), ms: Date.now() - started, inboundError: wecomInboundError });
         },
       },
       {
