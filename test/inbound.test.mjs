@@ -60,6 +60,43 @@ const group = (text, groupId = "12345678@chatroom", from = "wxid_bob") => ({
 
 console.log("inbound pipeline");
 
+console.log("-- friends only --");
+
+await test("off by default: groups are still forwarded", async (state) => {
+  const prefs = await state.loadPrefs();
+  assert.equal(prefs.friendOnly, false, "an upgrade must not change who the bot answers");
+  const verdict = await classifyInbound({ accountId: ACCOUNT, message: group("大家好"), text: "大家好", state });
+  assert.equal(verdict.action, "forward");
+});
+
+await test("on: a group is skipped, a 1:1 chat still goes through", async (state) => {
+  await state.savePrefs({ friendOnly: true });
+  const inGroup = await classifyInbound({ accountId: ACCOUNT, message: group("大家好"), text: "大家好", state });
+  assert.equal(inGroup.action, "ignore");
+  assert.equal(inGroup.reason, "group-skipped");
+  assert.equal(inGroup.isGroup, true, "the verdict still says where it came from");
+
+  const direct_ = await classifyInbound({ accountId: ACCOUNT, message: direct("你好"), text: "你好", state });
+  assert.equal(direct_.action, "forward");
+});
+
+await test("on: it wins over an allowlisted group, and over an approval answer", async (state) => {
+  // The user asked for 1:1 only, so "Allow" on a group must not re-enable it - otherwise
+  // the switch would look broken in exactly the panel it is configured from.
+  await state.savePrefs({ friendOnly: true, requireAllowlist: true });
+  await state.setPeer(ACCOUNT, "12345678@chatroom", { allowed: true });
+  const inGroup = await classifyInbound({ accountId: ACCOUNT, message: group("1"), text: "1", state, consumeApproval: () => true });
+  assert.equal(inGroup.action, "ignore");
+  assert.equal(inGroup.reason, "group-skipped", "a group is skipped before an approval answer is even considered");
+});
+
+await test("turning it off again restores groups", async (state) => {
+  await state.savePrefs({ friendOnly: true });
+  assert.equal((await classifyInbound({ accountId: ACCOUNT, message: group("hi"), text: "hi", state })).action, "ignore");
+  await state.savePrefs({ friendOnly: false });
+  assert.equal((await classifyInbound({ accountId: ACCOUNT, message: group("hi"), text: "hi", state })).action, "forward");
+});
+
 console.log("-- envelope --");
 
 await test("a direct message is addressed by its sender", async () => {
@@ -198,9 +235,17 @@ await test("a WeCom message reaches the agent when nothing blocks it", async (st
   assert.equal(verdict.isGroup, false);
 });
 
+await test("a WeCom group is skipped when only friends are answered", async (state) => {
+  await state.savePrefs({ friendOnly: true });
+  const inGroup = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi", "chat-wecom-group", "group"), text: "hi", state });
+  assert.equal(inGroup.action, "ignore");
+  assert.equal(inGroup.reason, "group-skipped");
+  const inDirect = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi"), text: "hi", state });
+  assert.equal(inDirect.action, "forward", "a 1:1 WeCom chat must still work");
+});
+
 await test("the allowlist applies to a WeCom chat exactly as it does to a contact", async (state) => {
-  await state.savePrefs({ requireAllowlist: true });
-  const undecided = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi"), text: "hi", state });
+  await state.savePrefs({ requireAllowlist: true });  const undecided = await classifyWecomInbound({ accountId: WECOM, message: wecom("hi"), text: "hi", state });
   assert.equal(undecided.action, "ignore");
   assert.equal(undecided.reason, "not-listed");
 

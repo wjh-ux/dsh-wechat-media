@@ -85,7 +85,7 @@ import { WechatLoginManager } from "./login.js";
 import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, inboxRoot } from "./media.js";
 import { downloadWecomMedia } from "./wecom-media.js";
 import { openSessionAgent } from "./session.js";
-import { STOP_REASON, helpText, parseCommand, statusText, unknownCommandText } from "./commands.js";
+import { STOP_REASON, helpText, parseCommand, parseSwitch, statusText, unknownCommandText } from "./commands.js";
 import * as wecom from "./wecom.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -205,6 +205,10 @@ export async function classifyInbound({ accountId, message, text, state, consume
   if (!identity.chatId) return { ...base, action: "ignore", reason: "no-chat-id" };
 
   const prefs = await state.loadPrefs();
+  // "Only answer friends" first: the user asked for the bot to serve 1:1 chats only, so a
+  // group is skipped whatever the allowlist says about it (an allowlisted group included).
+  if (prefs.friendOnly && identity.isGroup) return { ...base, action: "ignore", reason: "group-skipped" };
+
   const decided = allowDecision({ peer: await state.getPeer(accountId, identity.chatId), prefs });
   if (!decided.accepted) return { ...base, action: "ignore", reason: decided.reason };
 
@@ -235,6 +239,9 @@ export async function classifyWecomInbound({ accountId, message, text, state, co
   if (!chatId) return { ...base, action: "ignore", reason: "no-chat-id" };
 
   const prefs = await state.loadPrefs();
+  // Same rule and the same position as the personal-WeChat path - see classifyInbound.
+  if (prefs.friendOnly && base.isGroup) return { ...base, action: "ignore", reason: "group-skipped" };
+
   const decided = allowDecision({ peer: await state.getPeer(accountId, chatId), prefs });
   if (!decided.accepted) return { ...base, action: "ignore", reason: decided.reason };
 
@@ -812,6 +819,7 @@ export function apply(ctx, config = {}) {
         // command is for, and the bot's state is one of the few visible failure signals.
         bot: wecomBotStatus,
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
+        friendOnly: (await state.loadPrefs()).friendOnly === true,
         lastInboundAt: new Date(lastInbound.get(accountId)?.at ?? Date.now()).toISOString(),
         inbox: await resolvedInbox(),
       }));
@@ -837,6 +845,24 @@ export function apply(ctx, config = {}) {
       }
       counters.commandsNew = (counters.commandsNew ?? 0) + 1;
       await reply(`🆕 已开始新会话（第 ${generation + 1} 段）。上一条会话的记录仍保留在磁盘上，但不会被带进新对话。`);
+      return true;
+    }
+
+    if (command.name === "friends") {
+      const wanted = parseSwitch(command.args);
+      const current = (await state.loadPrefs()).friendOnly === true;
+      const next = wanted ?? !current;
+      await state.savePrefs({ friendOnly: next });
+      const handle = await state.getPeer(accountId, chatId);
+      if (handle?.kind === "group" && next) {
+        // The user just switched the rule on from a group; say so before the chat goes
+        // quiet, or the silence would look like a bug.
+        await reply(`👥 只处理好友私聊 → 开。这条群聊（以及其它群）之后只会被静默忽略，需要关掉就在私聊里发 /friends off，或在插件卡片上取消勾选。`);
+        return true;
+      }
+      await reply(next
+        ? "👥 只处理好友私聊 → 开。群消息会被静默忽略（只计数），单聊照常；关掉就在私聊里发 /friends off 或在插件卡片取消勾选。"
+        : "👥 只处理好友私聊 → 关。群消息和单聊都会照常处理。");
       return true;
     }
 
@@ -938,7 +964,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1136,6 +1162,10 @@ export function apply(ctx, config = {}) {
     });
     if (verdict.action === "ignore") {
       counters.blocked += 1;
+      // A group skipped by "only answer friends" is still a dropped message (so the card
+      // keeps counting it), but it gets its own number: the user turned the rule on, and
+      // /status has to be able to say how much it is dropping.
+      if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       ctx.logger?.info?.("[dsh-wechat-media] ignored wecom message from %s (%s)", chatId, verdict.reason);
       return;
@@ -1443,6 +1473,7 @@ export function apply(ctx, config = {}) {
     if (verdict.action === "ignore") {
       ctx.logger?.info?.("[dsh-wechat-media] ignored message from %s (%s)", chatId, verdict.reason);
       counters.blocked += 1;
+      if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
       // Keep the drop countable so the card can show it.
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       return;
@@ -2032,6 +2063,7 @@ export function apply(ctx, config = {}) {
           const body = await readArgs(req);
           const patch = {};
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
+          if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.autoReply) !== null) patch.autoReply = asBool(body.autoReply);
           if (typeof body.maxMediaMiB === "number" && body.maxMediaMiB > 0) patch.maxMediaMiB = body.maxMediaMiB;
           if (body.inboxDir !== undefined) {
@@ -2246,6 +2278,10 @@ export function apply(ctx, config = {}) {
             await state.savePrefs({ requireAllowlist: args.allowlist === "true" });
             note = `白名单开关 → ${args.allowlist === "true" ? "开" : "关"}`;
             noteRoute("/panel", { action: "allowlist", value: args.allowlist });
+          } else if (args.friendOnly) {
+            await state.savePrefs({ friendOnly: args.friendOnly === "true" });
+            note = `只处理好友私聊 → ${args.friendOnly === "true" ? "开（群消息静默忽略）" : "关（群消息照常处理）"}`;
+            noteRoute("/panel", { action: "friendOnly", value: args.friendOnly });
           } else if (args.cancel) {
             const chatId = chatFallback();
             const cancelled = chatId ? approvals.cancel(accountId, chatId) : false;

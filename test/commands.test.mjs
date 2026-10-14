@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, statusText, unknownCommandText } from "../commands.js";
+import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, parseSwitch, statusText, unknownCommandText } from "../commands.js";
 
 let passed = 0;
 let failed = 0;
@@ -60,7 +60,8 @@ console.log("-- the help cannot drift --");
 test("help lists every command the module declares, and nothing else", () => {
   const text = helpText();
   for (const command of COMMANDS) {
-    assert.match(text, new RegExp(command.usage.replace("/", "\\/")), `${command.usage} must appear in /help`);
+    // Verbatim, not as a pattern: `/friends [on|off]` is full of regex metacharacters.
+    assert.ok(text.includes(command.usage), `${command.usage} must appear in /help`);
     assert.ok(text.includes(command.summary), `${command.usage}'s summary must appear`);
   }
   // Every "/word" in the help must be a real command (catches a stale line).
@@ -73,6 +74,48 @@ test("an unknown command answer names it and then teaches the list", () => {
   const text = unknownCommandText("deploy");
   assert.match(text, /未知命令 \/deploy/);
   assert.match(text, /\/help/);
+});
+
+console.log("-- the friends-only switch --");
+
+test("/friends takes on, off and the Chinese words, and toggles without an argument", () => {
+  assert.equal(parseSwitch("on"), true);
+  assert.equal(parseSwitch("OFF"), false);
+  assert.equal(parseSwitch(" 开 "), true);
+  assert.equal(parseSwitch("关闭"), false);
+  assert.equal(parseSwitch("true"), true);
+  assert.equal(parseSwitch("0"), false);
+  // Not a switch word: the command reads undefined as "toggle", so a typo still does
+  // something visible instead of silently nothing.
+  assert.equal(parseSwitch(""), undefined);
+  assert.equal(parseSwitch("maybe"), undefined);
+});
+
+test("/friends is a command with the aliases people will actually type", () => {
+  assert.equal(parseCommand("/friends").name, "friends");
+  assert.equal(parseCommand("/friends on").args, "on");
+  assert.equal(parseCommand("/friend").name, "friends");
+  assert.equal(parseCommand("/好友 off").name, "friends");
+  assert.equal(parseCommand("/好友 off").args, "off");
+});
+
+test("status reports the switch and how much it has dropped", () => {
+  const on = statusText({
+    transport: "wechat",
+    accountId: "a",
+    chatId: "c",
+    sessionId: "s",
+    friendOnly: true,
+    counters: { groupsSkipped: 7 },
+  });
+  assert.match(on, /只处理好友私聊：开/);
+  assert.match(on, /已静默忽略群消息 7 条/);
+  assert.match(on, /\/friends off 可关/);
+
+  const off = statusText({ transport: "wechat", accountId: "a", chatId: "c", sessionId: "s" });
+  assert.match(off, /只处理好友私聊：关/);
+  assert.match(off, /\/friends on 可开/);
+  assert.match(off, /\/friends/, "the command list mentions it");
 });
 
 test("the stop reason is a sentence the reply paths can act on", () => {

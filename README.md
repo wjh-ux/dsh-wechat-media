@@ -123,6 +123,21 @@ Every chat that writes to the bot is remembered, and the card lists them under *
 - With it on, only chats marked *Allow* reach the agent; *Ignore* and undecided chats are dropped and logged.
 - A decision takes effect immediately (no restart) and is stored in `peers.json` beside the accounts.
 
+## Friends only / 只处理好友私聊
+
+**Only answer friends (1:1 chats)** — the card's second checkbox, or `/friends on` from a chat. The protocol
+carries no "is a friend" flag, so *friends* means **1:1 chats**: when the switch is on, every **group** message
+is dropped, whatever the allowlist says about that group. Direct chats are unaffected.
+
+- **Off by default**: an upgrade must not change who the bot answers.
+- Group messages are **ignored silently** (that is the point) but never invisibly: each one bumps
+  `counters.groupsSkipped`, `/status` prints `已静默忽略群消息 N 条`, and the card shows the same number.
+- It is one preference (`prefs.json`), so the checkbox and `/friends` can never disagree, and it applies to
+  personal WeChat and WeCom alike.
+- Switching it on **while a group is waiting** answers once in that group to explain the coming silence. Turning
+  it off works from a 1:1 chat or the card — a group message is skipped before it could be read as a command,
+  which is the honest consequence of "silent".
+
 ## WeCom (企业微信) / 企业微信
 
 WeCom works alongside the personal-WeChat bridge, outbound through two paths and **inbound through a third**:
@@ -179,6 +194,7 @@ through (a blocked chat cannot run commands either).
 | `/help` | `/h`, `/?`, `/帮助` | Lists the commands. |
 | `/status` | `/状态` | Transport, account, chat, DSH session (and how many times `/new` restarted it), the WeCom long connection's state *including its last error*, the counters, approvals waiting, the last message time and the media directory. |
 | `/new` | `/reset`, `/新会话` | Starts a new conversation: the chat moves to a new session id, so the old history is neither resumed nor carried over (the transcript stays on disk). The reply says which segment you are on. |
+| `/friends` | `/friend`, `/好友` | Turns **only answer friends** (1:1 chats) on or off: `/friends on`, `/friends off`, or no argument to toggle. Group messages are then dropped silently and counted. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
 Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an

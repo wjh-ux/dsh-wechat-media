@@ -125,6 +125,9 @@ window.__ModuleLoader__.load({
           block: "Ignore",
           clearDecision: "Clear",
           requireAllowlist: "Only accept allowlisted chats",
+          friendOnly: "Only answer friends (1:1 chats; group messages are ignored silently)",
+          friendOnlyOn: "Friends only is on: group messages are ignored silently",
+          groupsSkipped: "skipped",
           allowlistWarning: "The allowlist is on: any chat that is not set to Allowed — including your own — is ignored silently.",
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           inboxLabel: "Inbound files are saved in",
@@ -180,6 +183,9 @@ window.__ModuleLoader__.load({
           block: "忽略",
           clearDecision: "清除",
           requireAllowlist: "只接收白名单内的联系人与群",
+          friendOnly: "只处理好友私聊（群消息静默忽略）",
+          friendOnlyOn: "只处理好友私聊已开启：群消息被静默忽略",
+          groupsSkipped: "已跳过",
           allowlistWarning: "白名单已开启：任何未设为「允许」的联系人/群（包括你自己）发来的消息都会被静默忽略。",
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           inboxLabel: "微信收到的文件保存在",
@@ -365,6 +371,22 @@ window.__ModuleLoader__.load({
             setBusy(false);
           }
         }
+
+        /**
+         * "Only answer friends" - the same switch `/friends` toggles from a chat. It lives
+         * in prefs, so the card and the command cannot disagree.
+         */
+        async function setFriendOnly(friendOnly) {
+          setBusy(true);
+          try {
+            await api(`/prefs?friendOnly=${friendOnly ? "true" : "false"}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
         /**
          * Send the approval prompt to WeChat and wait for the 1/2 answer. This is
          * the same path a real approval takes on the WeChat side, so it verifies
@@ -458,7 +480,23 @@ window.__ModuleLoader__.load({
                 }),
                 " " + t("requireAllowlist", "Only accept allowlisted chats"),
               ]),
+              h("label", { key: "f", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  checked: Boolean(snapshot?.prefs?.friendOnly),
+                  disabled: busy,
+                  onChange: (event) => setFriendOnly(event.target.checked),
+                }),
+                " " + t("friendOnly", "Only answer friends (1:1 chats; group messages are ignored silently)"),
+              ]),
             ]),
+            // The switch drops group messages without a word (that is the point), so the
+            // count is the only place the silence can be seen.
+            snapshot?.prefs?.friendOnly
+              ? h("p", { key: "friendNote", className: "dswxMeta" },
+                  `${t("friendOnlyOn", "Friends only is on: group messages are ignored silently")} · ${t("groupsSkipped", "skipped")} ${snapshot?.counters?.groupsSkipped ?? 0}`)
+              : null,
             (snapshot?.approvals ?? []).length > 0
               ? h("div", { key: "waiting", className: "dswxRow" }, [
                   h("span", { key: "t", className: "dswxMeta" },

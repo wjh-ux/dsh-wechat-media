@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0
+
+- **New: "Only answer friends" / 只处理好友私聊.** A second checkbox on the card (and `/friends on|off`, with
+  `/friend` and `/好友` as aliases) makes the bridge serve **1:1 chats only**: every group message is dropped,
+  whatever the allowlist says about that group, in personal WeChat and in WeCom alike. The protocol carries no
+  "is a friend" flag, so *friends* means direct chats, and that is what the docs and the code say.
+  - **Off by default** - an upgrade must not change who the bot answers.
+  - Group messages are ignored **silently** (that is the point) but never invisibly: each one bumps
+    `counters.groupsSkipped`, `/status` prints `已静默忽略群消息 N 条`, and the card shows the same number.
+  - One preference in `prefs.json`, so the checkbox and the command cannot disagree; the prefs routes (card JSON
+    API and the plain panel) both accept `friendOnly`.
+  - Switching it on from inside a group answers once there to explain the coming silence, because the next
+    message from that group would get no reply at all. Turning it off has to come from a 1:1 chat or the card -
+    a group message is skipped before it can be read as a command, which is the honest consequence of "silent".
+- The rule is applied in `classifyInbound` / `classifyWecomInbound` **before** the allowlist (an allowlisted
+  group is still skipped) and before approval answers are consumed, so the switch cannot look broken in the
+  panel it is configured from. Both paths are covered by tests, as is the card, the prefs routes and `/friends`.
+- 202 tests across 15 suites.
+
 ## 0.7.1
 
 - **Fixed a silent truncation on every WeCom reply path.** One `stream` body holds 20480 *bytes*, so a longer

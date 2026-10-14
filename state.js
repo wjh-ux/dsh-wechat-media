@@ -232,6 +232,10 @@ export class WechatState {
     return {
       autoReply: true,
       requireAllowlist: false,
+      // "Only answer friends" - see the note in index.js: the protocol carries no
+      // friendship flag, so this means 1:1 chats only, with group messages skipped
+      // silently. Off by default: an upgrade must not change who the bot answers.
+      friendOnly: false,
       maxMediaMiB: 100,
       ...(file && typeof file === "object" ? file : {}),
     };

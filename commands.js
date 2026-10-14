@@ -31,12 +31,34 @@ export const COMMANDS = [
     summary: "开一段新会话（清空上下文；旧会话文件保留在磁盘上）",
   },
   {
+    name: "friends",
+    aliases: ["friend", "好友"],
+    usage: "/friends [on|off]",
+    summary: "只处理好友私聊（群消息静默忽略）的开关；不带参数则切换",
+  },
+  {
     name: "stop",
     aliases: ["cancel", "停止"],
     usage: "/stop",
     summary: "打断这条会话里正在跑的回合",
   },
 ];
+
+/**
+ * Read a switch out of a command's arguments.
+ *
+ * `/friends on`, `/friends 开` and `/friends true` all mean on. Anything else is
+ * `undefined`, which the command reads as "toggle" - so a bare `/friends` and a
+ * `/friends nonsense` both flip the switch instead of silently doing nothing.
+ *
+ * @returns {boolean|undefined}
+ */
+export function parseSwitch(args) {
+  const word = String(args ?? "").trim().toLowerCase();
+  if (["on", "true", "1", "yes", "开", "开启", "打开"].includes(word)) return true;
+  if (["off", "false", "0", "no", "关", "关闭", "关掉"].includes(word)) return false;
+  return undefined;
+}
 
 /**
  * The error text `/stop` uses as its cancellation cause, so both reply paths can recognise
@@ -106,6 +128,8 @@ function size(bytes) {
  * @param {object} [input.counters] the plugin's counters
  * @param {object} [input.bot] the WeCom bot's status (`authenticated` / `connected`)
  * @param {number} [input.pendingApprovals] questions waiting for a 1/2 answer
+ * @param {boolean} [input.friendOnly] the "only answer friends" switch
+ * @param {number} [input.groupsSkipped] how many group messages that switch has dropped
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
  */
@@ -118,6 +142,7 @@ export function statusText({
   counters = {},
   bot,
   pendingApprovals = 0,
+  friendOnly = false,
   lastInboundAt,
   inbox,
 } = {}) {
@@ -137,8 +162,12 @@ export function statusText({
     `媒体：保存 ${counters.mediaDownloaded ?? 0} · 失败 ${counters.mediaFailed ?? 0}${counters.mediaBytes ? ` · 共 ${size(counters.mediaBytes)}` : ""}`,
   );
   if (pendingApprovals > 0) lines.push(`待审批：${pendingApprovals} 个（回 1 批准 / 2 拒绝）`);
+  lines.push(
+    `只处理好友私聊：${friendOnly ? "开" : "关"}` +
+      (friendOnly ? `（已静默忽略群消息 ${counters.groupsSkipped ?? 0} 条；/friends off 可关）` : "（/friends on 可开）"),
+  );
   if (lastInboundAt) lines.push(`最近一条消息：${lastInboundAt}`);
   if (inbox) lines.push(`媒体目录：${inbox}`);
-  lines.push("", "命令：/help · /status · /new · /stop");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends");
   return lines.join("\n");
 }

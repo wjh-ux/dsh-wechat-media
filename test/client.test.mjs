@@ -147,5 +147,21 @@ test("the contact allowlist panel and approval hint are wired", () => {
   assert.match(host, /path: "\/dsh-wechat-media\/test-approval"/, "the approval self-test route must exist");
 });
 
+test("the friends-only switch is on the card, in both languages, wired to the host", () => {
+  assert.match(code, /t\("friendOnly"/, "the checkbox must be labelled through the translator");
+  assert.match(code, /api\(`\/prefs\?friendOnly=/, "the card must save it to the host's prefs route");
+  assert.match(code, /snapshot\?\.prefs\?\.friendOnly/, "the checkbox must reflect the stored preference");
+  assert.match(code, /groupsSkipped/, "the card must show how much the switch has dropped");
+  for (const key of ["friendOnly", "friendOnlyOn", "groupsSkipped"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  const host = readFileSync(join(here, "..", "index.js"), "utf8");
+  assert.match(host, /patch\.friendOnly = asBool\(body\.friendOnly\)/, "the prefs route must accept the switch");
+  assert.match(host, /prefs\.friendOnly && (identity|base)\.isGroup/, "both classifiers must apply it");
+  assert.match(host, /counters\.groupsSkipped \+= 1/, "a skipped group must be counted");
+  assert.match(host, /command\.name === "friends"/, "the /friends command must be handled");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
