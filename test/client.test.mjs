@@ -227,7 +227,7 @@ test("the delivery menu is on the card, in both languages, wired to the host", (
   assert.match(host, /command\.name === "delivery"/, "the /delivery command must be handled");
   assert.match(host, /wecomStreamer\(frame\)/, "the host must be able to stream an answer");
   assert.match(host, /streamBody\(live\.reqId, part, false\)/, "...with finish:false, which is what makes it incremental");
-  assert.match(host, /onDelta: \(\{ text \}\) =>/, "the collector must forward the adapter's deltas");
+  assert.match(host, /onDelta: \(\{ text, type \}\) =>/, "the collector must forward the adapter's deltas, and record their shape");
   assert.match(host, /activeStreamer = undefined;/, "the preview must stop when the turn ends");
   assert.match(host, /patch\.delivery = mode/, "the prefs route must accept the mode");
 });

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.3
+
+- **Correction: v0.13.2 was published with red guards, and this release fixes them.** The two-channel diagnostic
+  changed the collector callback's signature (`onDelta` also reports the frame's shape) and lengthened the collector
+  wiring, which pushed three fixed-width slices in the tests past the lines they assert on. The slices and the
+  signature expectation were updated; the suite is green again at 245.
+- Recorded as a process failure rather than a quiet fix: the publish ran in the same command as the test run, and the
+  `FAIL` lines went past unread. Publishing now happens only when the suite reports zero failures.
+
 ## 0.13.2
 
 - **Streaming diagnostics now watch both channels.** The adapter provably emits `type: "text-delta"` with a `text` field (`dsh-llm-deepseek/lib/index.js`), so the filter is not the problem; either the frames never reach a plugin listener, or live text travels as a **session event** that this collector was silently ignoring. The collector now:
