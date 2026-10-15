@@ -1602,7 +1602,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0 };
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1879,10 +1879,17 @@ export function apply(ctx, config = {}) {
       agentAvailable: typeof agent.steer === "function",
     });
     if (interject === "steer") {
-      counters.interjected += 1;
-      ctx.logger?.info?.("[dsh-wechat-media] steered a wecom message into the running turn for %s", chatId);
-      await agent.steer(message2);
-      return;
+      try {
+        await agent.steer(message2);
+        counters.interjected += 1;
+        ctx.logger?.info?.("[dsh-wechat-media] steered a wecom message into the running turn for %s", chatId);
+        return;
+      } catch (error) {
+        // Steering loses a race with the end of a turn sooner or later. Falling through to the queue is
+        // what keeps "interject" from ever meaning "dropped on the floor".
+        counters.interjectFailed += 1;
+        ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
+      }
     }
     // Delivery mode: "stream" shows the answer as it is written (WeCom only), "whole" waits and
     // sends it once - which is what every earlier release did.
@@ -2224,10 +2231,17 @@ export function apply(ctx, config = {}) {
       agentAvailable: typeof agent.steer === "function",
     });
     if (interject === "steer") {
-      counters.interjected += 1;
-      ctx.logger?.info?.("[dsh-wechat-media] steered a message into the running turn for %s", chatId);
-      await agent.steer(message2);
-      return;
+      try {
+        await agent.steer(message2);
+        counters.interjected += 1;
+        ctx.logger?.info?.("[dsh-wechat-media] steered a message into the running turn for %s", chatId);
+        return;
+      } catch (error) {
+        // Steering loses a race with the end of a turn sooner or later. Falling through to the queue is
+        // what keeps "interject" from ever meaning "dropped on the floor".
+        counters.interjectFailed += 1;
+        ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
+      }
     }
     const waiting = collectors.wait(sessionId, message2?.id);
     agent.followup(message2);

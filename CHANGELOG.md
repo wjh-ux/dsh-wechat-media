@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.4
+
+- **Interjection can no longer lose a message.** `await agent.steer(message); return;` was unguarded on both
+  inbound paths: a steer that raced the end of a turn - or that the harness refused - left the message neither
+  joined to the running turn nor queued, which is exactly the failure "interject" must never have. A failed steer now
+  **falls through to the queue** (`followup` plus a waiter, the same path as when interjection is off), and
+  `counters.interjectFailed` counts it so it is visible in `/state` rather than silent.
+- `counters.interjected` now increments **after** the steer succeeds, so a failure can no longer be counted as an
+  interjection.
+- A guard test asserts both paths are wrapped, that the fallback counter exists, and that nothing is counted before it
+  succeeds.
+- 285 tests across 19 suites.
+
 ## 0.19.3
 
 - **v0.19.2's changelog described a change its code did not contain, and this release makes it true.** The edit

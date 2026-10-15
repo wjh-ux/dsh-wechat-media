@@ -317,5 +317,18 @@ await test("every personal-WeChat send carries the conversation's context token"
   assert.match(host, /ilink\.sendFile\(\{[^}]*contextToken \}\)/, "and so must the audio-file path");
   assert.match(host, /const common = \{[^}]*contextToken: await contextTokenFor\(account, chatId\)/, "media sends must carry it");
 });
+await test("interjection can never lose a message", () => {
+  // `await agent.steer(message); return;` was unguarded: a steer that raced the end of a turn (or was refused)
+  // would drop the message - neither joined to the running turn nor queued. Both paths must fall through to the
+  // queue when steering fails.
+  const steers = (host.match(/if \(interject === "steer"\) \{/g) ?? []).length;
+  assert.equal(steers, 2, "both inbound paths interject");
+  assert.equal((host.match(/await agent\.steer\(message2\);/g) ?? []).length, 2, "each steer is awaited once");
+  assert.equal((host.match(/catch \(error\) \{\s*\n\s*\/\/ Steering loses a race/g) ?? []).length, 2, "and each is guarded by a catch that queues instead");
+  assert.equal((host.match(/counters\.interjectFailed \+= 1;/g) ?? []).length, 2, "a failed steer is counted, not hidden");
+  assert.match(host, /interjectFailed: 0/, "the counter is part of /state");
+  // The steer must not be counted before it succeeded.
+  assert.doesNotMatch(host, /if \(interject === "steer"\) \{\s*\n\s*counters\.interjected \+= 1;/, "a failure must not be counted as an interjection");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
