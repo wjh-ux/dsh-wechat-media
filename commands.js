@@ -193,6 +193,7 @@ export function statusText({
   pendingApprovals = 0,
   friendOnly = false,
   interject = false,
+  lastInterjection = null,
   authLine,
   deliveryLine,
   formatLine,
@@ -225,6 +226,7 @@ export function statusText({
   lines.push(
     `插话：${interject ? "开" : "关"}` + (interject ? `（已插话 ${counters.interjected ?? 0} 次）` : "（/interject on 可开）"),
   );
+  if (lastInterjection) lines.push(`  最近一次判定：${lastInterjection.decision === "steer" ? "已插进当前回合" : "排队"}（${lastInterjection.reason}）`);
   if (authLine) lines.push(authLine);
   if (deliveryLine) lines.push(deliveryLine);
   if (formatLine) lines.push(formatLine);

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.6
+
+- **v0.19.5's `/state` claim was not true, and this release makes it true.** The field it added was passed to
+  `statusText()` - the `/status` **chat command** builder - which destructures only the parameters it knows, so the
+  value was silently dropped and showed up nowhere. The record is now where the changelog said it was:
+  `GET /state` returns `interjections` (the last ten) from the route that actually serves it, and `/status`
+  renders `最近一次判定：…` from an explicitly declared `lastInterjection` parameter.
+- The guard test is rewritten to assert **reachability** rather than the presence of a string: it checks the state
+  route, the call site, the declared parameter and the rendering. The previous version passed while the feature was
+  invisible - the third time this project has shipped a claim an assertion could not see.
+- 287 tests across 19 suites.
+
 ## 0.19.5
 
 - **"Did interjection ever fire?" is now answerable across restarts.** The counters are in-memory, so after a restart

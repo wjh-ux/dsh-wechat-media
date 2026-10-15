@@ -1201,7 +1201,7 @@ export function apply(ctx, config = {}) {
         sessionId: sessionIdFor(accountId, chatId, generation),
         generation,
         counters,
-        interjections: interjections.slice(-10),
+        lastInterjection: interjections.at(-1) ?? null,
         // Reported for both transports: "is the other side down?" is exactly what this
         // command is for, and the bot's state is one of the few visible failure signals.
         bot: wecomBotStatus,
@@ -2789,6 +2789,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             tokenAccountingError,
             peers: await state.loadPeers(),
             counters: { ...counters },
+            interjections: interjections.slice(-10),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),

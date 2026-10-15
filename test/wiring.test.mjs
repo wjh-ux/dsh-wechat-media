@@ -336,7 +336,13 @@ await test("interjection decisions are recorded, not just counted", () => {
   assert.match(host, /async function recordInterjection/, "there is a recorder");
   assert.match(host, /interjections\.jsonl/, "it writes a durable line");
   assert.equal((host.match(/await recordInterjection\(/g) ?? []).length, 4, "both decisions and both steer failures are recorded");
-  assert.match(host, /interjections: interjections\.slice\(-10\)/, "/state shows the recent ones");
+  // v0.19.5 claimed /state exposed this, but the field was handed to statusText(), which ignores unknown
+  // parameters - so it showed nowhere. Assert the real route, and the /status wiring, not just a string.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  assert.match(host, /counters: \{ \.\.\.counters \},\n\s*interjections: interjections\.slice\(-10\),/, "the /state route carries the record");
+  assert.match(host, /lastInterjection: interjections\.at\(-1\) \?\? null/, "/status is handed the latest one at the call site");
+  assert.match(commandsSource, /lastInterjection = null,/, "statusText declares the parameter");
+  assert.match(commandsSource, /最近一次判定：/, "and renders it");
   assert.match(host, /export function interjectReason/, "and the reason is a named function, so it can be asserted");
   assert.match(host, /no turn was running for this chat at that moment/, "the most likely reason is spelled out");
 });
