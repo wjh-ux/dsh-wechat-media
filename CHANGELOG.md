@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.23.17
+## 0.23.18
+
+- **The session export could not find the transcript.** It assumed `sessions/<one-level>/session.v4.jsonl.zstd`; the
+  host nests it deeper, so the first real call answered "没有在 …\sessions 找到会话记录" against a directory that does
+  contain one. It now walks down (depth 4) and, when it still finds nothing, reports how many candidates it examined.
+- The layout is the host's, not ours - which is why it is discovered by walking rather than assumed.
+- 24 suites / 420 cases.
 
 - **The panel can export the conversation.** A new action, `create-from-session`, reads the transcript the host already
   writes under `$DSH_HOME/sessions/<newest>/session.v4.jsonl.zstd`, takes the last N lines (default 40, capped at 500)

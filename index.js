@@ -4268,14 +4268,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               const limit = Math.max(1, Math.min(500, Number(body.limit) || 40));
               const title = String(body.title ?? "").trim() || `会话导出 ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
               const root = joinPath(dshHome, "sessions");
+              // The transcript does not sit directly under `sessions`: that layout belongs to the host, and this work's
+              // own probes had to recurse to find it. The first version assumed one level and answered
+              // "没有找到会话记录" against a directory that does contain one.
               let newest = null;
-              for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
-                if (!entry.isDirectory()) continue;
-                const candidate = joinPath(root, entry.name, "session.v4.jsonl.zstd");
-                const info = await stat(candidate).catch(() => null);
-                if (info && (!newest || info.mtimeMs > newest.mtimeMs)) newest = { path: candidate, mtimeMs: info.mtimeMs, name: entry.name };
-              }
-              if (!newest) return json(res, 200, { ok: false, error: `没有在 ${root} 找到会话记录（session.v4.jsonl.zstd）` });
+              let examined = 0;
+              const walk = async (dir, depth) => {
+                if (depth > 4) return;
+                for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+                  const at = joinPath(dir, entry.name);
+                  if (entry.isDirectory()) { await walk(at, depth + 1); continue; }
+                  if (entry.name !== "session.v4.jsonl.zstd") continue;
+                  examined += 1;
+                  const info = await stat(at).catch(() => null);
+                  if (info && (!newest || info.mtimeMs > newest.mtimeMs)) newest = { path: at, mtimeMs: info.mtimeMs, name: at.slice(root.length + 1) };
+                }
+              };
+              await walk(root, 0);
+              if (!newest) return json(res, 200, { ok: false, error: `没有在 ${root}（含子目录）找到会话记录，扫到的候选文件数 ${examined}` });
               const raw = await readFile(newest.path);
               const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
               const starts = [];
