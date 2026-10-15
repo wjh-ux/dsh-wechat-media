@@ -494,5 +494,24 @@ await test("the panel's Feishu checkbox cannot get stuck on", () => {
   assert.doesNotMatch(client, /Boolean\(feishuDraft\.feishuLongConnection/, "no truthiness of a draft string");
   assert.match(client, /\(feishuDraft\.feishuLongConnection \?\? \(snapshot\?\.feishu\?\.longConnectionWanted !== false \? "true" : "false"\)\) === "true"/, "the comparison is outside the ??");
 });
+await test("the Feishu panel shows what is saved, and says what a Save did", () => {
+  // Reported from a real session: the fields were filled, and after a refresh the panel looked empty, so there
+  // was no way to tell whether anything had been stored. Identifiers come back from /state; secrets never do.
+  const client = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(client, /value: feishuDraft\.feishuAppId \?\? snapshot\?\.feishu\?\.appId \?\? ""/, "the app id falls back to the saved value");
+  assert.doesNotMatch(client, /value: feishuDraft\.feishuAppSecret \?\? snapshot/, "the app secret is never read back");
+  assert.doesNotMatch(client, /value: feishuDraft\.feishuWebhookSecret \?\? snapshot/, "nor the webhook secret");
+  assert.ok((client.match(/type: "password"/g) ?? []).length >= 2, "both secrets stay password inputs");
+  assert.match(client, /feishuAppSecretSaved/, "the panel says when a secret is already saved");
+  // The stored webhook URL comes back truncated, so it is a hint - saving it back would store the ellipsis.
+  assert.match(client, /placeholder: snapshot\?\.feishu\?\.webhookUrlPrefix/, "the saved webhook URL is shown as a hint");
+  assert.doesNotMatch(client, /value: feishuDraft\.feishuWebhookUrl \?\? snapshot/, "the prefix is never written back as a value");
+  // A Save must produce a visible outcome inside the block, and an unsaved draft must be visible too.
+  assert.match(client, /setFeishuNotice\(\{ ok: true, text: `已保存/, "a successful save reports itself");
+  assert.match(client, /连接状态：\$\{state\}/, "including the connection state");
+  assert.match(client, /setFeishuNotice\(\{ ok: false, text: `保存失败/, "a failure is visible too");
+  assert.match(client, /feishuUnsaved/, "an unsaved draft is flagged");
+  assert.match(client, /feishuNotice\.text/, "and the notice is rendered in the block");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

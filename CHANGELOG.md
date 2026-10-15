@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.2
+
+- **The panel now shows what is saved, and says so when it saves.** The Feishu fields read only their local draft, so
+  after a refresh every box looked empty even when the value was stored - the person could not tell whether anything
+  had been saved, and the write path was in fact fine (`/prefs?feishuAppId=…` stores it; the test asserted it against
+  the running plugin). App ID now falls back to the saved value, the domain keeps its derived fallback, and the secret
+  boxes stay empty but say whether a secret is already set. Saving reports `已保存(…字段) · 连接状态：…` **inside the
+  Feishu block**, failures show the real error there too, and unsaved edits are called out.
+- Webhook URL is deliberately **never** pre-filled: `/state` only carries a truncated prefix, and writing that back
+  would store an ellipsis.
+- `/state.feishu` gained `webhookSecretSet` and `to` (neither is a secret), because the panel could not say
+  whether a webhook signing secret was configured without them.
+- 24 suites / 398 cases. The App ID fallback is guarded, and the guard was falsified (removing the fallback fails it).
+- Still unverified by me: how the panel renders in a browser. That needs the person looking at it.
+
 ## 0.23.1
 
 - **The panel's Feishu checkbox could not be cleared without reloading the page.** `Boolean(feishuDraft.feishuLongConnection ?? (…) === "true")` parses as `draft ?? ((…) === "true")`, so a draft holding the string `"false"` - non-empty, therefore truthy - rendered as **checked**. The comparison now sits outside the nullish coalescing, and a guard asserts both that the broken form is gone and that the fixed one is present; reverting the fix makes that guard fail (verified by doing exactly that).

@@ -334,6 +334,9 @@ window.__ModuleLoader__.load({
       // input can never clear a saved secret by accident (an empty value *does* clear when it is sent
       // deliberately - that is what the Clear button does).
       const [feishuDraft, setFeishuDraft] = react.useState({});
+      // The block reports its own outcome: a page-level banner is easy to miss, and "did my Save do
+      // anything?" is exactly the question this panel exists to answer.
+      const [feishuNotice, setFeishuNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
         const t = (key, fallback) => {
@@ -575,11 +578,15 @@ window.__ModuleLoader__.load({
           if ([...params.keys()].length === 0) return;
           setBusy(true);
           try {
-            await api(`/prefs?${params.toString()}`);
+            const applied = await api(`/prefs?${params.toString()}`);
+            const state = applied?.feishu?.connection?.state ?? "?";
+            const changed = Array.isArray(applied?.feishuChanged) && applied.feishuChanged.length ? ` (${applied.feishuChanged.join(", ")})` : "";
+            setFeishuNotice({ ok: true, text: `已保存${changed} · 连接状态：${state}` });
             setFeishuDraft({});
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
+            setFeishuNotice({ ok: false, text: `保存失败：${String(problem?.message ?? problem)}` });
           } finally {
             setBusy(false);
           }
@@ -956,7 +963,9 @@ window.__ModuleLoader__.load({
                 key: "id",
                 className: "dswxInput",
                 placeholder: t("feishuAppId", "App ID (cli_…)"),
-                value: feishuDraft.feishuAppId ?? "",
+                // Non-secret identifiers come back from /state, so a refresh shows what is saved instead
+                // of an empty box; a draft still wins while the person is typing.
+                value: feishuDraft.feishuAppId ?? snapshot?.feishu?.appId ?? "",
                 disabled: busy,
                 onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuAppId: event.target.value })),
               }),
@@ -965,7 +974,9 @@ window.__ModuleLoader__.load({
                 className: "dswxInput",
                 type: "password",
                 autoComplete: "new-password",
-                placeholder: t("feishuAppSecret", "App Secret (leave blank to keep the saved one)"),
+                placeholder: snapshot?.feishu?.secretSet
+                  ? t("feishuAppSecretSaved", "App Secret: saved (leave blank to keep it)")
+                  : t("feishuAppSecretUnset", "App Secret: not set yet"),
                 value: feishuDraft.feishuAppSecret ?? "",
                 disabled: busy,
                 onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuAppSecret: event.target.value })),
@@ -975,7 +986,11 @@ window.__ModuleLoader__.load({
               h("input", {
                 key: "wh",
                 className: "dswxInput",
-                placeholder: t("feishuWebhookUrl", "Custom webhook URL"),
+                // /state exposes only a truncated prefix of the stored URL, so it is shown as a hint - never
+                // as a value, which would save the ellipsis back into the setting.
+                placeholder: snapshot?.feishu?.webhookUrlPrefix
+                  ? t("feishuWebhookSaved", `Saved: ${snapshot.feishu.webhookUrlPrefix} (leave blank to keep it)`)
+                  : t("feishuWebhookUrl", "Custom webhook URL"),
                 value: feishuDraft.feishuWebhookUrl ?? "",
                 disabled: busy,
                 onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuWebhookUrl: event.target.value })),
@@ -1048,6 +1063,15 @@ window.__ModuleLoader__.load({
                 }, "clear"),
               }, t("feishuClear", "Clear saved Feishu settings")),
             ]),
+            feishuNotice
+              ? h("p", { key: "notice", className: "dswxMsg" }, feishuNotice.text)
+              : null,
+            Object.keys(feishuDraft).length
+              ? h("p", { key: "unsaved", className: "dswxMeta" }, t("feishuUnsaved", "有未保存的改动 - 点 Save 才生效"))
+              : null,
+            snapshot?.feishu?.sources
+              ? h("p", { key: "sources", className: "dswxMeta" }, `${t("feishuSources", "来源")}: ${Object.entries(snapshot.feishu.sources).map(([field, from]) => `${field}=${from}`).join(" · ")}`)
+              : null,
             h("p", { key: "hint", className: "dswxMeta" }, t("feishuFormHint", "Saving takes effect immediately - no DSH restart, no setx.")),
           ]),
           h("p", { key: "wecom", className: "dswxHint" }, [

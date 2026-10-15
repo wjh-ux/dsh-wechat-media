@@ -2676,6 +2676,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       // reported only as "set", never echoed.
       appId: settings.appId || null,
       secretSet: Boolean(settings.appSecret),
+      webhookSecretSet: Boolean(settings.secret),
+      to: settings.to ?? null,
       webhookUrlPrefix: settings.webhookUrl ? `${settings.webhookUrl.slice(0, 48)}…` : null,
       verificationTokenSet: Boolean(settings.verificationToken),
       encryptKeySet: Boolean(settings.encryptKey),
