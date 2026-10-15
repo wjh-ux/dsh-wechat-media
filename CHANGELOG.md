@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.23.15
+## 0.23.16
+
+- **The panel's spreadsheet and bitable actions failed with "feishuSheetTokenFrom is not defined".** The parsers live
+  inside the tools' registration callback, and the route is registered in a different callback, so it could not see
+  them - the same scope trap that the panel's Save button hit earlier in this work. The route now defines its own, with
+  the same names, so it does not depend on where the tools happen to be registered.
+- Found by calling the panel's route the way the panel does: `create` and `read` worked, `sheet-read` and
+  `bitable-read` answered `ok:false` with that message. The first pass at this check printed neither error - the
+  failures were invisible until the reason was printed, which is its own lesson.
+- 24 suites / 420 cases.
 
 - **The Web UI can drive Feishu documents, spreadsheets and bitables.** The Feishu block now has an operations area:
   title, link, range and body fields, a dropdown covering all seven actions (`create`, `read`, `append`,

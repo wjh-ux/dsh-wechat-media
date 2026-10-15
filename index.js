@@ -4241,6 +4241,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const action = String(body.action ?? "").trim();
           const link = String(body.link ?? "").trim();
           const text = String(body.text ?? "");
+          // The parsers of the same name live inside the tools' registration callback, which this route cannot see -
+          // asking for them there answers "is not defined" when the panel calls. Defined here, with the same names,
+          // so the route does not depend on where the tools happen to be registered.
+          const feishuSheetTokenFrom = (value) => {
+            const raw = String(value ?? "").trim();
+            const hit = raw.match(/\/sheets\/([A-Za-z0-9]+)/);
+            return hit ? hit[1] : (/^[A-Za-z0-9]{10,}$/.test(raw) ? raw : "");
+          };
+          const feishuBitableTokenFrom = (value) => {
+            const raw = String(value ?? "").trim();
+            const hit = raw.match(/\/(?:base|bitable)\/([A-Za-z0-9]+)/);
+            return hit ? hit[1] : (/^[A-Za-z0-9]{10,}$/.test(raw) ? raw : "");
+          };
           noteRoute("/feishu-doc", { action: `panel-${action}` });
           try {
             if (action === "create") {
