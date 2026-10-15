@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.22.0
+
+- **Feishu, second half: receiving - over the long connection, so no public URL is needed.** Feishu offers two ways to
+  get events; this takes the WebSocket one (the way OpenClaw's channel does it) and deliberately skips the event route,
+  because that is the option that needs a tunnel or a public address. `feishu-ws.js` (693 lines) is dependency-free:
+  Node 24's own `WebSocket` plus a minimal protobuf codec written here.
+- **Every protocol fact came from the official `@larksuiteoapi/node-sdk` 1.75.0** (MIT, download verified against its
+  registry hash) rather than from memory: the handshake is `POST {domain}/callback/ws/endpoint` with
+  `{AppID, AppSecret}` answering `{code, data:{URL, ClientConfig}}` (capitalised keys, intervals in **seconds**); the
+  frames are protobuf in the `pbbp2` namespace with `Frame` 1 `SeqID`(uint64) / 2 `LogID`(uint64) / 3 `service`(int32) /
+  4 `method`(int32) / 5 `headers`(repeated `Header`) / 6 `payloadEncoding` / 7 `payloadType` / 8 `payload`(bytes) /
+  9 `LogIDNew`, and `Header` 1 `key` / 2 `value`; `FrameType` is `{control: 0, data: 1}`; an event is acknowledged by
+  **sending the received frame back** with a `biz_rt` header and `{"code":200}`; and a fragmented event is reassembled
+  from `message_id`/`sum`/`seq`/`trace_id` with malformed metadata **rejected** - the official implementation guards the
+  same case and cites its own issue #201 for it. The field numbers were re-checked against the SDK's
+  `Frame.encode`/`Header.encode` by hand, not taken from a summary.
+- **Inbound messages become turns.** `im.message.receive_v1` text and rich text are turned into a prompt (prefixed like
+  the other channels), routed to a stable session per `chat_id`, and the answer is **posted as a reply under the
+  question** (`message_id`), falling back to an ordinary send when the reply is refused; long answers are chunked. Two
+  refusals are deliberate and tested: the bot **ignores its own messages** (`sender_type: "app"`), because answering
+  them would wake itself in a loop, and a **re-delivered event is answered only once**.
+- Configuration: `feishu.longConnection` (default **on**; `feishu.longConnection = false` or
+  `FEISHU_LONG_CONNECTION=false` turns it off). It only connects when `feishu.appId` and `feishu.appSecret` are set, and
+  a connection that cannot start **never breaks the plugin** - the reason is recorded for `/state` and `/feishu`.
+- Where to look: `GET /state` gained a `feishu` block (configuration, connection state, `lastError`, `lastEventAt`) and
+  `counters.feishuEvents` / `feishuAnswered` / `feishuIgnored` / `feishuErrors`; `/feishu` shows the same in a chat,
+  including *why* the long connection is down when it is.
+- **A real bug the tests caught, and it is the same mistake this project keeps making.** `feishuWsEnabled()` used to
+  answer "is the long connection up?" by checking whether a handle existed - but the handle is assigned *before*
+  `await start()` resolves, so a **refused handshake still reported "connected"**. It now reports the connection
+  **state**. Claiming a success that was never measured is exactly what the voice bubble, the missing `playtime` and the
+  Web UI checkbox each did; this one was caught by a test instead of by the user.
+- Attachments are **described, not downloaded**: the endpoint
+  (`GET /open-apis/im/v1/messages/:message_id/resources/:file_key`) is visible in the official source, but **which query
+  parameter selects the resource type is not readable there**, so it is not guessed - the model is told an attachment of
+  that type exists, and the README says so under Limitations.
+- Tests: **24 suites / 393 cases**. The new `test/feishu-inbound.test.mjs` does not read source text - it feeds events
+  into a real `apply()` as **real protobuf frames** over a fake WebSocket and reads the counters back through the
+  **registered `/state` route**. Feishu also has `test/feishu.test.mjs` (19) and `test/feishu-ws.test.mjs` (34), whose
+  assertions were falsified on purpose (a changed field number, a missing seconds→milliseconds conversion, an ack
+  without `biz_rt`, a removed fragment bound) and each failed as it should.
+- **Not yet verified against the live platform.** The handshake endpoint, request shape and error path were exercised
+  for real (Feishu answered `code 1000040345`, and the error did not leak the secret), and the protocol is pinned by
+  tests - but the first real inbound message still needs the console switched to 使用长连接接收事件, a published version
+  and a valid App Secret. Until then this is built and tested, not proven.
+
 ## 0.21.0
 
 - **Feishu (飞书 / Lark) support, first half: sending.** A new `feishu.js` speaks to both kinds of Feishu bot, and every

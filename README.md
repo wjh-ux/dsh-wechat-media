@@ -191,7 +191,7 @@ Two kinds of Feishu bot exist, and both are supported, because they solve differ
 |---|---|---|
 | Credentials | the webhook URL (and its signing secret, if set) | `app_id` + `app_secret` |
 | Can send | text and rich text | text, rich text, images, files, audio |
-| Can receive | no | yes (via the event route) |
+| Can receive | no | yes - over the **long connection**, with no public URL |
 | Config | `feishu.webhookUrl`, `feishu.secret` | `feishu.appId`, `feishu.appSecret` |
 
 Both come from `config.feishu` in the plugin config, or from the environment
@@ -216,6 +216,43 @@ AES key is `sha256(encryptKey)` with the **first 16 bytes of the ciphertext as t
 `sha256(timestamp + nonce + encryptKey + body)` in hex (`sha1` with the verification token when the event is
 unencrypted). The custom-webhook signature is the trap of that API - `HMAC-SHA256(key = timestamp + "\n" + secret,
 data = "")`, base64 - and it is checked against an independent implementation's published test vector.
+
+### Receiving: the long connection / 用长连接接收（不需要公网地址）
+
+An app bot receives events over Feishu's **long connection** - a WebSocket the bot opens itself - so **no public URL,
+no tunnel and no port forwarding are needed**. The event route (POSTing events to a URL Feishu calls) is deliberately
+*not* implemented: it is the option that requires a public address.
+
+**Turn it on in the Feishu console, then restart DSH:**
+
+| Step | Where |
+|---|---|
+| Enable the bot | 开发者后台 → 你的应用 → **应用功能 → 机器人 → 启用** |
+| Subscribe over the long connection | 开发者后台 → **事件与回调 → 订阅方式 → 使用长连接接收事件** |
+| Permissions | at least `im:message` (send and receive); add the receive scopes the console asks for |
+| Publish | 创建版本并发布 - **changes do not take effect until a version is published** |
+
+Configuration: `feishu.longConnection` (default **on**; `feishu.longConnection = false` or `FEISHU_LONG_CONNECTION=false`
+turns it off). It only connects when `feishu.appId` and `feishu.appSecret` are configured - a webhook-only setup has
+nothing to connect with, and says so.
+
+What happens to an inbound message: text and rich-text messages become a prompt for the model, prefixed like the other
+channels; the answer is **posted as a reply under the question** (`message_id`), falling back to an ordinary send if the
+reply is refused, and long answers are chunked. Two things are refused on purpose: the bot **ignores its own messages**
+(`sender_type: "app"`), because answering them would wake itself in a loop, and a **re-delivered event is answered only
+once**.
+
+The protocol facts were read from the official SDK, not recalled - the handshake is `POST {domain}/callback/ws/endpoint`
+(request `{AppID, AppSecret}`, response `{code, data:{URL, ClientConfig}}`, whose keys are capitalised and whose
+intervals are in **seconds**), the frames are protobuf in the `pbbp2` namespace (`Frame` 1 `SeqID` / 2 `LogID` /
+3 `service` / 4 `method` / 5 `headers` / 6 `payloadEncoding` / 7 `payloadType` / 8 `payload` / 9 `LogIDNew`, `Header`
+1 `key` / 2 `value`), an event is acknowledged by **sending the received frame back** with a `biz_rt` header and
+`{"code":200}`, and a fragmented event is reassembled from `message_id`/`sum`/`seq`/`trace_id` with malformed metadata
+**rejected** rather than silently corrupting the payload.
+
+`GET /state` carries a `feishu` block (configuration, connection state, `lastError`, `lastEventAt` and the counters
+`feishuEvents` / `feishuAnswered` / `feishuIgnored` / `feishuErrors`), and `/feishu` shows the same in a chat, including
+*why* the long connection is not up when it is not.
 
 ## Chat commands / 聊天里的命令
 
@@ -445,6 +482,25 @@ Everything here was learned against the live platform; each item broke something
 - **One poller per account token.** Two processes using the same token get `HTTP 403`.
 - **No message history API** exists on this platform; only live messages are seen.
 - Media is capped at 100 MiB inbound by default (`maxMediaMiB`).
+
+### Feishu / 飞书
+
+- **Attachments are described, not downloaded.** The download endpoint is
+  `GET /open-apis/im/v1/messages/:message_id/resources/:file_key`, but **which query parameter selects the resource
+  type is not readable from the official SDK source** - so it is not guessed. An image, file, audio or video message
+  reaches the model as a note saying an attachment of that type exists (with its `message_id`), and this version does
+  not fetch it. The endpoint is named in a comment in `index.js` for whoever picks this up.
+- **`delivery=stream` sends in whole parts on Feishu.** Word-by-word preview is a WeCom feature and is not implemented
+  here. `/feishu` states this instead of leaving the setting looking effective.
+- **Group messages are not filtered by whether the bot was mentioned**, because the bot's own `open_id` is not
+  readable from the SDK source either. Groups behave like WeCom: messages in an allowlisted chat are handled.
+- **A long connection that cannot start does not break the plugin.** The reason is recorded and shown by `/state` and
+  `/feishu`; the plugin keeps working for every other channel.
+- **The long connection has not been verified against the live platform yet.** The endpoint, the request shape and the
+  error path were exercised for real (Feishu answered a handshake attempt with `code 1000040345`, and the message did
+  not leak the secret), and the protocol is pinned by tests against the official `Frame`/`Header` field numbers - but a
+  real inbound message still needs the console switched to "使用长连接接收事件", a published version and a valid App
+  Secret. Until that first message arrives, treat this as built and tested, **not** as proven in production.
 
 ## Security / 安全
 

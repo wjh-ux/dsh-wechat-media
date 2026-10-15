@@ -148,11 +148,14 @@ await test("no reply path silently truncates to its first part", () => {
 
 await test("both inbound paths answer /commands instead of forwarding them", () => {
   const calls = [...host.matchAll(/runChatCommand\(\{\s*transport:\s*"(\w+)"/g)].map((match) => match[1]);
-  assert.deepEqual(calls.sort(), ["wechat", "wecom"], "each transport must dispatch commands");
-  for (const match of host.matchAll(/const handled = await runChatCommand\([\s\S]{0,700}?\n\s*\}\);\n(\s*)if \(handled\) return;/g)) {
+  let sites = 0;
+  assert.deepEqual(calls.sort(), ["feishu", "wechat", "wecom"], "each transport must dispatch commands");
+  for (const match of host.matchAll(/const handled = await runChatCommand\([\s\S]{0,900}?\n\s*\}\);\n(\s*)if \(handled\) return;/g)) {
     assert.ok(match[1].length >= 0, "a command that was answered must not reach the agent");
+    sites += 1;
   }
-  assert.equal([...host.matchAll(/if \(handled\) return;/g)].length, 2, "both call sites must return early");
+  assert.equal(sites, 3, "every transport call site must still match the shape this guard expects");
+  assert.equal([...host.matchAll(/if \(handled\) return;/g)].length, 3, "all three call sites must return early");
 });
 
 await test("/new moves the chat onto a new generation, /stop cancels the turn", () => {
@@ -326,10 +329,10 @@ await test("interjection can never lose a message", () => {
   // would drop the message - neither joined to the running turn nor queued. Both paths must fall through to the
   // queue when steering fails.
   const steers = (host.match(/if \(interject === "steer"\) \{/g) ?? []).length;
-  assert.equal(steers, 2, "both inbound paths interject");
-  assert.equal((host.match(/await agent\.steer\(message2\);/g) ?? []).length, 2, "each steer is awaited once");
-  assert.equal((host.match(/catch \(error\) \{\s*\n\s*\/\/ Steering loses a race/g) ?? []).length, 2, "and each is guarded by a catch that queues instead");
-  assert.equal((host.match(/counters\.interjectFailed \+= 1;/g) ?? []).length, 2, "a failed steer is counted, not hidden");
+  assert.equal(steers, 3, "each inbound path interjects");
+  assert.equal((host.match(/await agent\.steer\(message2\);/g) ?? []).length, 3, "each steer is awaited once");
+  assert.equal((host.match(/catch \(error\) \{\s*\n\s*\/\/ Steering loses a race/g) ?? []).length, 3, "and each is guarded by a catch that queues instead");
+  assert.equal((host.match(/counters\.interjectFailed \+= 1;/g) ?? []).length, 3, "a failed steer is counted, not hidden");
   assert.match(host, /interjectFailed: 0/, "the counter is part of /state");
   // The steer must not be counted before it succeeded.
   assert.doesNotMatch(host, /if \(interject === "steer"\) \{\s*\n\s*counters\.interjected \+= 1;/, "a failure must not be counted as an interjection");
@@ -339,7 +342,7 @@ await test("interjection decisions are recorded, not just counted", () => {
   // restart. Every decision is therefore written down - with the reason - and surfaced by /state.
   assert.match(host, /async function recordInterjection/, "there is a recorder");
   assert.match(host, /interjections\.jsonl/, "it writes a durable line");
-  assert.equal((host.match(/await recordInterjection\(/g) ?? []).length, 4, "both decisions and both steer failures are recorded");
+  assert.equal((host.match(/await recordInterjection\(/g) ?? []).length, 6, "each transport records its decision and its steer failure");
   // v0.19.5 claimed /state exposed this, but the field was handed to statusText(), which ignores unknown
   // parameters - so it showed nowhere. Assert the real route, and the /status wiring, not just a string.
   const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
@@ -412,6 +415,44 @@ await test("the Feishu send half is wired, and never claims what it cannot do", 
   assert.doesNotMatch(host, /\$\{settings\.appSecret\}/, "the app secret is never interpolated anywhere");
   assert.doesNotMatch(host, /\$\{settings\.secret\}/, "nor the webhook secret");
   assert.match(feishuSource, /feishuDecryptEvent/, "the receive half's helpers are already in place");
+});
+await test("the Feishu receive half is wired, end to end", () => {
+  // The long connection is opened through the lifecycle, so it is started and disposed with the plugin.
+  assert.match(host, /import \{ FeishuLongConnection \} from "\.\/feishu-ws\.js";/, "the host imports the long connection");
+  assert.match(host, /ctx\.effect\(\(\) => \{\s*\n\s*void startFeishuLongConnection\(\);\s*\n\s*return \(\) => stopFeishuLongConnection\(\);/, "it is started and stopped by the scope");
+  assert.match(host, /connection\.onEvent\(/, "events are handed to the connection");
+  assert.match(host, /async function handleFeishuEvent\(appId, event\)/, "and answered by a handler that reports its own failures");
+  assert.match(host, /async function startFeishuLongConnection\(/, "the connection is started in one place");
+
+  // /state must carry it, or "is the receive half up?" is unanswerable.
+  assert.match(host, /feishu: await feishuState\(\),/, "/state reports the Feishu half");
+
+  // The loop guard must come *before* anything can produce a turn: a bot answering itself is the one
+  // failure that never stops on its own.
+  const appGuard = host.indexOf('parts.senderType === "app"');
+  const firstForward = host.indexOf("counters.forwarded += 1;", host.indexOf("async function handleFeishuEventInner"));
+  assert.ok(appGuard > -1, "the bot-own-message guard exists");
+  assert.ok(firstForward > -1, "the forward counter exists");
+  assert.ok(appGuard < firstForward, "the self-message guard must run before the message can be forwarded");
+
+  // Redelivery is deduped, and the reply is a reply to the question.
+  assert.match(host, /rememberSeen\(accountId, parts\.messageId\)/, "a redelivered event is deduped");
+  assert.match(host, /feishuReplyMessage\(\{ token, messageId, msgType, content, domain: settings\.domain \}\)/, "the answer replies to the question");
+  assert.match(host, /result = await feishuSendMessage\(\{\s*\n\s*token,\s*\n\s*receiveId: chatId,/, "...with a plain send as the fallback");
+
+  // Attachments are described, never silently dropped, and never downloaded on a guessed parameter.
+  assert.match(host, /本版不下载附件/, "the model is told an attachment was not fetched");
+  // Checked against code, not prose: the comment in feishuAttachmentNote names the endpoint on purpose,
+  // which is exactly how the reader learns why it is not called.
+  const hostCode = host.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
+  assert.doesNotMatch(hostCode, /\/resources\//, "and no code guesses the resource-download parameter");
+  assert.match(host, /暂不支持/, "an unconverted message type is named, not swallowed");
+
+  // The /feishu command must not claim more than the connection can prove: "已连接" is reachable only
+  // through the state-based predicate, and otherwise the reason is printed.
+  assert.match(host, /长连接接收：\$\{feishuWsReason\(\)\}/, "/feishu explains why the long connection is not up");
+  assert.match(host, /feishuWsEnabled\(\)\s*\n\s*\? `长连接接收：已连接/, "/feishu claims connected only via feishuWsEnabled()");
+  assert.match(host, /飞书暂未实现逐字预览/, "/feishu admits that a stream preference is answered whole here");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -90,11 +90,13 @@ import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
+import { FeishuLongConnection } from "./feishu-ws.js";
 import {
   feishuDomain,
   feishuFileType,
   feishuMediaContent,
   feishuPostContent,
+  feishuReplyMessage,
   feishuSendMessage,
   feishuTenantToken,
   feishuTextContent,
@@ -427,6 +429,207 @@ export async function classifyWecomInbound({ accountId, message, text, state, co
   }
   return { ...base, action: "forward", reason: decided.reason === "open" ? "ok" : decided.reason };
 }
+/** Locale keys Feishu uses inside a `post` body, in the order the official SDK tries them. */
+const FEISHU_LOCALE_PRIORITY = ["zh_cn", "en_us", "ja_jp"];
+
+/** `JSON.parse` that answers `undefined` instead of throwing: inbound content is not ours to trust. */
+function feishuSafeParse(raw) {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A `post` body is either `{title, content}` or keyed by locale; the SDK prefers zh_cn, en_us, ja_jp, then the first key. */
+function feishuUnwrapLocale(parsed) {
+  if (!parsed || typeof parsed !== "object") return undefined;
+  if ("title" in parsed || "content" in parsed) return parsed;
+  for (const locale of FEISHU_LOCALE_PRIORITY) {
+    const hit = parsed[locale];
+    if (hit && typeof hit === "object") return hit;
+  }
+  const first = Object.values(parsed)[0];
+  return first && typeof first === "object" ? first : undefined;
+}
+
+/**
+ * Render one `post` element, collecting any media it refers to.
+ *
+ * The tags handled here are the ones read from the official SDK's own `renderElement` (`text`, `a`,
+ * `at`, `img`, `media`, `code_block`, `hr`). Anything else is named rather than dropped, so an
+ * unsupported element is visible in the prompt instead of silently vanishing.
+ */
+function feishuRenderPostElement(element, attachments) {
+  const tag = String(element?.tag ?? "");
+  switch (tag) {
+    case "text":
+      return String(element.text ?? "");
+    case "a":
+      return `${element.text ?? ""}${element.href ? ` (${element.href})` : ""}`;
+    case "at":
+      return element.user_id === "all" || element.user_id === "all_members" ? "@all" : `@${element.user_name ?? element.user_id ?? ""}`;
+    case "img":
+      if (element.image_key) {
+        attachments.push({ type: "image", key: String(element.image_key) });
+        return "![image]";
+      }
+      return "";
+    case "media":
+      if (element.file_key) {
+        attachments.push({ type: "file", key: String(element.file_key) });
+        return `<file key="${element.file_key}"/>`;
+      }
+      return "";
+    case "code_block":
+      return `\`\`\`${element.language ?? ""}\n${element.text ?? ""}\n\`\`\``;
+    case "hr":
+      return "---";
+    default:
+      return `[${tag || "?"}]`;
+  }
+}
+
+/**
+ * Read the parts this plugin needs out of an `im.message.receive_v1` event.
+ *
+ * The `message_type` → text/attachment mapping is the official SDK's converter table, not a guess:
+ * `text` → `.text`; `post` → locale-unwrapped `{title, content}`; `image` → `.image_key`;
+ * `file` → `.file_key`/`.file_name`; `audio` → `.file_key`/`.duration`; `media` →
+ * `.file_key`/`.file_name`/`.duration`/`.image_key`; `sticker` → `.file_key`.
+ *
+ * Mentions arrive in the text as `@_user_N` placeholders and are replaced with the speaker's name
+ * from `message.mentions`, which is also how the SDK does it.
+ *
+ * @param {any} event the parsed event body
+ * @returns {{ chatId: string, chatType: string, isGroup: boolean, messageId: string, messageType: string,
+ *            senderType: string, senderOpenId: string, senderUserId: string, tenantKey: string, createTime: string,
+ *            rootId: string, threadId: string, text: string, attachments: Array<object>, unsupported: string,
+ *            mentionNames: string[] }}
+ */
+export function feishuEventParts(event = {}) {
+  const message = event?.event?.message ?? {};
+  const sender = event?.event?.sender ?? {};
+  const chatId = String(message.chat_id ?? "");
+  const chatType = String(message.chat_type ?? "");
+  const messageType = String(message.message_type ?? "");
+  const parsed = feishuSafeParse(message.content);
+  const attachments = [];
+  let text = "";
+  let unsupported = "";
+
+  switch (messageType) {
+    case "text":
+      text = String(parsed?.text ?? "");
+      break;
+    case "post": {
+      const body = feishuUnwrapLocale(parsed);
+      const lines = [];
+      if (body?.title) lines.push(`**${body.title}**`, "");
+      for (const paragraph of body?.content ?? []) {
+        if (!Array.isArray(paragraph)) continue;
+        lines.push(paragraph.map((element) => feishuRenderPostElement(element, attachments)).join(""));
+      }
+      text = lines.join("\n").trim();
+      break;
+    }
+    case "image":
+      if (parsed?.image_key) {
+        attachments.push({ type: "image", key: String(parsed.image_key) });
+        text = "[图片]";
+      }
+      break;
+    case "file":
+      if (parsed?.file_key) {
+        attachments.push({ type: "file", key: String(parsed.file_key), name: String(parsed.file_name ?? "") });
+        text = `[文件${parsed.file_name ? ` ${parsed.file_name}` : ""}]`;
+      }
+      break;
+    case "audio":
+      if (parsed?.file_key) {
+        attachments.push({ type: "audio", key: String(parsed.file_key), durationMs: Number(parsed.duration) || 0 });
+        text = "[语音]";
+      }
+      break;
+    case "media":
+      if (parsed?.file_key) {
+        attachments.push({
+          type: "video",
+          key: String(parsed.file_key),
+          name: String(parsed.file_name ?? ""),
+          durationMs: Number(parsed.duration) || 0,
+          coverKey: String(parsed.image_key ?? ""),
+        });
+        text = `[视频${parsed.file_name ? ` ${parsed.file_name}` : ""}]`;
+      }
+      break;
+    case "sticker":
+      if (parsed?.file_key) {
+        attachments.push({ type: "sticker", key: String(parsed.file_key) });
+        text = "[表情]";
+      }
+      break;
+    default:
+      // Reported, never silently dropped: a new message type must be visible.
+      unsupported = messageType || "(none)";
+      break;
+  }
+
+  const mentions = Array.isArray(message.mentions) ? message.mentions : [];
+  const mentionNames = [];
+  for (const mention of mentions) {
+    const key = String(mention?.key ?? "");
+    const name = String(mention?.name ?? "");
+    if (name) mentionNames.push(name);
+    if (!key) continue;
+    text = text.split(key).join(name ? `@${name}` : key);
+  }
+
+  return {
+    chatId,
+    chatType,
+    isGroup: chatType === "group",
+    messageId: String(message.message_id ?? ""),
+    messageType,
+    senderType: String(sender.sender_type ?? ""),
+    senderOpenId: String(sender.sender_id?.open_id ?? ""),
+    senderUserId: String(sender.sender_id?.user_id ?? ""),
+    tenantKey: String(sender.tenant_key ?? ""),
+    createTime: String(message.create_time ?? ""),
+    rootId: String(message.root_id ?? ""),
+    threadId: String(message.thread_id ?? ""),
+    text,
+    attachments,
+    unsupported,
+    mentionNames,
+  };
+}
+
+/**
+ * The one-decision rule for a Feishu event, the same rule and order as the other two transports:
+ * allowlist first, then "is this a 1/2 answer to a pending approval?", then a turn.
+ *
+ * @returns {Promise<{ action: "ignore" | "answer" | "forward", reason: string, chatId: string, isGroup: boolean, text: string }>}
+ */
+export async function classifyFeishuInbound({ accountId, message, text, state, consumeApproval }) {
+  const chatId = String(message?.chatId ?? "");
+  const body = String(text ?? "");
+  const base = { chatId, isGroup: message?.isGroup === true, text: body };
+  if (!chatId) return { ...base, action: "ignore", reason: "no-chat-id" };
+
+  const prefs = await state.loadPrefs();
+  if (prefs.friendOnly && base.isGroup) return { ...base, action: "ignore", reason: "group-skipped" };
+
+  const decided = allowDecision({ peer: await state.getPeer(accountId, chatId), prefs });
+  if (!decided.accepted) return { ...base, action: "ignore", reason: decided.reason };
+
+  if (body && typeof consumeApproval === "function" && consumeApproval(accountId, chatId, body)) {
+    return { ...base, action: "answer", reason: "approval-answer" };
+  }
+  return { ...base, action: "forward", reason: decided.reason === "open" ? "ok" : decided.reason };
+}
+
 /**
  * Render an approval request as the WeChat prompt. The arguments matter as much
  * as the tool name: "工具：pwsh" alone does not tell anyone what they are about
@@ -1406,6 +1609,20 @@ export function apply(ctx, config = {}) {
         feishuStatusLine(),
         `应用机器人：${channels.app ? "已配置" : "未配置"}${channels.partial ? "（⚠️ app_id 与 app_secret 只填了一个）" : ""}`,
         `自定义 webhook：${channels.webhook ? "已配置" : "未配置"}`,
+        // The long connection is the receive half: whether it is up, how often it reconnected, and
+        // the last reason it failed - never a secret.
+        feishuWsWanted() && !channels.app
+          ? "长连接接收：不可用（需要应用机器人）"
+          : feishuWsEnabled()
+            ? `长连接接收：已连接${feishuWsStatus.reconnectAttempts ? `（重连 ${feishuWsStatus.reconnectAttempts} 次）` : ""}`
+            : `长连接接收：${feishuWsReason()}`,
+        feishuWsStatus.lastError ? `长连接最后错误：${feishuWsStatus.lastError}` : "",
+        // A `stream` preference cannot be honoured here yet: a Feishu message can be edited in place,
+        // but this half does not implement a live preview, so the answer goes whole. Saying so beats
+        // letting the preference look broken.
+        (await state.loadPrefs()).delivery === "stream"
+          ? "发送方式：整段（飞书暂未实现逐字预览；/delivery whole 可去掉这条提示）"
+          : "",
         `发送目标（feishu.to）：${settings.to || "（未设置）"}`,
         "",
         "用法：/feishu test [接收方 id] [chat_id|open_id|user_id|email] 发一条自测消息；id 类型省略时按前缀猜（oc_ / ou_ / 含 @）。",
@@ -1701,7 +1918,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0, retried: 0, retryFailed: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0, retried: 0, retryFailed: 0, feishuEvents: 0, feishuAnswered: 0, feishuIgnored: 0, feishuErrors: 0 };
 
 /**
  * Every interjection decision, kept for later inspection.
@@ -2093,6 +2310,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       appSecret: pick(given.appSecret, env.FEISHU_APP_SECRET),
       domain: pick(given.domain, env.FEISHU_DOMAIN) || "feishu",
       to: pick(given.to, env.FEISHU_TO),
+      // The long connection is what lets an app bot receive without a public address. It is on
+      // whenever credentials exist and can be switched off explicitly, in config or environment.
+      longConnection: !(given.longConnection === false || String(env.FEISHU_LONG_CONNECTION ?? "").toLowerCase() === "false"),
       verificationToken: pick(given.verificationToken, env.FEISHU_VERIFICATION_TOKEN),
       encryptKey: pick(given.encryptKey, env.FEISHU_ENCRYPT_KEY),
     };
@@ -2260,7 +2480,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const which = channels.app && channels.webhook
       ? "应用机器人 + 自定义 webhook"
       : channels.app
-        ? "应用机器人（可发文件；接收半边下一版）"
+        ? "应用机器人（可发文件；已启用长连接接收）"
         : channels.webhook
           ? "自定义 webhook（只能发文本/富文本）"
           : "未配置（/feishu 看怎么配）";
@@ -2272,6 +2492,392 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     ];
     if (channels.partial) flags.push("⚠️ app_id/app_secret 只填了一个");
     return `飞书：${which} · ${flags.join(" · ")}`;
+  }
+
+  // ── Feishu inbound: the app bot's long connection ────────────────────────────
+  //
+  // A custom webhook bot cannot receive anything at all - that is a platform limit, not a gap here.
+  // An app bot subscribes to events over a WebSocket instead, which needs no public address and no
+  // tunnel: the same trade the WeCom side makes with its long connection. The socket, ping and
+  // reconnect behaviour live in feishu-ws.js; this section is what happens to an event.
+
+  /** The account a Feishu app bot's chats live under, namespaced like the WeCom one. */
+  function feishuAccountId(appId) {
+    return normalizeAccountId(`feishu:${String(appId ?? "").trim()}`);
+  }
+
+  let feishuWs;
+  let feishuWsStatus = { state: "idle", connected: false, lastError: "", reconnectAttempts: 0, appId: null, stats: null };
+  /** The last failure while handling a Feishu event: a long-connection callback has nowhere else to report it. */
+  let feishuInboundError = null;
+  let feishuLastEventAt = null;
+
+  /** Whether this configuration wants a long connection: app credentials present, and not switched off. */
+  function feishuWsWanted(settings = feishuConfig()) {
+    if (settings.longConnection === false) return false;
+    return Boolean(settings.appId && settings.appSecret);
+  }
+
+  /** Why the long connection is not up, in one phrase, for `/feishu`. */
+  function feishuWsReason() {
+    const settings = feishuConfig();
+    if (!feishuChannels(settings).app) return "未配置应用机器人（需要 app_id/app_secret）";
+    if (settings.longConnection === false) return "已按配置关闭（feishu.longConnection=false 或 FEISHU_LONG_CONNECTION=false）";
+    const state_ = feishuWsStatus.state;
+    if (state_ === "connecting") return "连接中…";
+    if (state_ === "reconnecting") return `重连中（第 ${feishuWsStatus.reconnectAttempts} 次）`;
+    if (state_ === "failed") return `未建立：${feishuWsStatus.lastError || "原因未知"}`;
+    if (state_ === "closed") return "已关闭";
+    return "未启动";
+  }
+
+  /** The Feishu half of `/state`: configuration, the connection, and the last failure. Never a secret. */
+  async function feishuState() {
+    const settings = feishuConfig();
+    const channels = feishuChannels(settings);
+    return {
+      configured: channels.app || channels.webhook,
+      app: channels.app,
+      webhook: channels.webhook,
+      partial: channels.partial,
+      domain: feishuDomain(settings.domain),
+      // Identifiers, not secrets: the app_id is needed to tell two apps apart, and the secret is
+      // reported only as "set", never echoed.
+      appId: settings.appId || null,
+      secretSet: Boolean(settings.appSecret),
+      webhookUrlPrefix: settings.webhookUrl ? `${settings.webhookUrl.slice(0, 48)}…` : null,
+      verificationTokenSet: Boolean(settings.verificationToken),
+      encryptKeySet: Boolean(settings.encryptKey),
+      longConnection: feishuWsEnabled(),
+      longConnectionWanted: feishuWsWanted(settings),
+      connection: feishuWsStatus,
+      lastEventAt: feishuLastEventAt,
+      inboundError: feishuInboundError,
+      counters: {
+        events: counters.feishuEvents,
+        answered: counters.feishuAnswered,
+        ignored: counters.feishuIgnored,
+        errors: counters.feishuErrors,
+      },
+    };
+  }
+
+  /**
+   * Is the long connection actually up?
+   *
+   * The answer must come from the connection state, not from whether a handle exists: a handshake
+   * that was refused still leaves an object behind, and reporting that as connected is exactly the
+   * kind of unmeasured success this project keeps having to remove.
+   */
+  function feishuWsEnabled() {
+    return feishuWsStatus.state === "connected";
+  }
+
+  function stopFeishuLongConnection() {
+    if (!feishuWs) return;
+    try {
+      feishuWs.stop();
+    } catch {
+      // already gone
+    }
+    feishuWs = undefined;
+    feishuWsStatus = { ...feishuWsStatus, state: "closed", connected: false };
+  }
+
+  /**
+   * Open (or reopen) the Feishu long connection.
+   *
+   * A failure here must not take the plugin down: the app credentials may simply be wrong, and the
+   * rest of the bridge is unaffected. The reason is kept in `feishuWsStatus` so `/feishu` and
+   * `/state` can say "the long connection is not up, and this is why".
+   */
+  async function startFeishuLongConnection({ force = false } = {}) {
+    if (feishuWs && !force) return feishuWs;
+    stopFeishuLongConnection();
+    const settings = feishuConfig();
+    if (!feishuWsWanted(settings)) {
+      feishuWsStatus = {
+        ...feishuWsStatus,
+        state: feishuChannels(settings).app ? "disabled" : "unconfigured",
+        connected: false,
+        appId: settings.appId || null,
+        lastError: "",
+      };
+      return undefined;
+    }
+    const appId = settings.appId;
+    const connection = new FeishuLongConnection({
+      appId,
+      appSecret: settings.appSecret,
+      domain: settings.domain,
+      logger: ctx.logger,
+    });
+    connection.onEvent((event) => {
+      // The socket's handler must never reject: a thrown error here would be reported as a failed ack
+      // and the event would be lost, so the work is wrapped and reported instead.
+      return handleFeishuEvent(appId, event);
+    });
+    connection.onError((error) => {
+      counters.feishuErrors += 1;
+      feishuInboundError = { at: new Date().toISOString(), message: String(error?.message ?? error) };
+      ctx.logger?.warn?.("[dsh-wechat-media] feishu long connection: %s", feishuInboundError.message);
+    });
+    feishuWs = connection;
+    try {
+      await connection.start();
+      feishuWsStatus = { ...connection.status(), appId };
+      ctx.logger?.info?.("[dsh-wechat-media] feishu long connection established");
+    } catch (error) {
+      feishuWsStatus = {
+        ...(typeof connection.status === "function" ? connection.status() : {}),
+        state: "failed",
+        connected: false,
+        appId,
+        lastError: String(error?.message ?? error),
+      };
+      ctx.logger?.warn?.("[dsh-wechat-media] feishu long connection did not start: %s", feishuWsStatus.lastError);
+      return undefined;
+    }
+    return connection;
+  }
+
+  /**
+   * Send an answer back into a Feishu chat.
+   *
+   * The first part is a **reply** to the question when the triggering `message_id` is known, so the
+   * answer stays attached to what asked it; a reply that fails falls back to a plain send rather than
+   * losing the answer. Long answers are chunked with the same helper the other transports use.
+   */
+  async function replyFeishuInParts({ chatId, messageId, text }) {
+    const settings = feishuConfig();
+    if (!feishuChannels(settings).app) throw new Error("replying needs the Feishu app bot (app_id/app_secret)");
+    const raw = String(text ?? "");
+    if (!raw) return [];
+    const plain = (await state.loadPrefs()).format !== "raw";
+    const body = plain ? await chatBody(raw) : raw;
+    const token = await feishuToken(settings);
+    const parts = chunkText(body, MAX_TEXT_CHARS);
+    const sent = [];
+    for (const [index, part] of parts.entries()) {
+      const msgType = plain ? "text" : "post";
+      const content = plain ? feishuTextContent(part) : feishuPostContent(part);
+      let result;
+      if (messageId && index === 0) {
+        try {
+          result = await feishuReplyMessage({ token, messageId, msgType, content, domain: settings.domain });
+        } catch (error) {
+          ctx.logger?.warn?.("[dsh-wechat-media] feishu reply failed, sending instead: %s", error?.message ?? error);
+        }
+      }
+      if (!result) {
+        result = await feishuSendMessage({
+          token,
+          receiveId: chatId,
+          receiveIdType: "chat_id",
+          msgType,
+          content,
+          domain: settings.domain,
+        });
+      }
+      sent.push(result.messageId);
+    }
+    return sent;
+  }
+
+  /**
+   * One line per attachment, for the model.
+   *
+   * **Attachments are described, not downloaded.** The official resource endpoint is
+   * `GET /open-apis/im/v1/messages/:message_id/resources/:file_key` (read from the SDK), but the query
+   * parameter that selects the resource type was not readable from the SDK source, and guessing a
+   * platform parameter is exactly what this project has learned not to do. So the model is told
+   * precisely what arrived and where to look it up, instead of the bridge pretending it fetched it.
+   */
+  function feishuAttachmentNote(item, messageId) {
+    const label = item.type === "image"
+      ? "图片"
+      : item.type === "audio"
+        ? "语音"
+        : item.type === "video"
+          ? "视频"
+          : item.type === "sticker"
+            ? "表情"
+            : "文件";
+    const extra = [
+      item.name ? `文件名 ${item.name}` : "",
+      item.durationMs ? `时长 ${Math.round(item.durationMs / 1000)} 秒` : "",
+    ].filter(Boolean).join("，");
+    return `[飞书${label}] key=${item.key}${extra ? `（${extra}）` : ""} · 消息 ${messageId} · 本版不下载附件`;
+  }
+
+  /** The long connection's counterpart of handleWecomInbound: report, never swallow. */
+  async function handleFeishuEvent(appId, event) {
+    try {
+      await handleFeishuEventInner(appId, event);
+      feishuInboundError = null;
+    } catch (error) {
+      counters.feishuErrors += 1;
+      feishuInboundError = { at: new Date().toISOString(), message: String(error?.message ?? error), stack: String(error?.stack ?? "").slice(0, 400) };
+      ctx.logger?.warn?.("[dsh-wechat-media] feishu inbound failed: %s", feishuInboundError.message);
+      // The event is still acknowledged (the socket handler returns), but the chat is told, because
+      // otherwise the person is left waiting for an answer that will never come.
+      const parts = feishuEventParts(event);
+      if (parts.chatId) {
+        await replyFeishuInParts({ chatId: parts.chatId, messageId: parts.messageId, text: `❌ 处理这条飞书消息时出错：${feishuInboundError.message}` })
+          .catch((replyError) => ctx.logger?.warn?.("[dsh-wechat-media] could not deliver the feishu error notice: %s", replyError?.message ?? replyError));
+      }
+    }
+  }
+
+  async function handleFeishuEventInner(appId, event) {
+    const eventType = String(event?.header?.event_type ?? "");
+    // Only messages become turns. Everything else (card interactions, contact changes, …) is
+    // acknowledged and counted rather than answered, so the socket never looks dead.
+    if (eventType && eventType !== "im.message.receive_v1") {
+      counters.feishuIgnored += 1;
+      ctx.logger?.debug?.("[dsh-wechat-media] feishu ignored an event of type %s", eventType);
+      return;
+    }
+    const parts = feishuEventParts(event);
+    counters.feishuEvents += 1;
+    feishuLastEventAt = new Date().toISOString();
+
+    // A message the bot itself sent must never wake it: without this the bridge answers its own
+    // answers forever.
+    if (parts.senderType === "app") {
+      counters.feishuIgnored += 1;
+      return;
+    }
+    const chatId = parts.chatId;
+    if (!chatId) {
+      counters.feishuIgnored += 1;
+      return;
+    }
+    const accountId = feishuAccountId(appId);
+    if (parts.messageId) {
+      const bucket = seen.get(accountId);
+      if (bucket?.has(parts.messageId)) return;
+      rememberSeen(accountId, parts.messageId);
+    }
+    const peerName = parts.isGroup ? `飞书群 ${chatId}` : `飞书 ${parts.senderOpenId || chatId}`;
+    counters.received += 1;
+    lastInbound.set(accountId, { accountId, chatId, peerName, isGroup: parts.isGroup, at: Date.now() });
+    await state.setPeer(accountId, chatId, {
+      name: peerName,
+      kind: parts.isGroup ? "group" : "direct",
+      seenAt: new Date().toISOString(),
+    });
+
+    const verdict = await classifyFeishuInbound({
+      accountId,
+      message: parts,
+      text: parts.text,
+      state,
+      consumeApproval: consumeApprovalReply,
+    });
+    if (verdict.action === "ignore") {
+      counters.blocked += 1;
+      if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
+      await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
+      ctx.logger?.info?.("[dsh-wechat-media] ignored feishu message from %s (%s)", chatId, verdict.reason);
+      return;
+    }
+    if (verdict.action === "answer") {
+      counters.answered += 1;
+      ctx.logger?.info?.("[dsh-wechat-media] feishu approval answer consumed for %s", chatId);
+      return;
+    }
+
+    if (verdict.text) {
+      const handled = await runChatCommand({
+        transport: "feishu",
+        accountId,
+        chatId,
+        peerName,
+        text: verdict.text,
+        reply: (answer) => replyFeishuInParts({ chatId, messageId: parts.messageId, text: answer }).then(() => undefined).catch((error) => {
+          ctx.logger?.warn?.("[dsh-wechat-media] could not send the feishu command reply: %s", error?.message ?? error);
+        }),
+      });
+      if (handled) return;
+    }
+
+    const lines = [];
+    if (parts.text) lines.push(parts.text);
+    if (parts.unsupported) lines.push(`[飞书消息类型 ${parts.unsupported} 暂不支持，内容未解析]`);
+    for (const item of parts.attachments) lines.push(feishuAttachmentNote(item, parts.messageId));
+    if (lines.length === 0) {
+      counters.unusable += 1;
+      return;
+    }
+
+    counters.forwarded += 1;
+    const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
+    const prompt = `[${peerName}]\n${lines.join("\n\n")}`;
+    const message2 = await userMessage(prompt);
+    const interjectInput = {
+      enabled: (await state.loadPrefs()).interject === true,
+      turnInFlight: collectors.isWaiting(sessionId),
+      agentAvailable: typeof agent.steer === "function",
+    };
+    const interject = interjectDecision(interjectInput);
+    await recordInterjection({ chatId, platform: "feishu", decision: interject, reason: interjectReason({ ...interjectInput, decision: interject }) });
+    if (interject === "steer") {
+      try {
+        await agent.steer(message2);
+        counters.interjected += 1;
+        ctx.logger?.info?.("[dsh-wechat-media] steered a feishu message into the running turn for %s", chatId);
+        return;
+      } catch (error) {
+        // Steering loses a race with the end of a turn sooner or later. Falling through to the queue is
+        // what keeps "interject" from ever meaning "dropped on the floor".
+        counters.interjectFailed += 1;
+        await recordInterjection({ chatId, platform: "feishu", decision: "steer", reason: "steering failed, queued instead", error: error?.message ?? error });
+        ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
+      }
+    }
+
+    // Feishu messages can be edited in place, but this half does not implement a live preview: a
+    // `stream` preference is answered whole here, and `/feishu` says so rather than looking broken.
+    const prefsForTurn = await state.loadPrefs();
+    let outcome = await (async () => {
+      const waiting = collectors.wait(sessionId, message2?.id);
+      await agent.followup(message2);
+      return waiting;
+    })();
+    if (outcome.error && shouldRetryTurn({ error: outcome.error, attempt: 1, enabled: prefsForTurn.retry !== false })) {
+      counters.retried += 1;
+      ctx.logger?.warn?.("[dsh-wechat-media] turn failed (%s); retrying once", outcome.error);
+      await replyFeishuInParts({ chatId, messageId: parts.messageId, text: `⚠️ 上一轮失败：${outcome.error}\n正在重试一次…` });
+      const retryMessage = await userMessage(prompt);
+      const retryWaiting = collectors.wait(sessionId, retryMessage?.id);
+      await agent.followup(retryMessage);
+      outcome = await retryWaiting;
+      if (outcome.error) counters.retryFailed += 1;
+    }
+    if (outcome.error) {
+      counters.feishuErrors += 1;
+      await replyFeishuInParts({ chatId, messageId: parts.messageId, text: `❌ agent 出错：${outcome.error}` });
+      return;
+    }
+    if (!outcome.text) {
+      if (outcome.deliveredByTool) return;
+      await replyFeishuInParts({ chatId, messageId: parts.messageId, text: `（本轮没有文本回复：${outcome.stopReason}）` });
+      return;
+    }
+    await replyFeishuInParts({ chatId, messageId: parts.messageId, text: outcome.text });
+    counters.feishuAnswered += 1;
+  }
+
+  // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a harness without
+  // it still gets the long connection instead of losing the feature.
+  if (typeof ctx.effect === "function") {
+    ctx.effect(() => {
+      void startFeishuLongConnection();
+      return () => stopFeishuLongConnection();
+    }, "dsh-wechat-media: feishu long connection");
+  } else {
+    void startFeishuLongConnection();
   }
 
   /** Send one message through whichever WeCom path is configured. */
@@ -3164,6 +3770,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             peers: await state.loadPeers(),
             counters: { ...counters },
             interjections: interjections.slice(-10),
+            feishu: await feishuState(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),

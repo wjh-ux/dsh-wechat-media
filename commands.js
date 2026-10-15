@@ -217,7 +217,7 @@ export function statusText({
 } = {}) {
   const lines = [
     "dsh-wechat-media 状态",
-    `通道：${transport === "wecom" ? "企业微信长连接" : "个人微信"}`,
+    `通道：${transport === "wecom" ? "企业微信长连接" : transport === "feishu" ? "飞书应用机器人（长连接）" : "个人微信"}`,
     `账号：${accountId || "?"}`,
     `会话：${chatId || "?"}`,
     `DSH 会话：${sessionId || "?"}${generation > 0 ? `（第 ${generation + 1} 段，/new 过的）` : ""}`,
@@ -225,7 +225,9 @@ export function statusText({
   const botState = bot
     ? `${bot.authenticated ? "已认证" : bot.connected ? "已连接未认证" : "未连接"}${bot.error ? `（${bot.error}）` : ""}`
     : "未配置";
-  lines.push(`企业微信长连接：${botState}`);
+  // The bot line belongs to WeCom: a Feishu chat has no WeCom bot, and printing "企业微信长连接：未配置"
+  // there reads like a fault rather than an unrelated transport.
+  if (transport !== "feishu") lines.push(`企业微信长连接：${botState}`);
   lines.push(
     `计数：收到 ${counters.received ?? 0} · 转发 ${counters.forwarded ?? 0} · 拦截 ${counters.blocked ?? 0} · 审批答复 ${counters.answered ?? 0}`,
     `媒体：保存 ${counters.mediaDownloaded ?? 0} · 失败 ${counters.mediaFailed ?? 0}${counters.mediaBytes ? ` · 共 ${size(counters.mediaBytes)}` : ""}`,
