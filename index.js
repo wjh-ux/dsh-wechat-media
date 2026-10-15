@@ -4297,8 +4297,40 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               }
               const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0).slice(-limit);
               if (!lines.length) return json(res, 200, { ok: false, error: "会话记录解压后是空的" });
+              // Each line is a record in the host's own shape. Turn them into something a person can read, and when a
+              // line is not recognised keep the line itself: a document that quietly omits things is worse than a
+              // verbose one. `format: "raw"` keeps every line verbatim for archiving.
+              const harvest = (value, depth = 0) => {
+                if (depth > 4 || value === null || value === undefined) return "";
+                if (typeof value === "string") return value;
+                if (Array.isArray(value)) return value.map((item) => harvest(item, depth + 1)).filter(Boolean).join("\n");
+                if (typeof value !== "object") return "";
+                const parts = [];
+                for (const key of ["text", "content"]) {
+                  if (typeof value[key] === "string" && value[key].trim()) parts.push(value[key]);
+                }
+                for (const key of ["block", "delta", "chunk", "data", "message"]) {
+                  if (value[key] && typeof value[key] === "object") parts.push(harvest(value[key], depth + 1));
+                }
+                return parts.filter(Boolean).join("\n");
+              };
+              const readable = String(body.format ?? "") === "raw"
+                ? lines.join("\n")
+                : lines.map((line) => {
+                  let record;
+                  try { record = JSON.parse(line); } catch { return line; }
+                  const type = String(record?.type ?? "");
+                  if (type === "tool/call") {
+                    const name = String(record?.data?.name ?? record?.name ?? "?");
+                    const args = String(record?.data?.arguments ?? "").replace(/\s+/g, " ").slice(0, 160);
+                    return `[工具 ${name}] ${args}`;
+                  }
+                  const spoken = harvest(record).trim();
+                  if (spoken) return spoken;
+                  return type ? `[${type}]` : line;
+                }).join("\n");
               const created = await feishuCreateDoc({ token: await feishuToken(), title, tenantHost: settings.tenantHost });
-              const written = await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text: lines.join("\n") });
+              const written = await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text: readable });
               noteRoute("/feishu-doc", { action: "panel-create-from-session", session: newest.name, lines: lines.length });
               return json(res, 200, {
                 ok: true,

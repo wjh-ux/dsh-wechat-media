@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.23.19
+## 0.23.20
+
+- **The session export writes something a person can read.** Each transcript line is a record in the host's own shape;
+  they are now turned into paragraphs and tool-call summaries (`[工具 edit] …`) instead of raw JSON. Recognition is
+  shape-agnostic - it looks for `text`/`content` and descends through `block`/`delta`/`chunk`/`data`/`message` - and a
+  line it does not recognise is kept verbatim, because a document that quietly omits things is worse than a verbose one.
+- `format: "raw"` still exports every line verbatim for archiving.
+- 24 suites / 420 cases.
 
 - **The driver-level success path for Feishu attachments is tested, and passes.** When the download first shipped, its
   one driver test pinned the *failure* path, because the tools had no token and a success could never happen. With that
