@@ -2999,6 +2999,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
+          if (asBool(body.retry) !== null) patch.retry = asBool(body.retry);
           if (body.format !== undefined && body.format !== "") {
             const mode = String(body.format).trim().toLowerCase();
             if (!["plain", "raw"].includes(mode)) return json(res, 400, { error: `format must be "plain" or "raw", got "${body.format}"` });

@@ -354,7 +354,10 @@ await test("the retry switch is reachable from the command, the host and the Web
   assert.match(commandsSource, /name: "retry"/, "the command exists");
   assert.match(commandsSource, /usage: "\/retry \[on\|off\]"/, "with a usage line");
   assert.match(host, /command\.name === "retry"/, "and the host handles it");
-  assert.match(host, /args\.retry === "true"/, "the panel route sets the same preference");
+  assert.match(host, /args\.retry === "true"/, "the card route sets the same preference");
+  // The Web UI writes through /prefs, not /panel: v0.20.0 only wired the card path, so the panel checkbox
+  // toggled nothing. Both routes must accept it.
+  assert.match(host, /asBool\(body\.retry\) !== null\) patch\.retry = asBool\(body\.retry\)/, "and so does the /prefs route the Web UI actually calls");
   const stateSource = readFileSync(join(root, "state.js"), "utf8");
   assert.match(stateSource, /retry: true,/, "the default is on");  // the preference lives in state.js, not the host
   assert.match(host, /shouldRetryTurn\(\{ error: outcome\.error, attempt: 1/, "both paths consult the policy");

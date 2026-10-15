@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.1
+
+- **The Web UI checkbox from v0.20.0 did nothing, and this makes it work.** The retry switch was wired into the
+  `/panel` route (which the cards in a chat use) but **not** into `/prefs`, which is the endpoint the Web UI
+  actually writes to - so ticking the box saved nothing, silently. Both routes accept it now.
+- Found by **toggling it against the running plugin** rather than by reading the diff: `/prefs?retry=false` left the
+  preference at `true`. The guard test now asserts **both** routes, because one of them was enough to pass before.
+- 292 tests across 20 suites.
+
 ## 0.20.0
 
 - **A turn that dies in the transport is retried once, and you can switch that off.** Those failures are real here -
