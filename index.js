@@ -4297,38 +4297,52 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               }
               const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0).slice(-limit);
               if (!lines.length) return json(res, 200, { ok: false, error: "会话记录解压后是空的" });
-              // Each line is a record in the host's own shape. Turn them into something a person can read, and when a
-              // line is not recognised keep the line itself: a document that quietly omits things is worse than a
-              // verbose one. `format: "raw"` keeps every line verbatim for archiving.
+              // Real shapes, read off the transcript rather than assumed:
+              //   user/message      -> data.content = [{ type: "text", text }]
+              //   system/message    -> data.message.content[].text
+              //   assistant/message -> data.message.content[].text
+              //   agent/inbox/spliced -> data.inserted[].content[].text   (the same message again)
+              // The first version descended through block/delta/chunk/data/message but **not content**, and only took
+              // `content` when it was a string - so the spoken text was skipped and the document came out as type tags.
               const harvest = (value, depth = 0) => {
-                if (depth > 4 || value === null || value === undefined) return "";
+                if (depth > 6 || value === null || value === undefined) return "";
                 if (typeof value === "string") return value;
                 if (Array.isArray(value)) return value.map((item) => harvest(item, depth + 1)).filter(Boolean).join("\n");
                 if (typeof value !== "object") return "";
                 const parts = [];
-                for (const key of ["text", "content"]) {
+                for (const key of ["text"]) {
                   if (typeof value[key] === "string" && value[key].trim()) parts.push(value[key]);
                 }
-                for (const key of ["block", "delta", "chunk", "data", "message"]) {
+                for (const key of ["block", "delta", "chunk", "data", "message", "content", "inserted", "elements"]) {
                   if (value[key] && typeof value[key] === "object") parts.push(harvest(value[key], depth + 1));
                 }
                 return parts.filter(Boolean).join("\n");
               };
+              // Records that carry no conversation: settings, the request envelope (which embeds the whole system
+              // prompt) and machine state. Named explicitly so the omission is a decision, not an accident.
+              const notConversation = new Set([
+                "session", "session/title", "permission/preset", "sandbox/mode", "approval/policy",
+                "request/header", "request/context", "step/start", "step/end", "turn/start", "turn/end",
+                "session/end-seed", "session/end", "session-log-deepseek/delivery-accepted",
+              ]);
+              const speaker = { "user/message": "【用户】", "assistant/message": "【助手】" };
               const readable = String(body.format ?? "") === "raw"
                 ? lines.join("\n")
                 : lines.map((line) => {
                   let record;
                   try { record = JSON.parse(line); } catch { return line; }
                   const type = String(record?.type ?? "");
+                  if (notConversation.has(type)) return "";
                   if (type === "tool/call") {
                     const name = String(record?.data?.name ?? record?.name ?? "?");
                     const args = String(record?.data?.arguments ?? "").replace(/\s+/g, " ").slice(0, 160);
                     return `[工具 ${name}] ${args}`;
                   }
                   const spoken = harvest(record).trim();
-                  if (spoken) return spoken;
-                  return type ? `[${type}]` : line;
-                }).join("\n");
+                  if (!spoken) return type ? `[${type}]` : line;
+                  const who = speaker[type];
+                  return who ? `${who} ${spoken}` : spoken;
+                }).filter((entry, index, all) => entry.trim().length > 0 && all.indexOf(entry) === index).join("\n");
               const created = await feishuCreateDoc({ token: await feishuToken(), title, tenantHost: settings.tenantHost });
               const written = await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text: readable });
               noteRoute("/feishu-doc", { action: "panel-create-from-session", session: newest.name, lines: lines.length });

@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.23.20
+## 0.23.21
+
+- **The readable export was dropping the conversation.** 0.23.20 shortened 25 lines from 94,566 characters to 803 - by
+  losing the spoken text and leaving type tags. The harvest walked `block/delta/chunk/data/message` but not `content`,
+  and only took `content` when it was a string; in the real records it is an array
+  (`data.content = [{ type: "text", text }]`), so the words were skipped.
+- Fixed by reading the actual records instead of assuming them: one full line per record type was printed from a live
+  transcript, which showed the four shapes. `content`, `inserted` and `elements` are now walked too, records that carry
+  no conversation (including `request/header`, which embeds the whole system prompt) are skipped **by an explicit list**,
+  duplicates are dropped, and user/assistant messages are labelled. Measured offline against the same transcript:
+  135,012 characters of raw lines become 13,819 readable ones, with one type-tag left instead of nearly all of them.
+- 24 suites / 420 cases.
 
 - **The session export writes something a person can read.** Each transcript line is a record in the host's own shape;
   they are now turned into paragraphs and tool-call summaries (`[工具 edit] …`) instead of raw JSON. Recognition is
