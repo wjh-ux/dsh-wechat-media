@@ -103,6 +103,7 @@ import {
   feishuUploadFile,
   feishuUploadImage,
   feishuWebhookSend,
+  feishuDownloadResource,
 } from "./feishu.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -2831,12 +2832,35 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   /**
    * One line per attachment, for the model.
    *
-   * **Attachments are described, not downloaded.** The official resource endpoint is
+   * **Attachments are downloaded into the inbox.** The official resource endpoint is
    * `GET /open-apis/im/v1/messages/:message_id/resources/:file_key` (read from the SDK), but the query
    * parameter that selects the resource type was not readable from the SDK source, and guessing a
    * platform parameter is exactly what this project has learned not to do. So the model is told
    * precisely what arrived and where to look it up, instead of the bridge pretending it fetched it.
    */
+  /**
+   * Fetch one inbound attachment into `destDir/fileName` - the contract `saveInboundMedia` expects.
+   *
+   * The token comes from the same cache the send path uses, so a burst of attachments does not
+   * re-authenticate per file. `currentFeishuMessageId` is the message being handled.
+   */
+  async function feishuDownload({ item, destDir, fileName }) {
+    const settings = feishuConfig();
+    const { token } = await feishuToken();
+    const got = await feishuDownloadResource({
+      token,
+      messageId: item.messageId ?? currentFeishuMessageId,
+      fileKey: item.key,
+      kind: item.type,
+      domain: settings.domain,
+    });
+    const target = join(destDir, fileName);
+    await writeFile(target, got.bytes);
+    return target;
+  }
+
+  /** The message whose attachments are being handled right now. */
+  let currentFeishuMessageId = "";
   function feishuAttachmentNote(item, messageId) {
     const label = item.type === "image"
       ? "图片"
@@ -2851,7 +2875,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       item.name ? `文件名 ${item.name}` : "",
       item.durationMs ? `时长 ${Math.round(item.durationMs / 1000)} 秒` : "",
     ].filter(Boolean).join("，");
-    return `[飞书${label}] key=${item.key}${extra ? `（${extra}）` : ""} · 消息 ${messageId} · 本版不下载附件`;
+    return `[飞书${label}] key=${item.key}${extra ? `（${extra}）` : ""} · 消息 ${messageId} · 未能下载`;
   }
 
   /** The long connection's counterpart of handleWecomInbound: report, never swallow. */
@@ -2949,7 +2973,34 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const lines = [];
     if (parts.text) lines.push(parts.text);
     if (parts.unsupported) lines.push(`[飞书消息类型 ${parts.unsupported} 暂不支持，内容未解析]`);
-    for (const item of parts.attachments) lines.push(feishuAttachmentNote(item, parts.messageId));
+    currentFeishuMessageId = parts.messageId ?? "";
+    for (const item of parts.attachments) {
+      // Attachments are downloaded into the same inbox the WeChat and WeCom paths use, so the model gets a
+      // path it can open. A failure says so: the attachment is still described, never silently dropped.
+      try {
+        const saved = await saveInboundMedia({
+          download: feishuDownload,
+          kind: item.type,
+          chatId,
+          item,
+          dshHome,
+          maxBytes: maxMediaBytes,
+          inboxPath: await resolvedInbox(),
+            // Feishu sends no file name for an image/audio/video, and an absent one produced "undefined.jpg".
+            fileName: item.name || `${item.type}-${String(item.key ?? "").replace(/[^A-Za-z0-9]+/g, "").slice(-12)}`,
+        });
+        counters.mediaDownloaded += 1;
+        counters.mediaBytes += Number(saved.bytes) || 0;
+        lines.push(describeForModel(saved, "飞书"));
+        ctx.logger?.info?.("[dsh-wechat-media] feishu %s saved to %s (%d bytes)", item.type, saved.path, saved.bytes);
+      } catch (error) {
+        counters.mediaFailed += 1;
+        lines.push(feishuAttachmentNote(item, parts.messageId));
+        lines.push(`[飞书${item.type}未保存] ${error?.message ?? error}`);
+        ctx.logger?.warn?.("[dsh-wechat-media] feishu %s download failed: %s", item.type, error?.message ?? error);
+      }
+    }
+    currentFeishuMessageId = "";
     if (lines.length === 0) {
       counters.unusable += 1;
       return;

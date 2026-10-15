@@ -13,6 +13,7 @@ import {
   feishuAesKey,
   feishuChallenge,
   feishuDecryptEvent,
+  feishuDownloadResource,
   feishuDomain,
   feishuEncryptEventForTest,
   feishuEventSignature,
@@ -288,6 +289,26 @@ await test("domains resolve to the platform or to an explicit URL", () => {
   assert.equal(feishuDomain("lark"), "https://open.larksuite.com");
   assert.equal(feishuDomain("https://open.feishu.cn/"), "https://open.feishu.cn");
   assert.equal(feishuDomain("nonsense"), "https://open.feishu.cn");
+});
+
+await test("a message resource is downloaded with the parameter the live API requires", async () => {
+  // `type` is required - the live API answers 400 code 99992402 without it, `image/jpeg` with `type=image` and
+  // `application/octet-stream` with `type=file`, each returning exactly the bytes that were sent.
+  const calls = [];
+  const impl = async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, headers: { get: () => "image/jpeg" }, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+  };
+  const got = await feishuDownloadResource({ token: "t", messageId: "om_1", fileKey: "img_1", kind: "image", fetchImpl: impl });
+  assert.equal(got.bytes.length, 4);
+  assert.match(calls[0], /\/open-apis\/im\/v1\/messages\/om_1\/resources\/img_1\?type=image$/);
+  const other = [];
+  await feishuDownloadResource({ token: "t", messageId: "om_2", fileKey: "file_2", kind: "file", fetchImpl: async (url) => { other.push(String(url)); return { ok: true, status: 200, headers: { get: () => "application/octet-stream" }, arrayBuffer: async () => new Uint8Array([9]).buffer }; } });
+  assert.match(other[0], /\?type=file$/, "anything that is not an image is a file");
+  await assert.rejects(() => feishuDownloadResource({ token: "", messageId: "m", fileKey: "k" }), /tenant_access_token/);
+  await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "", fileKey: "k" }), /message_id/);
+  await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "m", fileKey: "" }), /file_key/);
+  await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "m", fileKey: "k", fetchImpl: async () => ({ ok: false, status: 400, headers: { get: () => "application/json" }, json: async () => ({ code: 99992402, msg: "field validation failed" }) }) }), /field validation failed/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

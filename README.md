@@ -503,11 +503,12 @@ Everything here was learned against the live platform; each item broke something
 
 ### Feishu / 飞书
 
-- **Attachments are described, not downloaded.** The download endpoint is
-  `GET /open-apis/im/v1/messages/:message_id/resources/:file_key`, but **which query parameter selects the resource
-  type is not readable from the official SDK source** - so it is not guessed. An image, file, audio or video message
-  reaches the model as a note saying an attachment of that type exists (with its `message_id`), and this version does
-  not fetch it. The endpoint is named in a comment in `index.js` for whoever picks this up.
+- **Attachments are downloaded into the same inbox as the other two transports.** An image, file, audio or video
+  message is fetched with `GET /open-apis/im/v1/messages/:message_id/resources/:file_key?type=image|file` and lands
+  beside the WeChat and WeCom arrivals, so the model gets a path it can open. The `type` parameter is required - the
+  live API answers `400 code 99992402` without it - and that was settled against the API rather than guessed. A fetch
+  that fails says so in the prompt (`[飞书image未保存] …`) instead of leaving the model to assume there was no
+  attachment.
 - **`delivery=stream` sends in whole parts on Feishu.** Word-by-word preview is a WeCom feature and is not implemented
   here. `/feishu` states this instead of leaving the setting looking effective.
 - **Group messages are not filtered by whether the bot was mentioned**, because the bot's own `open_id` is not

@@ -95,6 +95,19 @@ function stubFetch(respond) {
     const entry = { url: String(url), options, body: options.body };
     calls.push(entry);
     const answer = respond(entry) ?? {};
+    // A binary answer (a Buffer) is what a resource download looks like: no JSON body, a content type that is
+    // not application/json, and arrayBuffer(). Everything else stays JSON, so the failure path is unchanged.
+    if (Buffer.isBuffer(answer) || answer instanceof Uint8Array) {
+      const bytes = Buffer.from(answer);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => (String(name).toLowerCase() === "content-type" ? "image/jpeg" : null) },
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        json: async () => ({}),
+        text: async () => bytes.toString("latin1"),
+      };
+    }
     return { ok: true, status: 200, json: async () => answer, text: async () => JSON.stringify(answer) };
   };
   return { calls, restore: () => { globalThis.fetch = original; } };
@@ -143,7 +156,7 @@ const HANDSHAKE_OK = {
 };
 
 /** Boot the plugin and hand back everything the test needs to drive and observe it. */
-async function boot({ feishu = { appId: "cli_drive", appSecret: "secret-drive", to: "oc_drive" }, prefs = {}, handshake = HANDSHAKE_OK, answer = "这是模型给出的回答。" } = {}) {
+async function boot({ feishu = { appId: "cli_drive", appSecret: "secret-drive", to: "oc_drive" }, prefs = {}, handshake = HANDSHAKE_OK, answer = "这是模型给出的回答。", resources = "json", } = {}) {
   const root = await mkdtemp(join(tmpdir(), "feishu-inbound-"));
   const handlers = new Map();
   const effects = [];
@@ -207,6 +220,7 @@ async function boot({ feishu = { appId: "cli_drive", appSecret: "secret-drive", 
   const fetchStub = stubFetch((entry) => {
     if (entry.url.includes("/callback/ws/endpoint")) return handshake;
     if (entry.url.includes("/auth/v3/tenant_access_token/internal")) return { code: 0, tenant_access_token: "t-drive", expire: 7200 };
+    if (resources === "bytes" && entry.url.includes("/resources/")) return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
     if (entry.url.includes("/im/v1/messages")) return { code: 0, data: { message_id: "om_sent_1", chat_id: chatId } };
     return { code: 0, data: {} };
   });
@@ -445,17 +459,20 @@ await test("a group is skipped when only friends are answered, as on the other t
   }
 });
 
-await test("an attachment is described, and nothing is downloaded", async () => {
+await test("an attachment that cannot be fetched is still described", async () => {
   const app = await boot();
   try {
     app.socket().deliver(messageEvent({ messageType: "image", content: { image_key: "img_v2_drive" } }));
     await settle();
     assert.equal(app.queued.length, 1);
     const prompt = app.queued[0].content[0].text;
-    assert.match(prompt, /\[飞书图片\]/, "the model is told what arrived");
-    assert.match(prompt, /img_v2_drive/, "with the key it would need");
-    assert.match(prompt, /本版不下载附件/, "and told it was not fetched, rather than being left to guess");
-    assert.equal(app.fetchCalls.filter((call) => call.url.includes("/resources/")).length, 0, "no download is attempted");
+    // Attachments are fetched now. This harness answers a resource request with JSON, so the download cannot
+    // succeed here - and that is the behaviour worth pinning: the attachment is still described, and the
+    // failure is stated. The success path is covered by feishu.test.mjs (whose stub returns real bytes) and
+    // by the live run against the real API.
+    assert.match(prompt, /img_v2_drive/, "the model is told what arrived");
+    assert.match(prompt, /飞书图片/, "including what kind of attachment it is");
+    assert.ok(/未保存|未能下载/.test(prompt), "and that it could not be fetched, rather than being left to guess");
   } finally {
     await app.close();
   }
@@ -590,5 +607,6 @@ await test("a blank field never clears a saved secret", async () => {
     await app.close();
   }
 });
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

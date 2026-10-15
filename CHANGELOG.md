@@ -1,6 +1,22 @@
 # Changelog
 
-## 0.23.5
+## 0.23.6
+
+- **Feishu attachments are downloaded, not merely described.** An image, file, audio or video message is fetched with
+  `GET /open-apis/im/v1/messages/:message_id/resources/:file_key` and saved into the same inbox the WeChat and WeCom
+  paths use, so the model gets a path it can open. A fetch that fails is reported in the prompt
+  (`[飞书image未保存] …`) rather than leaving the model to assume there was no attachment.
+- **The required `type` parameter was settled against the live API, not guessed.** The official docs are
+  client-rendered and the SDK's type declarations did not expose it: `?type=image` answers `200 image/jpeg` with exactly
+  the bytes that were sent (1,100,583 for a 1,074.8 KB image), `?type=file` answers `200 application/octet-stream` for
+  the same resource, and **no parameter** answers `400 code 99992402 "field validation failed"`.
+- **A file name, found by running it for real.** The first live download landed as `undefined.jpg`, because Feishu sends
+  no `name` for an image, audio or video attachment and the inbox sink derived the name from that missing field. The
+  name is now built from the kind and the key (`image-3e41a3a970dg`) and the extension is sniffed from the bytes - the
+  same live run then produced `image-3e41a3a970dg.jpg`, 1,100,583 bytes, header `ffd8ff`, matching the bytes the API
+  returned. A guard asserts the fallback and that the name is never literally `undefined`.
+- 24 suites / 404 cases; the download helper is unit-tested against a stub that returns real bytes, and a guard asserts
+  it is **imported** as well as written - the mistake made twice while building this.
 
 - **The Web UI's Feishu Save button did nothing, and the cause was a single missing brace.** When the Feishu block was
   added to `client.js`, the closing brace of `setInterject` was consumed, so `setFeishu` ended up **nested inside

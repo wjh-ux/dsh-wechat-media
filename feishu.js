@@ -456,6 +456,44 @@ function timingSafeEqualHex(a, b) {
 }
 
 /**
+ * Download a resource that belongs to a message: the bytes of an image, file, audio or video the bot received.
+ *
+ * The query parameter is `type`, with `image` or `file` - and that was not read from documentation, because the
+ * official docs are client-rendered. It was settled against the live API: `?type=image` answers `200 image/jpeg`
+ * with exactly the bytes that were sent, `?type=file` answers `200 application/octet-stream` for the same
+ * resource, and **no parameter at all** answers `400 code 99992402 "field validation failed"`.
+ *
+ * @param {{ token?: string, messageId?: string, fileKey?: string, kind?: string, domain?: string,
+ *           fetchImpl?: Function }} input
+ * @returns {Promise<{ bytes: Buffer, contentType: string, status: number }>}
+ */
+export async function feishuDownloadResource({
+  token = "",
+  messageId = "",
+  fileKey = "",
+  kind = "file",
+  domain = "feishu",
+  fetchImpl = fetch,
+} = {}) {
+  if (!String(token ?? "").trim()) throw new Error("downloading a resource needs a tenant_access_token");
+  if (!String(messageId ?? "").trim()) throw new Error("downloading a resource needs the message_id it belongs to");
+  if (!String(fileKey ?? "").trim()) throw new Error("downloading a resource needs its file_key or image_key");
+  const type = String(kind).toLowerCase() === "image" ? "image" : "file";
+  const url = new URL(`${feishuDomain(domain)}/open-apis/im/v1/messages/${encodeURIComponent(String(messageId))}/resources/${encodeURIComponent(String(fileKey))}`);
+  url.searchParams.set("type", type);
+  const response = await fetchImpl(url.toString(), { headers: { authorization: `Bearer ${token}` } });
+  const contentType = String(response.headers?.get?.("content-type") ?? "");
+  if (contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(`Feishu refused the resource: ${feishuExplain(payload)}`);
+  }
+  if (!response.ok) throw new Error(`Feishu refused the resource: HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error("Feishu returned an empty resource");
+  return { bytes, contentType, status: response.status };
+}
+
+/**
  * The custom-webhook signature.
  *
  * Feishu signs the *empty string* with `HMAC-SHA256(key = timestamp + "\n" + secret)` and base64-encodes the

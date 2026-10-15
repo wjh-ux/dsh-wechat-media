@@ -446,7 +446,7 @@ await test("the Feishu receive half is wired, end to end", () => {
   assert.match(host, /result = await feishuSendMessage\(\{\s*\n\s*token,\s*\n\s*receiveId: chatId,/, "...with a plain send as the fallback");
 
   // Attachments are described, never silently dropped, and never downloaded on a guessed parameter.
-  assert.match(host, /本版不下载附件/, "the model is told an attachment was not fetched");
+  assert.match(host, /未能下载/, "the fallback note says an attachment could not be fetched");
   // Checked against code, not prose: the comment in feishuAttachmentNote names the endpoint on purpose,
   // which is exactly how the reader learns why it is not called.
   const hostCode = host.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
@@ -574,6 +574,24 @@ await test("the panel's Feishu Save really sends a request", async () => {
   assert.ok(calls.some((url) => url.includes("/dsh-wechat-media/prefs?")), `clicking Save must send a /prefs request, saw: ${calls.join(", ") || "nothing"}`);
   delete globalThis.window;
   delete globalThis.fetch;
+});
+await test("the Feishu attachment download is imported, wired and honest about failure", () => {
+  // A helper that exists but is never imported throws at run time - which is exactly what happened while this
+  // was being built, twice. Both halves are asserted, plus the fallback that keeps a failed fetch visible.
+  assert.match(host, /^\s*feishuDownloadResource,$/m, "the downloader is imported");
+  assert.match(host, /async function feishuDownload\(/, "the saveInboundMedia contract is implemented");
+  assert.match(host, /download: feishuDownload,/, "and handed to the inbox sink");
+  assert.match(host, /currentFeishuMessageId = parts\.messageId/, "the message id is threaded to the downloader");
+  assert.match(host, /describeForModel\(saved, "飞书"\)/, "a saved attachment becomes a path for the model");
+  assert.match(host, /lines\.push\(feishuAttachmentNote\(item, parts\.messageId\)\);/, "a failed fetch still describes the attachment");
+  assert.match(host, /未保存\] \$\{error\?\.message \?\? error\}/, "and states why it could not be saved, never swallowing it");
+});
+await test("a Feishu attachment gets a real file name", () => {
+  // Found on the live API: an image attachment carries no `name`, and the inbox sink derived "undefined.jpg"
+  // from the missing field. The name is now built from the kind and the key, and the extension is sniffed
+  // from the bytes by the shared sink.
+  assert.match(host, /fileName: item\.name \|\| `\$\{item\.type\}-/, "the name falls back to kind + key");
+  assert.doesNotMatch(host, /fileName: undefined/, "and is never literally undefined");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
