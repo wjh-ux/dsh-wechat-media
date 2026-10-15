@@ -2846,7 +2846,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
    */
   async function feishuDownload({ item, destDir, fileName }) {
     const settings = feishuConfig();
-    const { token } = await feishuToken();
+    const token = await feishuToken();   // feishuToken() returns the token string itself, not an object
     const got = await feishuDownloadResource({
       token,
       messageId: item.messageId ?? currentFeishuMessageId,

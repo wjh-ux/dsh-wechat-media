@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.23.6
+## 0.23.7
+
+- **The Feishu attachment download never got a token, and the prompt said so.** `feishuToken()` returns the token
+  **string** (`return fresh.token`); the downloader destructured it (`const { token } = await feishuToken()`), which
+  yields `undefined` for a string, so the fetch was refused before any request was made. The live prompt reported it
+  verbatim - `[飞书image未保存] downloading a resource needs a tenant_access_token` - which is exactly what the honest
+  failure path exists for. Fixed to take the string, with a guard that asserts the correct form **and** rejects the
+  destructuring one.
+- This also explains the unresolved driver-level test from 0.23.6: the harness's token call returned no token for the
+  same reason, so no `/resources/` request was ever visible.
+- 24 suites / 406 cases.
 
 - **Feishu attachments are downloaded, not merely described.** An image, file, audio or video message is fetched with
   `GET /open-apis/im/v1/messages/:message_id/resources/:file_key` and saved into the same inbox the WeChat and WeCom

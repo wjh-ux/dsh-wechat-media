@@ -593,5 +593,12 @@ await test("a Feishu attachment gets a real file name", () => {
   assert.match(host, /fileName: item\.name \|\| `\$\{item\.type\}-/, "the name falls back to kind + key");
   assert.doesNotMatch(host, /fileName: undefined/, "and is never literally undefined");
 });
+await test("the Feishu downloader takes the token the way feishuToken() actually returns it", () => {
+  // feishuToken() returns the token **string** (`return fresh.token`). Destructuring it gave `undefined`, and the
+  // download failed before any request was made - visible in the live prompt as
+  // "[飞书image未保存] downloading a resource needs a tenant_access_token". The wrong form is asserted against.
+  assert.match(host, /const token = await feishuToken\(\);/, "the token is taken as a string");
+  assert.doesNotMatch(host, /const \{ token \} = await feishuToken\(\);/, "never destructured from a string");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

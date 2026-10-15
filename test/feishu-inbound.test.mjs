@@ -113,6 +113,18 @@ function stubFetch(respond) {
   return { calls, restore: () => { globalThis.fetch = original; } };
 }
 
+/** `rm` can race a still-closing handle and throw ENOTEMPTY; retry briefly rather than failing the suite. */
+async function removeTree(dir) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 5 || !/ENOTEMPTY|EBUSY|EPERM/.test(String(error?.code ?? error?.message ?? ""))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
 /** The reactions the plugin makes to an established long connection, collected per boot. */
 function fakeSocketFactory() {
   const original = globalThis.WebSocket;
@@ -280,7 +292,7 @@ async function boot({ feishu = { appId: "cli_drive", appSecret: "secret-drive", 
       }
       socketStub.restore();
       fetchStub.restore();
-      await rm(root, { recursive: true, force: true });
+      await removeTree(root);
     },
   };
 }
@@ -370,7 +382,7 @@ await test("the decision rule keeps the same order as the other transports", asy
     assert.equal(verdict.action, "ignore");
     assert.equal(verdict.reason, "group-skipped", "only-friends beats the allowlist, as elsewhere");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
   }
 });
 
