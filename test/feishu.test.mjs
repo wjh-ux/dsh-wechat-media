@@ -14,6 +14,19 @@ import {
   feishuChallenge,
   feishuDecryptEvent,
   feishuDownloadResource,
+  feishuDocUrl,
+  feishuCreateDoc,
+  feishuWikiResolve,
+  feishuDocRef,
+  feishuSheetCreate,
+  feishuSheetRead,
+  feishuSheetWrite,
+  feishuBitableCreate,
+  feishuBitableRead,
+  feishuBitableTables,
+  feishuBitableWrite,
+  feishuReadDoc,
+  feishuAppendText,
   feishuDomain,
   feishuEncryptEventForTest,
   feishuEventSignature,
@@ -309,6 +322,163 @@ await test("a message resource is downloaded with the parameter the live API req
   await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "", fileKey: "k" }), /message_id/);
   await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "m", fileKey: "" }), /file_key/);
   await assert.rejects(() => feishuDownloadResource({ token: "t", messageId: "m", fileKey: "k", fetchImpl: async () => ({ ok: false, status: 400, headers: { get: () => "application/json" }, json: async () => ({ code: 99992402, msg: "field validation failed" }) }) }), /field validation failed/);
+});
+
+await test("creating a document uses the response path the live API returns", async () => {
+  // Verified live: POST /docx/v1/documents answered { code: 0, data: { document: { document_id, revision_id, title } } }.
+  const calls = [];
+  const impl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return { json: async () => ({ code: 0, msg: "success", data: { document: { document_id: "S7dJdImKboGATOx8ngfcipysnGf", revision_id: 1, title: "报告" } } }) };
+  };
+  const got = await feishuCreateDoc({ token: "t", title: "报告", tenantHost: "ccnje3t5tkro.feishu.cn", fetchImpl: impl });
+  assert.equal(got.documentId, "S7dJdImKboGATOx8ngfcipysnGf");
+  assert.equal(got.title, "报告");
+  assert.match(calls[0].url, /\/open-apis\/docx\/v1\/documents$/);
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { title: "报告" }, "only the title is sent when no folder is given");
+  assert.equal(got.url, "https://ccnje3t5tkro.feishu.cn/docx/S7dJdImKboGATOx8ngfcipysnGf", "the link uses the tenant host, not the API host");
+  // Measured: https://open.feishu.cn/docx/<id> answers 200 text/html (a generic page), the tenant host answers 302
+  // to the login page. Without a tenant host the helper returns nothing rather than a link that looks right.
+  const noHost = await feishuCreateDoc({ token: "t", title: "报告", fetchImpl: impl });
+  assert.equal(noHost.url, "", "no tenant host means no link");
+  assert.doesNotMatch(noHost.url, /open\.feishu\.cn/, "the API host is never used for a reader-facing link");
+  await assert.rejects(() => feishuCreateDoc({ token: "", title: "x" }), /tenant_access_token/);
+  await assert.rejects(() => feishuCreateDoc({ token: "t", title: "  " }), /title/);
+  await assert.rejects(() => feishuCreateDoc({ token: "t", title: "x", fetchImpl: async () => ({ json: async () => ({ code: 1770001, msg: "no permission" }) }) }), /no permission/);
+  await assert.rejects(() => feishuCreateDoc({ token: "t", title: "x", fetchImpl: async () => ({ json: async () => ({ code: 0, data: {} }) }) }), /no document_id/);
+});
+
+await test("appending writes the shape the live API accepted and reported back", async () => {
+  // Live: POST …/blocks/<document_id>/children with { children: [{ block_type: 2, text: { elements: [{ text_run: { content } }] } }], index: 0 }
+  // answered 200 code 0 { children, client_token, document_revision_id }, and raw_content then returned the line.
+  const calls = [];
+  const impl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return { json: async () => ({ code: 0, data: { children: [{ block_id: "doxcnA" }], document_revision_id: 7 } }) };
+  };
+  const got = await feishuAppendText({ token: "t", documentId: "S7dJ", text: "第一行\n\n第二行\n", fetchImpl: impl });
+  assert.equal(got.blocks, 1);
+  assert.equal(got.revisionId, 7);
+  assert.deepEqual(got.blockIds, ["doxcnA"]);
+  assert.match(calls[0].url, /\/docx\/v1\/documents\/S7dJ\/blocks\/S7dJ\/children$/);
+  assert.equal(calls[0].options.method, "POST");
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.index, 0);
+  assert.deepEqual(body.children.map((c) => c.text.elements[0].text_run.content), ["第一行", "第二行"], "blank lines are dropped, not sent as empty blocks");
+  assert.deepEqual(await feishuAppendText({ token: "t", documentId: "S7dJ", text: "   " }), { blocks: 0, revisionId: null, blockIds: [] });
+  await assert.rejects(() => feishuAppendText({ token: "", documentId: "x", text: "y" }), /tenant_access_token/);
+  await assert.rejects(() => feishuAppendText({ token: "t", documentId: "", text: "y" }), /document_id/);
+  await assert.rejects(() => feishuAppendText({ token: "t", documentId: "x", text: "y", fetchImpl: async () => ({ json: async () => ({ code: 1770001, msg: "no permission" }) }) }), /no permission/);
+});
+
+await test("a document is read through the path the live API returned", async () => {
+  // Live: GET /docx/v1/documents/:id/raw_content -> 200 code 0 { data: { document_id, content } }.
+  const calls = [];
+  const impl = async (url) => {
+    calls.push(String(url));
+    return { json: async () => ({ code: 0, data: { document_id: "S7dJ", content: "标题\n正文一\n正文二\n" } }) };
+  };
+  const got = await feishuReadDoc({ token: "t", documentId: "S7dJ", fetchImpl: impl });
+  assert.equal(got.documentId, "S7dJ");
+  assert.match(got.content, /正文二/);
+  assert.match(calls[0], /\/open-apis\/docx\/v1\/documents\/S7dJ\/raw_content$/);
+  await assert.rejects(() => feishuReadDoc({ token: "", documentId: "x" }), /tenant_access_token/);
+  await assert.rejects(() => feishuReadDoc({ token: "t", documentId: "" }), /document_id/);
+  await assert.rejects(() => feishuReadDoc({ token: "t", documentId: "x", fetchImpl: async () => ({ json: async () => ({ code: 1770003, msg: "not found" }) }) }), /not found/);
+});
+
+await test("a pasted link yields the right kind of id", () => {
+  assert.deepEqual(feishuDocRef("https://x.feishu.cn/docx/S7dJdImKboGATOx8ngfcipysnGf"), { kind: "docx", id: "S7dJdImKboGATOx8ngfcipysnGf" });
+  assert.deepEqual(feishuDocRef("https://x.feishu.cn/wiki/WikcnAbc123456"), { kind: "wiki", id: "WikcnAbc123456" });
+  assert.deepEqual(feishuDocRef("S7dJdImKboGATOx8ngfcipysnGf"), { kind: "docx", id: "S7dJdImKboGATOx8ngfcipysnGf" });
+  assert.deepEqual(feishuDocRef("随便一段话"), { kind: "", id: "" }, "a wiki link is not mistaken for a document id");
+  assert.deepEqual(feishuDocRef(""), { kind: "", id: "" });
+});
+
+await test("the spreadsheet helpers use the v2 values paths the live API accepted", async () => {
+  // Live: POST /sheets/v3/spreadsheets -> data.spreadsheet.{spreadsheet_token,url}; the range API is v2
+  // (…/values/<sheetId>!A1:B2 -> data.valueRange.values; PUT …/values {valueRange} -> data.updatedCells).
+  const calls = [];
+  const route = (answer) => async (url, options) => { calls.push({ url: String(url), options }); return { json: async () => answer }; };
+  const created = await feishuSheetCreate({ token: "t", title: "表", fetchImpl: route({ code: 0, data: { spreadsheet: { spreadsheet_token: "JmJ", title: "表", url: "https://x.feishu.cn/sheets/JmJ" } } }) });
+  assert.equal(created.spreadsheetToken, "JmJ");
+  assert.equal(created.url, "https://x.feishu.cn/sheets/JmJ");
+  assert.match(calls[0].url, /\/open-apis\/sheets\/v3\/spreadsheets$/);
+  assert.equal(JSON.parse(calls[0].options.body).title, "表");
+
+  calls.length = 0;
+  const read = await feishuSheetRead({ token: "t", spreadsheetToken: "JmJ", range: "2cfb84!A1:B2", fetchImpl: route({ code: 0, data: { valueRange: { range: "2cfb84!A1:B2", values: [["来自", "dsh"]] } } }) });
+  assert.deepEqual(read.values, [["来自", "dsh"]]);
+  // Live check: the range as-is, fully percent-encoded, and with only the sheet id encoded were all accepted and\n  // returned the same values - so encoding the range is safe. Asserted in its encoded form, which is what is sent.\n  assert.match(calls[0].url, /\/sheets\/v2\/spreadsheets\/JmJ\/values\/2cfb84!A1%3AB2$/);
+
+  calls.length = 0;
+  const wrote = await feishuSheetWrite({ token: "t", spreadsheetToken: "JmJ", range: "2cfb84!A1:B2", values: [["a", "b"]], fetchImpl: route({ code: 0, data: { updatedCells: 4, updatedRange: "2cfb84!A1:B2" } }) });
+  assert.equal(wrote.updatedCells, 4);
+  assert.equal(calls[0].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { valueRange: { range: "2cfb84!A1:B2", values: [["a", "b"]] } });
+  // A range without a sheet prefix makes the helper look up the sheet id first, so this one carries the prefix to\n
+  // reach the values check itself.\n  await assert.rejects(() => feishuSheetWrite({ token: "t", spreadsheetToken: "JmJ", range: "s1!A1:B2", values: [] }), /non-empty rows/);
+  await assert.rejects(() => feishuSheetRead({ token: "", spreadsheetToken: "x", range: "A1" }), /tenant_access_token/);
+  await assert.rejects(() => feishuSheetRead({ token: "t", spreadsheetToken: "x", range: "A1", fetchImpl: async (u) => ({ json: async () => (/sheets\/query/.test(String(u)) ? { code: 0, data: { sheets: [{ sheet_id: "s1" }] } } : { code: 1770003, msg: "range not found" }) }) }), /range not found/);
+});
+
+await test("a range without a sheet prefix is qualified with the first sheet", async () => {
+  // Verified live: GET /sheets/v3/spreadsheets/:tk/sheets/query -> data.sheets[].sheet_id.
+  const calls = [];
+  const impl = async (url) => {
+    calls.push(String(url));
+    if (/sheets\/query/.test(String(url))) return { json: async () => ({ code: 0, data: { sheets: [{ sheet_id: "2cfb84" }] } }) };
+    return { json: async () => ({ code: 0, data: { valueRange: { range: "2cfb84!A1:B2", values: [] } } }) };
+  };
+  const got = await feishuSheetRead({ token: "t", spreadsheetToken: "JmJ", range: "A1:B2", fetchImpl: impl });
+  assert.equal(got.range, "2cfb84!A1:B2");
+  assert.equal(calls.length, 2, "the sheet id is looked up first");
+  assert.match(calls[1], /values\/2cfb84!A1%3AB2$/, "and the range is sent encoded (the API accepted all three forms)");
+});
+
+await test("the bitable helpers follow the paths the live API returned", async () => {
+  // Live: POST /bitable/v1/apps {name} -> data.app.{app_token,url}; tables -> data.items[].table_id;
+  // POST …/records {fields} -> data.record.{record_id,fields}; GET …/records/:id -> data.record.fields.
+  const calls = [];
+  const impl = async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (/\/apps$/.test(String(url))) return { json: async () => ({ code: 0, data: { app: { app_token: "Aor", default_table_id: "tbl", url: "https://x.feishu.cn/base/Aor", name: "表" } } }) };
+    if (/\/tables\?/.test(String(url))) return { json: async () => ({ code: 0, data: { items: [{ table_id: "tbl", name: "表" }] } }) };
+    if (options?.method === "POST") return { json: async () => ({ code: 0, data: { record: { record_id: "rec1", fields: { "文本": "精确校验" } } } }) };
+    return { json: async () => ({ code: 0, data: { record: { record_id: "rec1", fields: { "文本": "精确校验" } } } }) };
+  };
+  const made = await feishuBitableCreate({ token: "t", name: "表", fetchImpl: impl });
+  assert.equal(made.appToken, "Aor");
+  assert.equal(made.url, "https://x.feishu.cn/base/Aor");
+  const tables = await feishuBitableTables({ token: "t", appToken: "Aor", fetchImpl: impl });
+  assert.equal(tables.tableId, "tbl");
+  const wrote = await feishuBitableWrite({ token: "t", appToken: "Aor", tableId: "tbl", fields: { "文本": "精确校验" }, fetchImpl: impl });
+  assert.equal(wrote.recordId, "rec1");
+  assert.deepEqual(wrote.fields, { "文本": "精确校验" });
+  const one = await feishuBitableRead({ token: "t", appToken: "Aor", tableId: "tbl", recordId: "rec1", fetchImpl: impl });
+  assert.deepEqual(one.record.fields, { "文本": "精确校验" });
+  assert.match(calls[calls.length - 1].url, /\/records\/rec1$/);
+  await assert.rejects(() => feishuBitableWrite({ token: "t", appToken: "Aor", tableId: "tbl", fields: {} }), /non-empty fields/);
+  await assert.rejects(() => feishuBitableRead({ token: "t", appToken: "", tableId: "tbl" }), /app_token and table_id/);
+});
+
+await test("a wiki node is resolved with the parameter the live API required", async () => {
+  // Live: no parameter -> 400 99992402 (a required field is missing); ?token=xxx -> 400 131005 "not found"
+  // (accepted, just absent); ?node_token=xxx -> the validation error again. So the parameter is `token`.
+  const calls = [];
+  const impl = async (url) => {
+    calls.push(String(url));
+    return { json: async () => ({ code: 0, data: { node: { obj_token: "S7dJdImKboGATOx8ngfcipysnGf", obj_type: "docx", node_token: "WikcnAbc" } } }) };
+  };
+  const got = await feishuWikiResolve({ token: "t", nodeToken: "WikcnAbc", fetchImpl: impl });
+  assert.equal(got.objToken, "S7dJdImKboGATOx8ngfcipysnGf");
+  assert.equal(got.objType, "docx", "the type is reported so a wiki link to a sheet or bitable can be routed");
+  assert.match(calls[0], /\/open-apis\/wiki\/v2\/spaces\/get_node\?token=WikcnAbc$/);
+  await assert.rejects(() => feishuWikiResolve({ token: "", nodeToken: "x" }), /tenant_access_token/);
+  await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "" }), /node token/);
+  await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "x", fetchImpl: async () => ({ json: async () => ({ code: 131005, msg: "not found" }) }) }), /not found/);
+  await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "x", fetchImpl: async () => ({ json: async () => ({ code: 0, data: { node: {} } }) }) }), /no obj_token/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

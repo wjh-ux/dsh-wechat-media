@@ -467,6 +467,328 @@ function timingSafeEqualHex(a, b) {
  *           fetchImpl?: Function }} input
  * @returns {Promise<{ bytes: Buffer, contentType: string, status: number }>}
  */
+/**
+ * The URL a person can open, or an empty string when the tenant host is unknown.
+ *
+ * It refuses to build a link from the API host, and that is a measured decision: `https://open.feishu.cn/docx/<id>`
+ * answers `200 text/html` (a generic page, not the document), while the same path on the tenant host
+ * (`https://<tenant>.feishu.cn/docx/<id>`) answers `302` to the login page - which is what a real document does for
+ * an anonymous fetch. A link that looks right and opens the wrong page is worse than no link.
+ */
+export function feishuDocUrl(documentId, host = "") {
+  const id = String(documentId ?? "").trim();
+  const base = String(host ?? "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!id || !base) return "";
+  return `https://${base}/docx/${encodeURIComponent(id)}`;
+}
+
+/**
+ * Create a docx document and return its id and reader-facing URL.
+ *
+ * The response path was read off the live API rather than inferred: a real create answered
+ * `{ code: 0, data: { document: { document_id, revision_id, title } } }` - so the id lives at
+ * `data.document.document_id`, and that is what this returns.
+ *
+ * @param {{ token?: string, title?: string, folderToken?: string, domain?: string, fetchImpl?: Function }} input
+ * @returns {Promise<{ documentId: string, title: string, revisionId: number|null, url: string, raw: object }>}
+ */
+/**
+ * Append plain paragraphs to a document.
+ *
+ * Shape verified against the live API, not inferred:
+ * `POST /docx/v1/documents/:document_id/blocks/:block_id/children` with
+ * `{ children: [{ block_type: 2, text: { elements: [{ text_run: { content } }] } }], index: 0 }` answered
+ * `200 code 0 { children, client_token, document_revision_id }`, and a following `raw_content` read returned the
+ * appended line - so the write is proven by the read.
+ *
+ * The parent block id is the document id itself: a live `GET …/blocks` showed the root block whose `block_id`
+ * equals the document's id (block_type 1, the page), which is what children are attached to.
+ *
+ * @param {{ token?: string, documentId?: string, text?: string, domain?: string, fetchImpl?: Function }} input
+ * @returns {Promise<{ blocks: number, revisionId: number|null, blockIds: string[] }>}
+ */
+/**
+ * Pull the document id out of whatever the person pasted: a `/docx/<id>` link, a bare id, or a `/wiki/<id>` link.
+ *
+ * Pure string work on purpose - the URL forms are the ones Feishu itself produces, and a wiki link carries a node
+ * token rather than a document id, which is why it is reported separately instead of being used as if it were one.
+ *
+ * @param {string} input
+ * @returns {{ kind: "docx"|"wiki"|"", id: string }}
+ */
+/**
+ * Resolve a wiki (知识库) node token to the object it points at.
+ *
+ * Both halves of this were verified, from two independent sources:
+ *   - the query parameter is **`token`**, which the live API said out loud: no parameter answered
+ *     `400 99992402 "field validation failed"`, `?token=xxx` answered `400 131005 "not found"` (accepted, not found),
+ *     and `?node_token=xxx` answered the validation error again;
+ *   - the response carries `data.node.obj_token` (the real document/sheet/bitable id) together with `obj_type`,
+ *     read off the official type definitions for `wiki/v2/spaces/get_node`.
+ *
+ * `obj_type` matters: a wiki link can point at a sheet or a bitable, not only a document, so the caller routes on it.
+ *
+ * @param {{ token?: string, nodeToken?: string, domain?: string, fetchImpl?: Function }} input
+ * @returns {Promise<{ objToken: string, objType: string, nodeToken: string }>}
+ */
+export async function feishuWikiResolve({ token = "", nodeToken = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("resolving a wiki node needs a tenant_access_token");
+  const node = String(nodeToken ?? "").trim();
+  if (!node) throw new Error("resolving a wiki node needs its node token");
+  const url = new URL(`${feishuDomain(domain)}/open-apis/wiki/v2/spaces/get_node`);
+  url.searchParams.set("token", node);
+  const response = await fetchImpl(url.toString(), { headers: { authorization: `Bearer ${token}` } });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the wiki node: ${feishuExplain(payload)}`);
+  const objToken = String(payload?.data?.node?.obj_token ?? "");
+  if (!objToken) throw new Error("the wiki node returned no obj_token");
+  return { objToken, objType: String(payload?.data?.node?.obj_type ?? ""), nodeToken: String(payload?.data?.node?.node_token ?? node) };
+}
+
+export function feishuDocRef(input = "") {
+  const raw = String(input ?? "").trim();
+  if (!raw) return { kind: "", id: "" };
+  const docx = raw.match(/\/docx\/([A-Za-z0-9]+)/);
+  if (docx) return { kind: "docx", id: docx[1] };
+  const wiki = raw.match(/\/wiki\/([A-Za-z0-9]+)/);
+  if (wiki) return { kind: "wiki", id: wiki[1] };
+  if (/^[A-Za-z0-9]{10,}$/.test(raw)) return { kind: "docx", id: raw };
+  return { kind: "", id: "" };
+}
+
+/**
+ * Read a document's plain text.
+ *
+ * Verified against the live API: `GET /docx/v1/documents/:document_id/raw_content` answered
+ * `200 code 0 { data: { document_id, content } }`, where `content` held the title and the paragraphs that had just
+ * been appended - so the read is also what proves the write.
+ *
+ * @param {{ token?: string, documentId?: string, domain?: string, fetchImpl?: Function }} input
+ * @returns {Promise<{ documentId: string, content: string }>}
+ */
+/**
+ * Spreadsheet helpers. Every shape below was settled against the live API, because the bundled official SDK does
+ * not contain this family at all - all 17 of its sheet endpoints are metadata/style, none is `values`:
+ *   create  POST /sheets/v3/spreadsheets {title}                -> data.spreadsheet.{spreadsheet_token,url,title}
+ *   sheets  GET  /sheets/v3/spreadsheets/:tk/sheets/query       -> data.sheets[].sheet_id
+ *   read    GET  /sheets/v2/spreadsheets/:tk/values/<sid>!A1:B2 -> data.valueRange.values
+ *   write   PUT  /sheets/v2/spreadsheets/:tk/values
+ *           { valueRange: { range: "<sid>!A1:B2", values: [["a","b"]] } } -> data.updatedCells
+ * and a following read returned exactly the written cells, so the write is proven by the read.
+ */
+
+/** Create a spreadsheet and return its token plus the URL the API itself hands back. */
+export async function feishuSheetCreate({ token = "", title = "", folderToken = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("creating a spreadsheet needs a tenant_access_token");
+  const name = String(title ?? "").trim();
+  if (!name) throw new Error("creating a spreadsheet needs a title");
+  const body = { title: name };
+  if (String(folderToken ?? "").trim()) body.folder_token = String(folderToken).trim();
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/sheets/v3/spreadsheets`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the spreadsheet: ${feishuExplain(payload)}`);
+  const token_ = String(payload?.data?.spreadsheet?.spreadsheet_token ?? "");
+  if (!token_) throw new Error("Feishu created a spreadsheet but returned no spreadsheet_token");
+  return { spreadsheetToken: token_, title: String(payload?.data?.spreadsheet?.title ?? name), url: String(payload?.data?.spreadsheet?.url ?? "") };
+}
+
+/** The first sheet's id, which is what a range has to be qualified with. */
+export async function feishuSheetFirstId({ token = "", spreadsheetToken = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("listing sheets needs a tenant_access_token");
+  const tk = String(spreadsheetToken ?? "").trim();
+  if (!tk) throw new Error("listing sheets needs the spreadsheet_token");
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/sheets/v3/spreadsheets/${encodeURIComponent(tk)}/sheets/query`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the sheet list: ${feishuExplain(payload)}`);
+  const sheets = payload?.data?.sheets ?? [];
+  const id = String(sheets?.[0]?.sheet_id ?? "");
+  if (!id) throw new Error("the spreadsheet reported no sheets");
+  return { sheetId: id, sheets };
+}
+
+/** Read a range; `range` may be a full `sheetId!A1:B2` or just A1:B2 with the first sheet assumed. */
+export async function feishuSheetRead({ token = "", spreadsheetToken = "", range = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("reading a spreadsheet needs a tenant_access_token");
+  const tk = String(spreadsheetToken ?? "").trim();
+  if (!tk) throw new Error("reading a spreadsheet needs the spreadsheet_token");
+  let r = String(range ?? "").trim();
+  if (!r) throw new Error("reading a spreadsheet needs a range such as A1:B2");
+  if (!r.includes("!")) r = `${(await feishuSheetFirstId({ token, spreadsheetToken: tk, domain, fetchImpl })).sheetId}!${r}`;
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(tk)}/values/${encodeURIComponent(r)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the range read: ${feishuExplain(payload)}`);
+  return { range: String(payload?.data?.valueRange?.range ?? r), values: payload?.data?.valueRange?.values ?? [] };
+}
+
+/** Write a range; returns what the API says it updated. */
+export async function feishuSheetWrite({ token = "", spreadsheetToken = "", range = "", values = [], domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("writing a spreadsheet needs a tenant_access_token");
+  const tk = String(spreadsheetToken ?? "").trim();
+  if (!tk) throw new Error("writing a spreadsheet needs the spreadsheet_token");
+  let r = String(range ?? "").trim();
+  if (!r) throw new Error("writing a spreadsheet needs a range such as A1:B2");
+  if (!r.includes("!")) r = `${(await feishuSheetFirstId({ token, spreadsheetToken: tk, domain, fetchImpl })).sheetId}!${r}`;
+  if (!Array.isArray(values) || !values.length) throw new Error("writing a spreadsheet needs a non-empty rows array");
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(tk)}/values`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ valueRange: { range: r, values } }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the range write: ${feishuExplain(payload)}`);
+  return { range: String(payload?.data?.updatedRange ?? r), updatedCells: Number(payload?.data?.updatedCells ?? 0), revision: payload?.data?.revision ?? null };
+}
+
+/**
+ * Bitable (多维表格) helpers. Shapes measured against the live API:
+ *   create  POST /bitable/v1/apps {name}                    -> data.app.{app_token,default_table_id,url,name}
+ *   tables  GET  /bitable/v1/apps/:app_token/tables         -> data.items[].{name,revision,table_id}
+ *   fields  GET  …/tables/:table_id/fields                  -> data.items[].{field_name,type}
+ *   write   POST …/tables/:table_id/records {fields}        -> data.record.{record_id,fields}
+ *   read    GET  …/tables/:table_id/records[/:record_id]    -> data.items[] / data.record.fields
+ * A write returned the text back in `data.record.fields`, and reading that exact record_id returned the same text -
+ * which is also how a wrong impression was avoided: listing records showed `null` for the field, because those were
+ * other, empty records. Status 200 is not evidence; reading the right record is.
+ */
+
+/** Create a bitable app; the API hands back its token, default table and URL. */
+export async function feishuBitableCreate({ token = "", name = "", folderToken = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("creating a bitable app needs a tenant_access_token");
+  const title = String(name ?? "").trim();
+  if (!title) throw new Error("creating a bitable app needs a name");
+  const body = { name: title };
+  if (String(folderToken ?? "").trim()) body.folder_token = String(folderToken).trim();
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/bitable/v1/apps`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the bitable app: ${feishuExplain(payload)}`);
+  const appToken = String(payload?.data?.app?.app_token ?? "");
+  if (!appToken) throw new Error("Feishu created a bitable app but returned no app_token");
+  return {
+    appToken,
+    defaultTableId: String(payload?.data?.app?.default_table_id ?? ""),
+    url: String(payload?.data?.app?.url ?? ""),
+    name: String(payload?.data?.app?.name ?? title),
+  };
+}
+
+/** The tables of a bitable app, plus the first table's id. */
+export async function feishuBitableTables({ token = "", appToken = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("listing bitable tables needs a tenant_access_token");
+  const app = String(appToken ?? "").trim();
+  if (!app) throw new Error("listing bitable tables needs the app_token");
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/bitable/v1/apps/${encodeURIComponent(app)}/tables?page_size=100`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the table list: ${feishuExplain(payload)}`);
+  const tables = payload?.data?.items ?? [];
+  return { tableId: String(tables?.[0]?.table_id ?? ""), tables };
+}
+
+/** Write one record; returns its id and the fields the API echoed back. */
+export async function feishuBitableWrite({ token = "", appToken = "", tableId = "", fields = {}, domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("writing a bitable record needs a tenant_access_token");
+  const app = String(appToken ?? "").trim();
+  const table = String(tableId ?? "").trim();
+  if (!app || !table) throw new Error("writing a bitable record needs the app_token and table_id");
+  if (!fields || typeof fields !== "object" || !Object.keys(fields).length) throw new Error("writing a bitable record needs a non-empty fields object");
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/bitable/v1/apps/${encodeURIComponent(app)}/tables/${encodeURIComponent(table)}/records`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ fields }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the record write: ${feishuExplain(payload)}`);
+  return { recordId: String(payload?.data?.record?.record_id ?? ""), fields: payload?.data?.record?.fields ?? {} };
+}
+
+/** Read records; pass `recordId` to read exactly one (the only reliable way to confirm a write). */
+export async function feishuBitableRead({ token = "", appToken = "", tableId = "", recordId = "", pageSize = 20, domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("reading bitable records needs a tenant_access_token");
+  const app = String(appToken ?? "").trim();
+  const table = String(tableId ?? "").trim();
+  if (!app || !table) throw new Error("reading bitable records needs the app_token and table_id");
+  const one = String(recordId ?? "").trim();
+  const suffix = one ? `/${encodeURIComponent(one)}` : `?page_size=${Math.max(1, Math.min(500, Number(pageSize) || 20))}`;
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/bitable/v1/apps/${encodeURIComponent(app)}/tables/${encodeURIComponent(table)}/records${suffix}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the record read: ${feishuExplain(payload)}`);
+  if (one) return { record: payload?.data?.record ?? null, items: payload?.data?.record ? [payload.data.record] : [] };
+  return { record: null, items: payload?.data?.items ?? [] };
+}
+
+export async function feishuReadDoc({ token = "", documentId = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("reading a document needs a tenant_access_token");
+  const id = String(documentId ?? "").trim();
+  if (!id) throw new Error("reading a document needs its document_id");
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/docx/v1/documents/${encodeURIComponent(id)}/raw_content`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the read: ${feishuExplain(payload)}`);
+  return { documentId: String(payload?.data?.document_id ?? id), content: String(payload?.data?.content ?? "") };
+}
+
+export async function feishuAppendText({ token = "", documentId = "", text = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("appending to a document needs a tenant_access_token");
+  const id = String(documentId ?? "").trim();
+  if (!id) throw new Error("appending to a document needs its document_id");
+  const lines = String(text ?? "").split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.length > 0);
+  if (!lines.length) return { blocks: 0, revisionId: null, blockIds: [] };
+  const children = lines.map((content) => ({ block_type: 2, text: { elements: [{ text_run: { content } }] } }));
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/docx/v1/documents/${encodeURIComponent(id)}/blocks/${encodeURIComponent(id)}/children`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ children, index: 0 }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the append: ${feishuExplain(payload)}`);
+  const created = payload?.data?.children ?? [];
+  return {
+    blocks: created.length || lines.length,
+    revisionId: payload?.data?.document_revision_id ?? null,
+    blockIds: created.map((block) => String(block?.block_id ?? "")).filter(Boolean),
+  };
+}
+
+export async function feishuCreateDoc({ token = "", title = "", folderToken = "", tenantHost = "", domain = "feishu", fetchImpl = fetch } = {}) {
+  if (!String(token ?? "").trim()) throw new Error("creating a document needs a tenant_access_token");
+  const name = String(title ?? "").trim();
+  if (!name) throw new Error("creating a document needs a title");
+  const body = { title: name };
+  if (String(folderToken ?? "").trim()) body.folder_token = String(folderToken).trim();
+  const response = await fetchImpl(`${feishuDomain(domain)}/open-apis/docx/v1/documents`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (payload?.code !== 0) throw new Error(`Feishu refused the document: ${feishuExplain(payload)}`);
+  const documentId = String(payload?.data?.document?.document_id ?? "");
+  if (!documentId) throw new Error("Feishu created a document but returned no document_id");
+  return {
+    documentId,
+    title: String(payload?.data?.document?.title ?? name),
+    revisionId: payload?.data?.document?.revision_id ?? null,
+    url: feishuDocUrl(documentId, tenantHost),
+    raw: payload?.data?.document ?? {},
+  };
+}
+
 export async function feishuDownloadResource({
   token = "",
   messageId = "",

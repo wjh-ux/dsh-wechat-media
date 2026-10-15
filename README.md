@@ -503,6 +503,22 @@ Everything here was learned against the live platform; each item broke something
 
 ### Feishu / 飞书
 
+Nine additional tools work with Feishu documents, spreadsheets and bitables. All of them were built against shapes
+measured from the live API:
+
+| Tool | Does |
+|---|---|
+| `feishu_doc_create` | Creates a document **and writes the body**, then returns a link you can open |
+| `feishu_doc_read` | Reads a document's text from a `/docx/<id>` link (or a bare id) |
+| `feishu_doc_append` | Appends paragraphs to an existing document |
+| `feishu_sheet_create` / `_read` / `_write` | Creates a spreadsheet, reads a range, writes a range |
+| `feishu_bitable_create` / `_write` / `_read` | Creates a bitable, writes a record, reads records (by id to confirm a write) |
+
+**Document links need your tenant host.** `https://open.feishu.cn/docx/<id>` is the API host and answers a generic
+page, so the tools will not build a link from it. Set `tenantHost` (panel or `/prefs?feishuTenantHost=…`) or the
+`FEISHU_TENANT_HOST` environment variable to the host you see in any of your own Feishu document URLs, e.g.
+`ccnje3t5tkro.feishu.cn`. Without it the tool returns the document id and says why there is no link.
+
 - **Attachments are downloaded into the same inbox as the other two transports.** An image, file, audio or video
   message is fetched with `GET /open-apis/im/v1/messages/:message_id/resources/:file_key?type=image|file` and lands
   beside the WeChat and WeCom arrivals, so the model gets a path it can open. The `type` parameter is required - the

@@ -1,6 +1,29 @@
 # Changelog
 
-## 0.23.7
+## 0.23.9
+
+Nine new tools, so the bridge can work with Feishu documents, spreadsheets and bitables - all of them built against
+shapes measured from the live API rather than read off the documentation:
+
+- **Documents**: `feishu_doc_create` (writes the body too), `feishu_doc_read`, `feishu_doc_append`.
+- **Spreadsheets**: `feishu_sheet_create`, `feishu_sheet_read`, `feishu_sheet_write`.
+- **Bitable (多维表格)**: `feishu_bitable_create`, `feishu_bitable_write`, `feishu_bitable_read`.
+
+What the live API settled that guessing would have got wrong:
+
+- **A reader-facing document link needs the tenant host.** `https://open.feishu.cn/docx/<id>` answers
+  `200 text/html` - a generic page, not the document - while `https://<tenant>.feishu.cn/docx/<id>` answers `302` to
+  the login page. The URL builder now requires a tenant host (`tenantHost`, or `FEISHU_TENANT_HOST`) and returns
+  **nothing** rather than a link that looks right and opens the wrong page; the tool says so and tells you what to set.
+- **The spreadsheet values API is v2 and is not in the official SDK at all** - all 17 sheet endpoints it ships are
+  metadata or styling. `GET/PUT /sheets/v2/spreadsheets/:token/values/...` was settled by calling it.
+- **The bitable write has to be confirmed by reading that exact record.** Listing records showed the field as `null`,
+  because those were other, empty records; reading the written `record_id` returned the text. Status 200 is not proof.
+
+Also fixed: `test/feishu-inbound.test.mjs` could fail about one run in three. That test's path now fetches a token and
+then a resource, so a fixed sleep was a race; it waits for the condition and passed 5/5 runs afterwards.
+
+24 suites / 417 cases.
 
 - **The Feishu attachment download never got a token, and the prompt said so.** `feishuToken()` returns the token
   **string** (`return fresh.token`); the downloader destructured it (`const { token } = await feishuToken()`), which

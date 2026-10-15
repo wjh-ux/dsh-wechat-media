@@ -113,6 +113,16 @@ function stubFetch(respond) {
   return { calls, restore: () => { globalThis.fetch = original; } };
 }
 
+/** Wait until `check()` is true, or give up after `timeoutMs`. A fixed sleep is a race: this flow makes network
+ *  calls (token, then the resource), so the time it takes is not a constant. */
+async function waitFor(check, timeoutMs = 2000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (check()) return true;
+    if (Date.now() > until) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 /** `rm` can race a still-closing handle and throw ENOTEMPTY; retry briefly rather than failing the suite. */
 async function removeTree(dir) {
   for (let attempt = 0; ; attempt += 1) {
@@ -476,6 +486,10 @@ await test("an attachment that cannot be fetched is still described", async () =
   try {
     app.socket().deliver(messageEvent({ messageType: "image", content: { image_key: "img_v2_drive" } }));
     await settle();
+    // This path fetches a token and then the resource, so how long it takes is not a constant. Wait for the
+    // condition instead of sleeping a fixed amount - otherwise the test fails at random (it did, about 1 in 3).
+    const produced = await waitFor(() => app.queued.length > 0);
+    assert.ok(produced, "the attachment event produced something to answer");
     assert.equal(app.queued.length, 1);
     const prompt = app.queued[0].content[0].text;
     // Attachments are fetched now. This harness answers a resource request with JSON, so the download cannot

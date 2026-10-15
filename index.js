@@ -104,6 +104,18 @@ import {
   feishuUploadImage,
   feishuWebhookSend,
   feishuDownloadResource,
+  feishuCreateDoc,
+  feishuDocRef,
+  feishuReadDoc,
+  feishuWikiResolve,
+  feishuSheetCreate,
+  feishuSheetRead,
+  feishuSheetWrite,
+  feishuBitableCreate,
+  feishuBitableRead,
+  feishuBitableTables,
+  feishuBitableWrite,
+  feishuAppendText,
 } from "./feishu.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
@@ -2354,6 +2366,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       secret: pick(saved.secret, given.secret, env.FEISHU_WEBHOOK_SECRET),
       appId: pick(saved.appId, given.appId, env.FEISHU_APP_ID),
       appSecret: pick(saved.appSecret, given.appSecret, env.FEISHU_APP_SECRET),
+      tenantHost: pick(saved.tenantHost, given.tenantHost, env.FEISHU_TENANT_HOST),
       domain: pick(saved.domain, given.domain, env.FEISHU_DOMAIN) || "feishu",
       to: pick(saved.to, given.to, env.FEISHU_TO),
       // The long connection is what lets an app bot receive without a public address. It is on
@@ -2396,6 +2409,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     feishuWebhookUrl: "webhookUrl",
     feishuWebhookSecret: "secret",
     feishuDomain: "domain",
+    feishuTenantHost: "tenantHost",
     feishuTo: "to",
     feishuVerificationToken: "verificationToken",
     feishuEncryptKey: "encryptKey",
@@ -3746,6 +3760,282 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
+      const feishuDocCreate = define({
+        name: "feishu_doc_create",
+        description:
+          "Create a Feishu (飞书 / Lark) document from text and return its link. Needs the app bot (feishu.appId/appSecret). The body is written as plain paragraphs; the caller gets the document URL to share.",
+        parameters: {
+          title: { type: "string", required: true, description: "Document title." },
+          text: { type: "string", description: "Body text. Written once the append capability lands (next); it is accepted and reported, never silently dropped." },
+          folderToken: { type: "string", description: "Optional folder token; omitted means the app's own space." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const title = String(args?.title ?? "").trim();
+          const text = String(args?.text ?? "");
+          if (!title) return "nothing to create: `title` is empty";
+          try {
+            const created = await feishuCreateDoc({ title, folderToken: args?.folderToken, tenantHost: feishuConfig().tenantHost });
+            // The body is written through the append endpoint, whose shape was settled against the live API
+            // (block_type 2 + text_run, parent block = the document id) and proven by reading the document back.
+            const written = await feishuAppendText({ documentId: created.documentId, text });
+            noteRoute("/feishu-doc", { action: "create", documentId: created.documentId, blocks: written.blocks });
+            if (!created.url) {
+              noteRoute("/feishu-doc", { action: "create", documentId: created.documentId, url: "missing tenant host" });
+              return `已创建「${created.title}」（id ${created.documentId}）✓ 写入 ${written.blocks} 段 ✓ —— 但**没有配置租户域名，所以不给链接** ✗（用 API 主机拼出来的链接会打不开 ✓）。请填 tenantHost（形如 ccnje3t5tkro.feishu.cn，取自你任意一篇飞书文档的 URL ✓），或用 DSH 环境变量 FEISHU_TENANT_HOST ✓。`;
+            }
+            return `已创建「${created.title}」→ ${created.url}（写入 ${written.blocks} 段 ✓）`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "create", error: String(error?.message ?? error) });
+            return `could not create the Feishu document: ${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuDocRead = define({
+        name: "feishu_doc_read",
+        description:
+          "Read a Feishu (飞书 / Lark) document's plain text from a link or id and hand it to the model. Accepts /docx/<id> links, bare ids and /wiki/<id> links; a wiki link carries a node token, so it is reported as such rather than guessed at.",
+        parameters: {
+          link: { type: "string", required: true, description: "The document link, a /docx/<id> or /wiki/<id> URL, or a bare document id." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const ref = feishuDocRef(args?.link);
+          if (!ref.kind) return `没有识别出文档：请给出 /docx/<id> 链接、/wiki/<id> 链接或文档 id（收到的是「${String(args?.link ?? "").slice(0, 60)}」）`;
+          let documentId = ref.id;
+          if (ref.kind === "wiki") {
+            // Resolved for real now: the parameter is `token` (the live API answered 131005 "not found" for it and a
+            // validation error without it) and the node carries obj_token + obj_type (official type definitions).
+            try {
+              const node = await feishuWikiResolve({ nodeToken: ref.id });
+              if (node.objType && node.objType !== "docx" && node.objType !== "doc") {
+                noteRoute("/feishu-doc", { action: "read", kind: "wiki", objType: node.objType });
+                return `这是知识库(wiki)里的一篇 **${node.objType}**（obj_token ${node.objToken}）✓，不是文档 ✓ —— 请用对应的工具读取（表格用 feishu_sheet_read ✓ 多维表格用 feishu_bitable_read ✓）。`;
+              }
+              documentId = node.objToken;
+              noteRoute("/feishu-doc", { action: "read", kind: "wiki", objType: node.objType, objToken: node.objToken });
+            } catch (error) {
+              noteRoute("/feishu-doc", { action: "read", kind: "wiki", error: String(error?.message ?? error) });
+              return `解析知识库(wiki)节点失败：${error?.message ?? error}`;
+            }
+          }
+          try {
+            const got = await feishuReadDoc({ documentId });
+            noteRoute("/feishu-doc", { action: "read", documentId: got.documentId, chars: got.content.length });
+            return `文档 ${got.documentId}（${got.content.length} 字符）：\n\n${got.content}`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "read", error: String(error?.message ?? error) });
+            return `读取飞书文档失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuDocAppend = define({
+        name: "feishu_doc_append",
+        description:
+          "Append text to an existing Feishu (飞书 / Lark) document. Each line becomes a paragraph; the document id is taken from a link or given directly.",
+        parameters: {
+          link: { type: "string", required: true, description: "The document link or its document_id." },
+          text: { type: "string", required: true, description: "Text to append. Each non-empty line becomes a paragraph." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const ref = feishuDocRef(args?.link);
+          const text = String(args?.text ?? "");
+          let targetId = ref.kind === "docx" ? ref.id : "";
+          if (ref.kind === "wiki") {
+            try {
+              const node = await feishuWikiResolve({ nodeToken: ref.id });
+              if (node.objType === "docx" || node.objType === "doc") targetId = node.objToken;
+              else return `wiki 节点 ${ref.id} 是 ${node.objType} ✓，不能当文档追加 ✓（表格/多维表格请用对应工具 ✓）`;
+            } catch (error) {
+              return `解析知识库(wiki)节点失败：${error?.message ?? error}`;
+            }
+          }
+          if (!targetId) return `只能追加到文档：请给出 /docx/<id> 链接、/wiki/<id> 链接或文档 id ✗`;
+          if (!text.trim()) return "nothing to append: `text` is empty";
+          try {
+            const written = await feishuAppendText({ documentId: targetId, text });
+            noteRoute("/feishu-doc", { action: "append", documentId: ref.id, blocks: written.blocks });
+            return `已向 ${ref.id} 追加 ${written.blocks} 段 ✓（revision ${written.revisionId ?? "?"}）`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "append", error: String(error?.message ?? error) });
+            return `追加失败：${error?.message ?? error}`;
+          }
+        },
+      });
+      /** Pull the spreadsheet token out of a `/sheets/<token>` link, or accept a bare token. */
+      function feishuSheetTokenFrom(input) {
+        const raw = String(input ?? "").trim();
+        const hit = raw.match(/\/sheets\/([A-Za-z0-9]+)/);
+        if (hit) return hit[1];
+        return /^[A-Za-z0-9]{10,}$/.test(raw) ? raw : "";
+      }
+      const feishuSheetNew = define({
+        name: "feishu_sheet_create",
+        nameZh: "飞书表格_创建",
+        description:
+          "Create a Feishu (飞书 / Lark) spreadsheet and return the link the API itself reports. Needs the app bot credentials.",
+        parameters: { title: { type: "string", required: true, description: "Spreadsheet title." } },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const title = String(args?.title ?? "").trim();
+          if (!title) return "nothing to create: `title` is empty";
+          try {
+            const made = await feishuSheetCreate({ title });
+            noteRoute("/feishu-doc", { action: "sheet-create", spreadsheetToken: made.spreadsheetToken });
+            return made.url ? `已创建表格「${made.title}」→ ${made.url}` : `已创建表格「${made.title}」（token ${made.spreadsheetToken}）✓，但 API 未返回链接`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "sheet-create", error: String(error?.message ?? error) });
+            return `创建表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuSheetReadTool = define({
+        name: "feishu_sheet_read",
+        description:
+          "Read a range from a Feishu spreadsheet (飞书表格). Accepts a /sheets/<token> link or a bare token, plus a range like A1:C5 or a full <sheetId>!A1:C5.",
+        parameters: {
+          link: { type: "string", required: true, description: "Spreadsheet link (/sheets/<token>) or its token." },
+          range: { type: "string", required: true, description: "Range such as A1:C5, or <sheetId>!A1:C5." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const token_ = feishuSheetTokenFrom(args?.link);
+          if (!token_) return `没有识别出表格：请给出 /sheets/<token> 链接或表格 token（收到「${String(args?.link ?? "").slice(0, 60)}」）`;
+          const range = String(args?.range ?? "").trim();
+          if (!range) return "nothing to read: `range` is empty";
+          try {
+            const got = await feishuSheetRead({ spreadsheetToken: token_, range });
+            noteRoute("/feishu-doc", { action: "sheet-read", spreadsheetToken: token_, range: got.range, rows: got.values.length });
+            return `表格 ${token_} 的 ${got.range}：\n${JSON.stringify(got.values)}`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "sheet-read", error: String(error?.message ?? error) });
+            return `读取表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuSheetWriteTool = define({
+        name: "feishu_sheet_write",
+        description:
+          "Write rows into a Feishu spreadsheet range. `values` is an array of rows, e.g. [[\"a\",\"b\"],[\"c\",\"d\"]].",
+        parameters: {
+          link: { type: "string", required: true, description: "Spreadsheet link (/sheets/<token>) or its token." },
+          range: { type: "string", required: true, description: "Range such as A1:B2, or <sheetId>!A1:B2." },
+          values: { type: "string", required: true, description: "Rows as JSON, e.g. [[\"a\",\"b\"]]." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const token_ = feishuSheetTokenFrom(args?.link);
+          if (!token_) return `没有识别出表格：请给出 /sheets/<token> 链接或表格 token`;
+          const range = String(args?.range ?? "").trim();
+          if (!range) return "nothing to write: `range` is empty";
+          let rows;
+          try { rows = JSON.parse(String(args?.values ?? "")); } catch { return `values 不是合法 JSON：请给出行数组，例如 [[\"a\",\"b\"]]`; }
+          if (!Array.isArray(rows) || !rows.length) return "values 必须是非空的行数组";
+          try {
+            const wrote = await feishuSheetWrite({ spreadsheetToken: token_, range, values: rows });
+            noteRoute("/feishu-doc", { action: "sheet-write", spreadsheetToken: token_, range: wrote.range, updatedCells: wrote.updatedCells });
+            return `已写入 ${token_} 的 ${wrote.range}：${wrote.updatedCells} 个单元格 ✓（revision ${wrote.revision ?? "?"}）`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "sheet-write", error: String(error?.message ?? error) });
+            return `写入表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
+      /** Pull the bitable app_token out of a `/base/<token>` link, or accept a bare token. */
+      function feishuBitableTokenFrom(input) {
+        const raw = String(input ?? "").trim();
+        const hit = raw.match(/\/(?:base|bitable)\/([A-Za-z0-9]+)/);
+        if (hit) return hit[1];
+        return /^[A-Za-z0-9]{10,}$/.test(raw) ? raw : "";
+      }
+
+      const feishuBitableNew = define({
+        name: "feishu_bitable_create",
+        nameZh: "飞书多维表格_创建",
+        description: "Create a Feishu (飞书 / Lark) bitable app (多维表格) and return the link the API reports.",
+        parameters: { name: { type: "string", required: true, description: "App name." } },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const name = String(args?.name ?? "").trim();
+          if (!name) return "nothing to create: `name` is empty";
+          try {
+            const made = await feishuBitableCreate({ name });
+            noteRoute("/feishu-doc", { action: "bitable-create", appToken: made.appToken });
+            return made.url ? `已创建多维表格「${made.name}」→ ${made.url}` : `已创建多维表格「${made.name}」（app_token ${made.appToken}）✓ 但 API 未返回链接，请用该 token ✓`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "bitable-create", error: String(error?.message ?? error) });
+            return `创建多维表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuBitableWriteTool = define({
+        name: "feishu_bitable_write",
+        description: "Write one record into a Feishu bitable table. `fields` is a JSON object keyed by field name, e.g. {\"文本\":\"hello\"}.",
+        parameters: {
+          link: { type: "string", required: true, description: "Bitable link (/base/<token>) or app_token." },
+          tableId: { type: "string", description: "Table id; the first table is used when omitted." },
+          fields: { type: "string", required: true, description: "Record fields as JSON, e.g. {\"文本\":\"hello\"}." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const app = feishuBitableTokenFrom(args?.link);
+          if (!app) return `没有识别出多维表格：请给出 /base/<token> 链接或 app_token`;
+          let fields;
+          try { fields = JSON.parse(String(args?.fields ?? "")); } catch { return `fields 不是合法 JSON：例如 {"文本":"hello"}`; }
+          if (!fields || typeof fields !== "object" || !Object.keys(fields).length) return "fields 必须是非空对象";
+          try {
+            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ appToken: app })).tableId;
+            if (!tableId) return `多维表格 ${app} 没有可用的数据表 ✗`;
+            const wrote = await feishuBitableWrite({ appToken: app, tableId, fields });
+            noteRoute("/feishu-doc", { action: "bitable-write", appToken: app, tableId, recordId: wrote.recordId });
+            return `已写入 ${app}/${tableId} ✓ record_id=${wrote.recordId} ✓（回显 ${JSON.stringify(wrote.fields)}）`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "bitable-write", error: String(error?.message ?? error) });
+            return `写入多维表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuBitableReadTool = define({
+        name: "feishu_bitable_read",
+        description: "Read records from a Feishu bitable table. Pass recordId to read exactly one record, which is the only reliable way to confirm a write.",
+        parameters: {
+          link: { type: "string", required: true, description: "Bitable link (/base/<token>) or app_token." },
+          tableId: { type: "string", description: "Table id; the first table is used when omitted." },
+          recordId: { type: "string", description: "Read just this record - the reliable way to verify a write." },
+          pageSize: { type: "number", description: "How many records to list (default 20, max 500)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const app = feishuBitableTokenFrom(args?.link);
+          if (!app) return `没有识别出多维表格：请给出 /base/<token> 链接或 app_token`;
+          try {
+            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ appToken: app })).tableId;
+            if (!tableId) return `多维表格 ${app} 没有可用的数据表 ✗`;
+            const got = await feishuBitableRead({ appToken: app, tableId, recordId: args?.recordId, pageSize: args?.pageSize });
+            noteRoute("/feishu-doc", { action: "bitable-read", appToken: app, tableId, records: got.items.length });
+            return `多维表格 ${app}/${tableId} 的 ${got.items.length} 条记录：\n${JSON.stringify(got.items).slice(0, 4000)}`;
+          } catch (error) {
+            noteRoute("/feishu-doc", { action: "bitable-read", error: String(error?.message ?? error) });
+            return `读取多维表格失败：${error?.message ?? error}`;
+          }
+        },
+      });
       const sendVoiceTool = define({
         name: "wechat_send_voice",
         description:
@@ -3858,7 +4148,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       });
 
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

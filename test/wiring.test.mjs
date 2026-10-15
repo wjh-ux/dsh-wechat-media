@@ -394,7 +394,11 @@ await test("the Feishu send half is wired, and never claims what it cannot do", 
   for (const tool of ["wechat_send_text", "wechat_send_file", "wecom_send_text", "wecom_send_file", "feishu_send_text", "feishu_send_file"]) {
     assert.match(host, new RegExp(`const DELIVERY_TOOLS = new Set\\(\\[[^\\]]*"${tool}"`), `${tool} counts as delivering the answer`);
   }
-  assert.match(host, /feishuText, feishuFile\]\)/, "and both are registered with the harness");
+  // Assert each tool by name inside the registration array rather than pinning the whole list: the exact-list form
+  // went stale twice as tools were added, which is a guard that fails for the wrong reason.
+  for (const tool of ["feishuText", "feishuFile", "feishuDocCreate", "feishuDocRead", "feishuDocAppend"]) {
+    assert.match(host, new RegExp(`for \\(const definition of \\[[^\\]]*\\b${tool}\\b`), `${tool} is registered with the harness`);
+  }
   assert.match(host, /function feishuConfig\(\)/, "the configuration is resolved in one place");
   assert.match(host, /FEISHU_WEBHOOK_URL/, "with the documented webhook environment fallback");
   assert.match(host, /FEISHU_APP_SECRET/, "and the app-bot ones");
@@ -599,6 +603,44 @@ await test("the Feishu downloader takes the token the way feishuToken() actually
   // "[飞书image未保存] downloading a resource needs a tenant_access_token". The wrong form is asserted against.
   assert.match(host, /const token = await feishuToken\(\);/, "the token is taken as a string");
   assert.doesNotMatch(host, /const \{ token \} = await feishuToken\(\);/, "never destructured from a string");
+});
+await test("the document tool creates, then really writes the body", () => {
+  // The first version created the document and returned a link while saying the body was pending - honest, but half
+  // a feature. The append endpoint is now settled against the live API, so the write is a real call, and the tool
+  // must not fall back to the "pending" wording.
+  assert.match(host, /^\s*feishuAppendText,$/m, "the append helper is imported");
+  assert.match(host, /const feishuDocCreate = define\(\{/, "the tool exists");
+  assert.match(host, /await feishuAppendText\(\{ documentId: created\.documentId, text \}\)/, "and writes the body through it");
+  assert.doesNotMatch(host, /待"追加"能力上线/, "no placeholder wording is left behind");
+});
+await test("a reader-facing Feishu link never comes from the API host", () => {
+  const feishuSource = readFileSync(join(root, "feishu.js"), "utf8");
+  // Measured: https://open.feishu.cn/docx/<id> answers 200 text/html (a generic page, not the document), while the
+  // tenant host answers 302 to the login page. So the URL builder takes a tenant host, and the API host is never
+  // used for a link a person is meant to open.
+  assert.match(feishuSource, /export function feishuDocUrl\(documentId, host = ""\)/, "the builder takes a host");
+  assert.match(feishuSource, /if \(!id \|\| !base\) return "";/, "and returns nothing without one");
+  assert.match(feishuSource, /url: feishuDocUrl\(documentId, tenantHost\)/, "the create path passes the tenant host");
+  assert.doesNotMatch(host, /feishuDocUrl\(documentId, domain\)/, "never the API domain");
+  assert.doesNotMatch(feishuSource, /feishuDomain\(domain\)\}\/docx\//, "the API host is not used to build document links");
+});
+
+await test("the link parsers cannot mistake prose for an id", () => {
+  const feishuSource = readFileSync(join(root, "feishu.js"), "utf8");
+  // Each parser accepts a URL form or a bare token of real length, and nothing else - a chat message pasted by
+  // mistake must not be treated as a document, sheet or app token.
+  assert.match(feishuSource, /raw\.match\(\/\\\/docx\\\/\(\[A-Za-z0-9\]\+\)\/\)/, "docx links are matched by form");
+  assert.match(feishuSource, /if \(\/\^\[A-Za-z0-9\]\{10,\}\$\/\.test\(raw\)\) return \{ kind: "docx", id: raw \}/, "a bare id must be alphanumeric and long");
+  assert.match(host, /function feishuSheetTokenFrom\(input\)/, "the sheet parser exists");
+  assert.match(host, /function feishuBitableTokenFrom\(input\)/, "the bitable parser exists");
+  assert.match(host, /return \/\^\[A-Za-z0-9\]\{10,\}\$\/\.test\(raw\) \? raw : "";/, "and both require a long alphanumeric token");
+});
+
+await test("every new Feishu document tool reports failure instead of swallowing it", () => {
+  for (const tool of ["feishu_doc_create", "feishu_doc_read", "feishu_doc_append", "feishu_sheet_create", "feishu_sheet_read", "feishu_sheet_write", "feishu_bitable_create", "feishu_bitable_write", "feishu_bitable_read"]) {
+    assert.match(host, new RegExp(`name: "${tool}"`), `${tool} exists`);
+  }
+  assert.match(host, /catch \(error\) \{\s*\n\s*noteRoute\("\/feishu-doc", \{ action: "bitable-read", error/, "a failed read is reported with its reason");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
