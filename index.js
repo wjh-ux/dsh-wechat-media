@@ -24,7 +24,7 @@
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -252,6 +252,24 @@ export function approvalPolicyFor(level) {
 export function interjectDecision({ enabled = false, turnInFlight = false, agentAvailable = false } = {}) {
   if (!enabled || !turnInFlight || !agentAvailable) return "queue";
   return "steer";
+}
+
+/**
+ * Why an interjection decision went the way it did, in terms a reader can check later.
+ *
+ * The counters are in-memory and reset with the process, so "it never moved" proves nothing after a restart -
+ * which is exactly the confusion this answers. Every decision is appended to a JSONL file (survives restarts)
+ * and kept in a small ring for `GET /state`.
+ *
+ * @param {{ enabled?: boolean, turnInFlight?: boolean, agentAvailable?: boolean, decision?: string }} input
+ * @returns {string}
+ */
+export function interjectReason({ enabled = false, turnInFlight = false, agentAvailable = false, decision = "queue" } = {}) {
+  if (decision === "steer") return "steered into the running turn";
+  if (!enabled) return "interjection is off";
+  if (!agentAvailable) return "this harness exposes no agent.steer";
+  if (!turnInFlight) return "no turn was running for this chat at that moment";
+  return "queued";
 }
 
 /**
@@ -1183,6 +1201,7 @@ export function apply(ctx, config = {}) {
         sessionId: sessionIdFor(accountId, chatId, generation),
         generation,
         counters,
+        interjections: interjections.slice(-10),
         // Reported for both transports: "is the other side down?" is exactly what this
         // command is for, and the bot's state is one of the few visible failure signals.
         bot: wecomBotStatus,
@@ -1603,6 +1622,28 @@ export function apply(ctx, config = {}) {
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
   const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0 };
+
+/**
+ * Every interjection decision, kept for later inspection.
+ *
+ * The counters live in memory and reset with the process, so "interjected stayed 0" proves nothing after a
+ * restart - which is exactly the argument this answers. Each decision is appended to a JSONL file (durable)
+ * and the last few are also returned by `GET /state` as `interjections`.
+ */
+const interjections = [];
+async function recordInterjection({ chatId, platform, decision, reason, error }) {
+  const entry = { at: Date.now(), chatId, platform, decision, reason, ...(error ? { error: String(error) } : {}) };
+  interjections.push(entry);
+  while (interjections.length > 25) interjections.shift();
+  ctx.logger?.info?.("[dsh-wechat-media] interjection: %s (%s) for %s", decision, reason, chatId);
+  try {
+    const dir = join(stateRoot, "log");
+    await mkdir(dir, { recursive: true });
+    await appendFile(join(dir, "interjections.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+  } catch (error2) {
+    ctx.logger?.warn?.("[dsh-wechat-media] could not write the interjection log: %s", error2?.message ?? error2);
+  }
+}
   /**
    * Where inbound media goes right now: the runtime preference (card / control
    * panel) beats the plugin config, which beats `$DSH_HOME/wechat-inbox`. Resolved
@@ -1873,11 +1914,13 @@ export function apply(ctx, config = {}) {
     // message to *that* turn (`steer`) instead of queueing a second one. The running handler
     // relays the turn's reply, so no waiter is registered here - which is what keeps the two
     // from fighting over one session.
-    const interject = interjectDecision({
+    const interjectInput = {
       enabled: (await state.loadPrefs()).interject === true,
       turnInFlight: collectors.isWaiting(sessionId),
       agentAvailable: typeof agent.steer === "function",
-    });
+    };
+    const interject = interjectDecision(interjectInput);
+    await recordInterjection({ chatId, platform: "wecom", decision: interject, reason: interjectReason({ ...interjectInput, decision: interject }) });
     if (interject === "steer") {
       try {
         await agent.steer(message2);
@@ -1888,6 +1931,7 @@ export function apply(ctx, config = {}) {
         // Steering loses a race with the end of a turn sooner or later. Falling through to the queue is
         // what keeps "interject" from ever meaning "dropped on the floor".
         counters.interjectFailed += 1;
+        await recordInterjection({ chatId, platform: "wecom", decision: "steer", reason: "steering failed, queued instead", error: error?.message ?? error });
         ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
       }
     }
@@ -2225,11 +2269,13 @@ export function apply(ctx, config = {}) {
     const prompt = `[微信 ${peerName} ${chatId}]\n${lines.join("\n\n")}`;
     const message2 = await userMessage(prompt);
     // Same rule as the WeCom path: interject into the running turn, or queue your own.
-    const interject = interjectDecision({
+    const interjectInput2 = {
       enabled: (await state.loadPrefs()).interject === true,
       turnInFlight: collectors.isWaiting(sessionId),
       agentAvailable: typeof agent.steer === "function",
-    });
+    };
+    const interject = interjectDecision(interjectInput2);
+    await recordInterjection({ chatId, platform: "wechat", decision: interject, reason: interjectReason({ ...interjectInput2, decision: interject }) });
     if (interject === "steer") {
       try {
         await agent.steer(message2);
@@ -2240,6 +2286,7 @@ export function apply(ctx, config = {}) {
         // Steering loses a race with the end of a turn sooner or later. Falling through to the queue is
         // what keeps "interject" from ever meaning "dropped on the floor".
         counters.interjectFailed += 1;
+        await recordInterjection({ chatId, platform: "wechat", decision: "steer", reason: "steering failed, queued instead", error: error?.message ?? error });
         ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
       }
     }

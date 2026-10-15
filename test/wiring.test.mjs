@@ -330,5 +330,15 @@ await test("interjection can never lose a message", () => {
   // The steer must not be counted before it succeeded.
   assert.doesNotMatch(host, /if \(interject === "steer"\) \{\s*\n\s*counters\.interjected \+= 1;/, "a failure must not be counted as an interjection");
 });
+await test("interjection decisions are recorded, not just counted", () => {
+  // The counters reset with the process, so "interjected stayed 0" cannot settle "did it ever steer?" after a
+  // restart. Every decision is therefore written down - with the reason - and surfaced by /state.
+  assert.match(host, /async function recordInterjection/, "there is a recorder");
+  assert.match(host, /interjections\.jsonl/, "it writes a durable line");
+  assert.equal((host.match(/await recordInterjection\(/g) ?? []).length, 4, "both decisions and both steer failures are recorded");
+  assert.match(host, /interjections: interjections\.slice\(-10\)/, "/state shows the recent ones");
+  assert.match(host, /export function interjectReason/, "and the reason is a named function, so it can be asserted");
+  assert.match(host, /no turn was running for this chat at that moment/, "the most likely reason is spelled out");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

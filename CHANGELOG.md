@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.5
+
+- **"Did interjection ever fire?" is now answerable across restarts.** The counters are in-memory, so after a restart
+  "`interjected` stayed 0" proves nothing - and that gap produced a wrong conclusion about this feature (the switch
+  was called useless on evidence that could not support it). Every decision is now written down: a durable JSONL line
+  under ``/dsh-wechat-media/log/interjections.jsonl`` plus the last ten in `GET /state` as
+  `interjections`, each carrying the **reason** - `interjection is off`, `no turn was running for this chat at
+  that moment`, `this harness exposes no agent.steer`, or `steered into the running turn`.
+- `interjectReason()` is a named function so the wording itself can be asserted, and a guard test checks the recorder,
+  the durable file, all four call sites (two decisions, two steer failures) and the `/state` exposure.
+- 286 tests across 19 suites.
+
 ## 0.19.4
 
 - **Interjection can no longer lose a message.** `await agent.steer(message); return;` was unguarded on both
