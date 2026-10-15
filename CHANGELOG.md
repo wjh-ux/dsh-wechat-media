@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.5
+
+- **The Web UI's Feishu Save button did nothing, and the cause was a single missing brace.** When the Feishu block was
+  added to `client.js`, the closing brace of `setInterject` was consumed, so `setFeishu` ended up **nested inside
+  `setInterject`** - invisible to the render code that calls it. Clicking Save threw `ReferenceError: setFeishu is not
+  defined`: no request, no message, nothing. Every source-level assertion passed, because the source *looks* right.
+- Found with an **oracle**: the client module is loaded the way DSH loads it (`window.__ModuleLoader__`), the card is
+  rendered, the Save button is found in the tree and **clicked** against a recording `fetch`. That reproduced the
+  `ReferenceError` and, after the fix, showed the request the button actually makes.
+- That oracle is now a **regression test** (render → find the button → click → a `/prefs` request must happen), and it
+  was falsified by restoring the missing brace, which fails it with the original error.
+- `/prefs` also logs the **field names** it was asked to change (never values), so "did the panel's Save reach the
+  plugin?" is answerable from `/state` rather than guessed.
+- 24 suites / 402 cases.
+
 ## 0.23.4
 
 - **`/state` reported the Feishu frame counters from connect time, so a working connection looked dead.** The status

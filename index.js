@@ -4071,6 +4071,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           const body = await readArgs(req);
+          // Field **names** only, never values: this is what makes "did the panel's Save reach the plugin at
+          // all?" answerable from /state. Without it the browser side and the host side can both look fine
+          // while the write simply never happens.
+          noteRoute("/prefs", { fields: Object.keys(body ?? {}).slice(0, 12) });
           const patch = {};
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);

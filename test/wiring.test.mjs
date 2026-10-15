@@ -520,5 +520,60 @@ await test("the Feishu state refreshes the live connection counters", () => {
   assert.match(host, /async function feishuState\(\) \{[\s\S]{0,1200}?feishuWs\.status\(\)/, "and does it inside feishuState");
   assert.match(host, /stats: liveStatus\?\.stats \?\? feishuWsStatus\.stats/, "refreshing the counters only - never the recorded failure state");
 });
+await test("a panel write is visible in the route log", () => {
+  // "The panel saves nothing" was unfalsifiable: the host route worked when called directly, and nothing
+  // recorded whether the browser ever called it. The route now logs the field names it received.
+  assert.match(host, /noteRoute\("\/prefs", \{ fields: Object\.keys\(body \?\? \{\}\)\.slice\(0, 12\) \}\)/, "the prefs route records what it was asked to change");
+});
+await test("the panel's Feishu Save really sends a request", async () => {
+  // This is the oracle that finally found the bug: the whole client module is loaded the way DSH loads it,
+  // the card is rendered, the Save button is found and **clicked**, and the fetch stub has to see a request.
+  // The button used to throw `setFeishu is not defined` - a missing brace had nested it inside setInterject -
+  // so it sent nothing and said nothing, and every source-level assertion still passed.
+  let captured = null;
+  let card = null;
+  globalThis.window = { __ModuleLoader__: { load: (entry) => { captured = entry; } } };
+  await import("../client.js");
+  const reactStub = {
+    createElement: (type, props, ...kids) => ({ type, props: props ?? {}, kids }),
+    useState: (value) => [typeof value === "function" ? value() : value, () => {}],
+    useEffect() {}, useRef: () => ({ current: null }), useMemo: (fn) => fn(), useCallback: (fn) => fn,
+    Fragment: "Fragment", createContext: () => ({}),
+  };
+  const mod = captured.factory((name) => { if (name === "react") return reactStub; throw new Error(`require ${name}`); });
+  const ctx = {
+    slots: { inject: (_slot, fn) => fn(), register: (def, comp) => { card = { def, comp }; return () => {}; } },
+    effect() {}, logger: { info() {}, warn() {}, error() {} }, on() {}, provide() {},
+    inject: (_deps, fn) => { if (typeof fn === "function") fn(ctx); },
+  };
+  mod.apply(ctx);
+  const tree = card.comp({ snapshot: { feishu: { configured: true, connection: { state: "connected" } } } });
+  const nodes = [];
+  (function walk(node) {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (node && typeof node === "object") { nodes.push(node); walk(node.kids); }
+  })(tree);
+  const textOf = (node) => {
+    const parts = [];
+    (function gather(n) {
+      if (Array.isArray(n)) return n.forEach(gather);
+      if (typeof n === "string") return parts.push(n);
+      if (n && typeof n === "object") gather(n.kids);
+    })(node.kids);
+    return parts.join(" ").trim();
+  };
+  const save = nodes.find((n) => typeof n?.props?.onClick === "function" && /Feishu settings/i.test(textOf(n)));
+  assert.ok(save, "the Feishu Save button is rendered");
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, feishu: { connection: { state: "connected" } } }) };
+  };
+  const result = save.props.onClick({ target: {} });
+  if (result && typeof result.then === "function") await result;
+  assert.ok(calls.some((url) => url.includes("/dsh-wechat-media/prefs?")), `clicking Save must send a /prefs request, saw: ${calls.join(", ") || "nothing"}`);
+  delete globalThis.window;
+  delete globalThis.fetch;
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

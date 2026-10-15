@@ -561,6 +561,7 @@ window.__ModuleLoader__.load({
           } finally {
             setBusy(false);
           }
+        }
         /**
          * Save the Feishu settings from the panel.
          *
@@ -590,7 +591,6 @@ window.__ModuleLoader__.load({
           } finally {
             setBusy(false);
           }
-        }
         }
 
         /**
