@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.1
+
+- **The panel's Feishu checkbox could not be cleared without reloading the page.** `Boolean(feishuDraft.feishuLongConnection ?? (…) === "true")` parses as `draft ?? ((…) === "true")`, so a draft holding the string `"false"` - non-empty, therefore truthy - rendered as **checked**. The comparison now sits outside the nullish coalescing, and a guard asserts both that the broken form is gone and that the fixed one is present; reverting the fix makes that guard fail (verified by doing exactly that).
+- Found by using the panel, which is the same lesson as the rest of this feature: the source looked right, the browser said otherwise.
+- 24 suites / 397 cases.
+
 ## 0.23.0
 
 - **Feishu can be configured from the Web UI panel, and saving takes effect immediately.** Until now the only ways in

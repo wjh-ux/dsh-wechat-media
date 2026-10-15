@@ -486,5 +486,13 @@ await test("the panel can configure Feishu without setx and without a restart", 
   assert.match(clientSource, /if \(mode === "filled" && \(value === undefined \|\| value === null \|\| String\(value\)\.trim\(\) === ""\)\) continue;/, "and never sends a blank field by accident");
   assert.match(clientSource, /feishuClear:/, "clearing is a deliberate, separate action");
 });
+await test("the panel's Feishu checkbox cannot get stuck on", () => {
+  // `Boolean(draft ?? x === "true")` parses as `draft ?? (x === "true")`, so a draft of "false" - a non-empty
+  // string - rendered as checked, and the box could only be cleared by reloading the page. The comparison has
+  // to sit outside the nullish coalescing.
+  const client = readFileSync(join(root, "client.js"), "utf8");
+  assert.doesNotMatch(client, /Boolean\(feishuDraft\.feishuLongConnection/, "no truthiness of a draft string");
+  assert.match(client, /\(feishuDraft\.feishuLongConnection \?\? \(snapshot\?\.feishu\?\.longConnectionWanted !== false \? "true" : "false"\)\) === "true"/, "the comparison is outside the ??");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

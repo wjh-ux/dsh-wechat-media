@@ -1016,7 +1016,7 @@ window.__ModuleLoader__.load({
                 key: "c",
                 type: "checkbox",
                 disabled: busy,
-                checked: Boolean(feishuDraft.feishuLongConnection ?? (snapshot?.feishu?.longConnectionWanted !== false ? "true" : "false") === "true"),
+                checked: (feishuDraft.feishuLongConnection ?? (snapshot?.feishu?.longConnectionWanted !== false ? "true" : "false")) === "true",
                 onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuLongConnection: event.target.checked ? "true" : "false" })),
               }),
               ` ${t("feishuLong", "Receive over the long connection (no public URL needed)")}`,
