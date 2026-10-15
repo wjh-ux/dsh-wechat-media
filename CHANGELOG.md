@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.23.4
+
+- **`/state` reported the Feishu frame counters from connect time, so a working connection looked dead.** The status
+  object was cached and only rewritten when the connection *changed*; the counters inside it change with every frame.
+  `feishuState()` now re-reads the live snapshot - **but only its counters**: copying the whole snapshot overwrote a
+  recorded `failed` with a stale `connecting` and hid the very failure that state exists to report. That regression
+  was caught by `test/feishu-inbound.test.mjs` before this shipped, and both directions are now asserted (the
+  counters are refreshed; the recorded failure state is not).
+- 24 suites / 399 cases.
+
 ## 0.23.3
 
 - **The first real Feishu frames were thrown away, and only production showed it.** Node's global `WebSocket` hands

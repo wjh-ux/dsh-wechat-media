@@ -2666,6 +2666,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   async function feishuState() {
     const settings = feishuConfig();
     const channels = feishuChannels(settings);
+    // Only the *counters* go stale between events; the connection state is written by the lifecycle paths, and
+    // copying a live snapshot wholesale would overwrite a recorded "failed" with a stale "connecting" - hiding
+    // exactly the failure this state exists to report. So the counters are refreshed, nothing else.
+    if (feishuWs && typeof feishuWs.status === "function") {
+      const liveStatus = feishuWs.status();
+      feishuWsStatus = { ...feishuWsStatus, stats: liveStatus?.stats ?? feishuWsStatus.stats };
+    }
     return {
       configured: channels.app || channels.webhook,
       app: channels.app,

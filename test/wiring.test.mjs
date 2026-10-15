@@ -513,5 +513,12 @@ await test("the Feishu panel shows what is saved, and says what a Save did", () 
   assert.match(client, /feishuUnsaved/, "an unsaved draft is flagged");
   assert.match(client, /feishuNotice\.text/, "and the notice is rendered in the block");
 });
+await test("the Feishu state refreshes the live connection counters", () => {
+  // The cached status was only written when the connection changed, so /state reported the frame counters from
+  // connect time - zeros - while events were arriving. Reading the live snapshot must happen where /state is built.
+  assert.match(host, /if \(feishuWs && typeof feishuWs\.status === "function"\) \{\s*\n\s*const liveStatus = feishuWs\.status\(\);/, "the state builder re-reads the connection");
+  assert.match(host, /async function feishuState\(\) \{[\s\S]{0,1200}?feishuWs\.status\(\)/, "and does it inside feishuState");
+  assert.match(host, /stats: liveStatus\?\.stats \?\? feishuWsStatus\.stats/, "refreshing the counters only - never the recorded failure state");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
