@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.23.10
+## 0.23.11
+
+- **One of the fourteen call sites still had no token, so `feishu_doc_create` failed while its siblings worked.**
+  The fix in 0.23.10 covered thirteen of them; the append inside the create tool used a different target variable and
+  was missed. Found the same way as the first one - by calling the tools, not the helpers: `feishu_doc_read`,
+  `feishu_sheet_read` and `feishu_bitable_write` all worked, and create answered
+  "appending to a document needs a tenant_access_token".
+- The guard for this is now an exact count (14) rather than a floor, and it is falsified: removing that one token
+  makes both this guard and the create test fail.
+- 24 suites / 419 cases.
 
 - **The nine document tools did not fetch a Feishu token, so every one of them failed.** They passed no `token` to the
   helpers, which correctly refuse to guess one: the first real call answered "reading a document needs a

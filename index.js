@@ -3779,7 +3779,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const created = await feishuCreateDoc({ token: await feishuToken(), title, folderToken: args?.folderToken, tenantHost: feishuConfig().tenantHost });
             // The body is written through the append endpoint, whose shape was settled against the live API
             // (block_type 2 + text_run, parent block = the document id) and proven by reading the document back.
-            const written = await feishuAppendText({ documentId: created.documentId, text });
+            const written = await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text });
             noteRoute("/feishu-doc", { action: "create", documentId: created.documentId, blocks: written.blocks });
             if (!created.url) {
               noteRoute("/feishu-doc", { action: "create", documentId: created.documentId, url: "missing tenant host" });

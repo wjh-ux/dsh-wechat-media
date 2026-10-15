@@ -610,7 +610,7 @@ await test("the document tool creates, then really writes the body", () => {
   // must not fall back to the "pending" wording.
   assert.match(host, /^\s*feishuAppendText,$/m, "the append helper is imported");
   assert.match(host, /const feishuDocCreate = define\(\{/, "the tool exists");
-  assert.match(host, /await feishuAppendText\(\{ documentId: created\.documentId, text \}\)/, "and writes the body through it");
+  assert.match(host, /await feishuAppendText\(\{ token: await feishuToken\(\), documentId: created\.documentId, text \}\)/, "and writes the body through it, with its own token");
   assert.doesNotMatch(host, /待"追加"能力上线/, "no placeholder wording is left behind");
 });
 await test("a reader-facing Feishu link never comes from the API host", () => {
@@ -643,14 +643,11 @@ await test("every new Feishu document tool reports failure instead of swallowing
   assert.match(host, /catch \(error\) \{\s*\n\s*noteRoute\("\/feishu-doc", \{ action: "bitable-read", error/, "a failed read is reported with its reason");
 });
 await test("every document tool fetches its own token", () => {
-  // Found by calling the tools themselves, as shipped: all nine passed no token to the helpers and failed with
-  // "needs a tenant_access_token". The helpers had always been tested with an explicit token, so only the tool
-  // path could show it - which is why the tools are exercised, not just the helpers.
-  const calls = [...host.matchAll(/await (feishu(?:CreateDoc|ReadDoc|AppendText|WikiResolve|SheetCreate|SheetRead|SheetWrite|BitableCreate|BitableTables|BitableWrite|BitableRead))\(/g)];
-  assert.ok(calls.length >= 11, `the document helpers are called from the host (${calls.length} call sites)`);
-  // A floor rather than an exact equality: the count of call sites depends on how the regex groups them, and a
-  // guard that fails because of arithmetic is a guard that gets deleted. What matters is that the tools fetch tokens.
-  assert.ok((host.match(/token: await feishuToken\(\)/g) ?? []).length >= 11, "each call site fetches its own token");
+  // Shipped without this once: 13 of 14 helper call sites were fixed and the fourteenth failed in production
+  // ("appending to a document needs a tenant_access_token"). Asserted as an exact count so losing one is visible.
+  const tokens = (host.match(/token: await feishuToken\(\)/g) ?? []).length;
+  assert.equal(tokens, 14, `every document helper call is handed a token (found ${tokens})`);
 });
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
