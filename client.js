@@ -336,6 +336,10 @@ window.__ModuleLoader__.load({
       const [feishuDraft, setFeishuDraft] = react.useState({});
       // The block reports its own outcome: a page-level banner is easy to miss, and "did my Save do
       // anything?" is exactly the question this panel exists to answer.
+      // The document/spreadsheet operations area keeps its own scratch state: none of it is a preference, so it must
+      // not ride along with the settings draft that Save submits.
+      const [feishuOps, setFeishuOps] = react.useState({ action: "create", link: "", range: "", text: "", result: "", ok: null });
+      const [feishuOpsBusy, setFeishuOpsBusy] = react.useState(false);
       const [feishuNotice, setFeishuNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
@@ -1073,6 +1077,91 @@ window.__ModuleLoader__.load({
                 }, "clear"),
               }, t("feishuClear", "Clear saved Feishu settings")),
             ]),
+            // Documents, spreadsheets and bitables, driven from here. The panel holds no credentials, so every action
+            // runs on the host through the same helpers the tools use; one dropdown keeps all of them reachable
+            // without a wall of buttons, and the result line shows the outcome or the reason it failed.
+            h("div", { key: "docinputs", className: "dswxRow" }, [
+              h("input", {
+                key: "title",
+                className: "dswxInput",
+                placeholder: t("feishuOpsTitle", "文档标题（写成文档时用）"),
+                value: feishuOps.title ?? "",
+                disabled: feishuOpsBusy,
+                onChange: (event) => setFeishuOps((ops) => ({ ...ops, title: event.target.value })),
+              }),
+              h("input", {
+                key: "link",
+                className: "dswxInput",
+                placeholder: t("feishuOpsLink", "文档/表格/多维表格链接或 id"),
+                value: feishuOps.link,
+                disabled: feishuOpsBusy,
+                onChange: (event) => setFeishuOps((ops) => ({ ...ops, link: event.target.value })),
+              }),
+              h("input", {
+                key: "range",
+                className: "dswxInput",
+                placeholder: t("feishuOpsRange", "范围，如 A1:C5（表格用）"),
+                value: feishuOps.range,
+                disabled: feishuOpsBusy,
+                onChange: (event) => setFeishuOps((ops) => ({ ...ops, range: event.target.value })),
+              }),
+            ]),
+            h("div", { key: "docops", className: "dswxRow" }, [
+              h("select", {
+                key: "action",
+                className: "dswxInput",
+                value: feishuOps.action,
+                disabled: feishuOpsBusy,
+                onChange: (event) => setFeishuOps((ops) => ({ ...ops, action: event.target.value })),
+              }, [
+                h("option", { key: "create", value: "create" }, "写成飞书文档"),
+                h("option", { key: "read", value: "read" }, "读文档"),
+                h("option", { key: "append", value: "append" }, "追加到文档"),
+                h("option", { key: "sheet-read", value: "sheet-read" }, "读表格范围"),
+                h("option", { key: "sheet-write", value: "sheet-write" }, "写表格范围"),
+                h("option", { key: "bitable-read", value: "bitable-read" }, "读多维表格"),
+                h("option", { key: "bitable-write", value: "bitable-write" }, "写多维表格"),
+              ]),
+              h("button", {
+                key: "run",
+                type: "button",
+                className: "dswxBtn dswxPrimary",
+                disabled: feishuOpsBusy,
+                onClick: async () => {
+                  setFeishuOpsBusy(true);
+                  try {
+                    const out = await api("/feishu-doc", {
+                      method: "POST",
+                      body: { action: feishuOps.action, link: feishuOps.link, range: feishuOps.range, text: feishuOps.text, title: feishuOps.title ?? "" },
+                    });
+                    const summary = !out?.ok
+                      ? `失败：${out?.error ?? "未知错误"}`
+                      : out.url
+                        ? `已创建 → ${out.url}（写入 ${out.blocks} 段）`
+                        : out.action === "create"
+                          ? `已创建（id ${out.documentId}）✓ 写入 ${out.blocks} 段 ✓ ${out.note ?? ""}`
+                          : JSON.stringify(out).slice(0, 600);
+                    setFeishuOps((ops) => ({ ...ops, ok: Boolean(out?.ok), result: summary }));
+                  } catch (problem) {
+                    setFeishuOps((ops) => ({ ...ops, ok: false, result: `请求失败：${String(problem?.message ?? problem)}` }));
+                  } finally {
+                    setFeishuOpsBusy(false);
+                  }
+                },
+              }, t("feishuOpsRun", "执行")),
+            ]),
+            h("textarea", {
+              key: "text",
+              className: "dswxInput",
+              rows: 4,
+              placeholder: t("feishuOpsText", "正文 / 行 JSON（表格写 [[\"a\",\"b\"]]，多维表格写 {\"字段\":\"值\"}）"),
+              value: feishuOps.text,
+              disabled: feishuOpsBusy,
+              onChange: (event) => setFeishuOps((ops) => ({ ...ops, text: event.target.value })),
+            }),
+            feishuOps.result
+              ? h("p", { key: "opsresult", className: "dswxMsg" }, feishuOps.result)
+              : null,
             feishuNotice
               ? h("p", { key: "notice", className: "dswxMsg" }, feishuNotice.text)
               : null,

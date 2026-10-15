@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.23.14
+## 0.23.15
+
+- **The Web UI can drive Feishu documents, spreadsheets and bitables.** The Feishu block now has an operations area:
+  title, link, range and body fields, a dropdown covering all seven actions (`create`, `read`, `append`,
+  `sheet-read`, `sheet-write`, `bitable-read`, `bitable-write`), a run button, and a result line.
+- Creating a document shows the link when a tenant host is configured, and otherwise shows the id plus the reason
+  there is no link - the same rule the tools follow, so the panel never hands over a link that opens a generic page.
+- Every failure is printed with its reason; the area keeps its own state so nothing in it rides along with Save.
+- 24 suites / 420 cases.
 
 - **A host route for the Web UI's document actions**: `POST /dsh-wechat-media/feishu-doc` with
   `action=create|read|append|sheet-read|sheet-write|bitable-read|bitable-write`. The panel holds no credentials, so
