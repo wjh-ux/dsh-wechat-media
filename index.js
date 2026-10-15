@@ -4256,6 +4256,52 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           };
           noteRoute("/feishu-doc", { action: `panel-${action}` });
           try {
+            // Export the conversation itself, without assuming any host-internal API: the transcript is the file the
+            // host already writes under $DSH_HOME/sessions, and this module reads it exactly the way the session's own
+            // checks did - zstd blocks, newest directory last. The modules are imported here rather than at the top so
+            // this stays one self-contained change.
+            if (action === "create-from-session") {
+              const { readdir, readFile, stat } = await import("node:fs/promises");
+              const { zstdDecompressSync } = await import("node:zlib");
+              const { join: joinPath } = await import("node:path");
+              const settings = feishuConfig();
+              const limit = Math.max(1, Math.min(500, Number(body.limit) || 40));
+              const title = String(body.title ?? "").trim() || `会话导出 ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+              const root = joinPath(dshHome, "sessions");
+              let newest = null;
+              for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+                if (!entry.isDirectory()) continue;
+                const candidate = joinPath(root, entry.name, "session.v4.jsonl.zstd");
+                const info = await stat(candidate).catch(() => null);
+                if (info && (!newest || info.mtimeMs > newest.mtimeMs)) newest = { path: candidate, mtimeMs: info.mtimeMs, name: entry.name };
+              }
+              if (!newest) return json(res, 200, { ok: false, error: `没有在 ${root} 找到会话记录（session.v4.jsonl.zstd）` });
+              const raw = await readFile(newest.path);
+              const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+              const starts = [];
+              for (let at = raw.indexOf(magic); at !== -1; at = raw.indexOf(magic, at + 1)) starts.push(at);
+              let text = "";
+              for (let i = 0; i < starts.length; i++) {
+                const stop = i + 1 < starts.length ? starts[i + 1] : raw.length;
+                try { text += zstdDecompressSync(raw.subarray(starts[i], stop)).toString("utf8"); } catch { /* a bad block must not lose the rest */ }
+              }
+              const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0).slice(-limit);
+              if (!lines.length) return json(res, 200, { ok: false, error: "会话记录解压后是空的" });
+              const created = await feishuCreateDoc({ token: await feishuToken(), title, tenantHost: settings.tenantHost });
+              const written = await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text: lines.join("\n") });
+              noteRoute("/feishu-doc", { action: "panel-create-from-session", session: newest.name, lines: lines.length });
+              return json(res, 200, {
+                ok: true,
+                action,
+                session: newest.name,
+                lines: lines.length,
+                documentId: created.documentId,
+                title: created.title,
+                url: created.url || null,
+                blocks: written.blocks,
+                note: created.url ? "" : "没有配置 tenantHost，因此不返回链接（用 API 主机拼出来的链接打不开）",
+              });
+            }
             if (action === "create") {
               const settings = feishuConfig();
               const title = String(body.title ?? "").trim() || "未命名文档";

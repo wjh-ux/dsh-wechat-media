@@ -1121,6 +1121,7 @@ window.__ModuleLoader__.load({
                 h("option", { key: "sheet-write", value: "sheet-write" }, "写表格范围"),
                 h("option", { key: "bitable-read", value: "bitable-read" }, "读多维表格"),
                 h("option", { key: "bitable-write", value: "bitable-write" }, "写多维表格"),
+                h("option", { key: "session", value: "create-from-session" }, "导出当前会话（读宿主会话记录写成文档）"),
               ]),
               h("button", {
                 key: "run",

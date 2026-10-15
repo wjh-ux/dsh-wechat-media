@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.23.16
+## 0.23.17
+
+- **The panel can export the conversation.** A new action, `create-from-session`, reads the transcript the host already
+  writes under `$DSH_HOME/sessions/<newest>/session.v4.jsonl.zstd`, takes the last N lines (default 40, capped at 500)
+  and writes them into a new document - the same file-reading approach this work's own checks used, so no host-internal
+  API is assumed. The modules it needs are imported inside the branch, keeping the change self-contained.
+- The panel's action dropdown gained "导出当前会话（读宿主会话记录写成文档）".
+- A missing `tenantHost` is still reported rather than turned into a link built from the API host.
+- 24 suites / 420 cases.
 
 - **The panel's spreadsheet and bitable actions failed with "feishuSheetTokenFrom is not defined".** The parsers live
   inside the tools' registration callback, and the route is registered in a different callback, so it could not see
