@@ -141,7 +141,7 @@ await test("no reply path silently truncates to its first part", () => {
   // long answer *must* be split and sent in pieces. Three call sites used to send
   // `splitForStream(text)[0]`: the tail disappeared without a trace.
   assert.doesNotMatch(host, /splitForStream\([^)]*\)\[0\]/, "a WeCom reply must not be cut to its first part");
-  assert.equal([...host.matchAll(/replyWecomInParts\(/g)].length, 5, "the helper plus its four call sites: the command answer and the three turn outcomes");
+  assert.equal([...host.matchAll(/replyWecomInParts\(/g)].length, 6, "the helper plus its five call sites: the command answer, the three turn outcomes and the retry notice");
   assert.doesNotMatch(host, /outcome\.error\}`\.slice\(0, MAX_TEXT_CHARS\)/, "the WeChat error notice is chunked, not sliced");
   assert.match(host, /for \(const chunk of chunkText\(`❌ agent 出错：\$\{outcome\.error\}`\)\)/);
 });
@@ -345,6 +345,24 @@ await test("interjection decisions are recorded, not just counted", () => {
   assert.match(commandsSource, /最近一次判定：/, "and renders it");
   assert.match(host, /export function interjectReason/, "and the reason is a named function, so it can be asserted");
   assert.match(host, /no turn was running for this chat at that moment/, "the most likely reason is spelled out");
+});
+await test("the retry switch is reachable from the command, the host and the Web UI", () => {
+  // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
+  // host reads before each turn, and a checkbox in the Web UI panel.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(commandsSource, /name: "retry"/, "the command exists");
+  assert.match(commandsSource, /usage: "\/retry \[on\|off\]"/, "with a usage line");
+  assert.match(host, /command\.name === "retry"/, "and the host handles it");
+  assert.match(host, /args\.retry === "true"/, "the panel route sets the same preference");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(stateSource, /retry: true,/, "the default is on");  // the preference lives in state.js, not the host
+  assert.match(host, /shouldRetryTurn\(\{ error: outcome\.error, attempt: 1/, "both paths consult the policy");
+  assert.match(host, /counters\.retried \+= 1/, "a retry is counted");
+  assert.match(host, /counters\.retryFailed \+= 1/, "and so is a failed retry");
+  assert.match(host, /正在重试一次/, "the chat is told what is happening");
+  assert.match(clientSource, /async function setRetry\(/, "the Web UI can set it");
+  assert.match(clientSource, /snapshot\?\.prefs\?\.retry !== false/, "and shows the current value");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

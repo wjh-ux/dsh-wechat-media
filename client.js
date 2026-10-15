@@ -151,6 +151,7 @@ window.__ModuleLoader__.load({
           friendOnlyOn: "Friends only is on: group messages are ignored silently",
           groupsSkipped: "skipped",
           interject: "Let a new message interject while it is still answering",
+  retry: "Retry once when a turn fails in the transport",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
           formatLabel: "Text",
@@ -238,6 +239,7 @@ window.__ModuleLoader__.load({
           friendOnlyOn: "只处理好友私聊已开启：群消息被静默忽略",
           groupsSkipped: "已跳过",
           interject: "允许插话（正在回复时新消息加入当前回合）",
+  retry: "失败自动重试（传输类错误重试一次）",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
           formatLabel: "文本处理",
@@ -525,6 +527,22 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * The retry switch: whether a turn that fails with a transport error (a timeout, a reset
+         * connection, a rate limit, a 5xx) is attempted once more. Same preference as `/retry`.
+         */
+        async function setRetry(retry) {
+          setBusy(true);
+          try {
+            await api(`/prefs?retry=${retry ? "true" : "false"}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
          * Token ledger controls. The window length (1..30 days) and a manual reset live in
          * the host's ledger file, which `/tokens` also drives - one source of truth.
          */
@@ -664,6 +682,16 @@ window.__ModuleLoader__.load({
                 }),
                 " " + t("interject", "Let a new message interject while it is still answering"),
               ]),
+            h("label", { key: "r", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: snapshot?.prefs?.retry !== false,
+                disabled: busy,
+                onChange: (event) => setRetry(event.target.checked),
+              }),
+              " " + t("retry", "Retry once when a turn fails in the transport"),
+            ]),
             ]),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
             // latter - personal WeChat has no way to edit a message that was already sent - and the

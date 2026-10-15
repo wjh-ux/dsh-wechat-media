@@ -242,6 +242,9 @@ export class WechatState {
       // into the running turn instead of queueing its own. Off by default - queueing is what
       // every existing chat already does, and `steer` changes what the model sees mid-turn.
       interject: false,
+  // One retry after a transient model-transport failure: the turn produced no answer, the cause is usually a
+  // hiccup, and the alternative is the person getting nothing at all. The Web UI and /retry toggle it.
+  retry: true,
       // How a reply leaves the bridge: "whole" sends the finished answer, "stream" shows it while
       // it is written. Only WeCom can do that (its `stream` message is incremental); personal
       // WeChat has no way to edit a message that was already sent.

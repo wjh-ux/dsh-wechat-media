@@ -59,6 +59,11 @@ export const COMMANDS = [
     aliases: ["插话"],
     usage: "/interject [on|off]",
     summary: "插话开关：agent 正在回复时新消息插进当前回合（关=排队成下一轮）；不带参数则切换",
+  },  {
+    name: "retry",
+    aliases: ["重试"],
+    usage: "/retry [on|off]",
+    summary: "失败自动重试：回合因传输类错误（超时/连接重置/限流/5xx）失败时自动重试一次；不带参数则切换",
   },
   {
     name: "tokens",
@@ -194,6 +199,7 @@ export function statusText({
   friendOnly = false,
   interject = false,
   lastInterjection = null,
+  retry = true,
   authLine,
   deliveryLine,
   formatLine,
@@ -226,11 +232,12 @@ export function statusText({
   lines.push(
     `插话：${interject ? "开" : "关"}` + (interject ? `（已插话 ${counters.interjected ?? 0} 次）` : "（/interject on 可开）"),
   );
+  lines.push(`失败自动重试：${retry ? "开" : "关"}（传输类错误自动重试一次）`);
   if (lastInterjection) lines.push(`  最近一次判定：${lastInterjection.decision === "steer" ? "已插进当前回合" : "排队"}（${lastInterjection.reason}）`);
   if (authLine) lines.push(authLine);
   if (deliveryLine) lines.push(deliveryLine);
   if (formatLine) lines.push(formatLine);
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /auth · /delivery · /format · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /retry · /auth · /delivery · /format · /tokens");
   return lines.join("\n");
 }

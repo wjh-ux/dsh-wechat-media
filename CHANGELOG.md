@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.0
+
+- **A turn that dies in the transport is retried once, and you can switch that off.** Those failures are real here -
+  seven of them are recorded in this project's own session log, each one ending with `DeepSeek Messages transport
+  failed` and leaving the chat with nothing but an error line. `shouldRetryTurn()` now decides: exactly **one**
+  retry, and only for a cause that looks transient (`TRANSPORT`, `ECONNRESET`/`EPIPE`/`ETIMEDOUT`, `fetch
+  failed`, `socket hang up`, timeouts, `429`/rate limits, `502`/`503`/`504`, overload). A deterministic
+  failure - a rejected request, a bad model id, a context overflow - is **not** retried, because a second call would
+  fail the same way and hide the cause.
+- The retry is visible rather than silent: the chat is told (`⚠️ 上一轮失败：… 正在重试一次…`), `counters.retried`
+  counts the attempts and `counters.retryFailed` the ones that failed again, and a **fresh** user message is created
+  for the retry (handing the same object back could be taken as already seen).
+- **The switch is reachable three ways**, and a guard test asserts all three: `/retry [on|off]` in a chat (aliases
+  `/重试`), the checkbox in the Web UI panel (`/prefs?retry=…`), and the preference the host reads before each turn.
+  Default **on**.
+- `test/retry.test.mjs` unit-tests the policy itself - the transient list, the deterministic list, the one-attempt
+  ceiling, the switch, and the safe defaults. 292 tests across 20 suites.
+- While building this, two edits landed in the wrong place (a command handler at the first `return true;` in the file,
+  and a helper outside module scope). The syntax checker and the context-printing steps caught both before publishing,
+  which is the practice this project adopted after three earlier "changed, reported, but not actually reachable"
+  misses.
+
 ## 0.19.6
 
 - **v0.19.5's `/state` claim was not true, and this release makes it true.** The field it added was passed to

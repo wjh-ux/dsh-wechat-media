@@ -249,6 +249,23 @@ export function approvalPolicyFor(level) {
  * @param {{ enabled?: boolean, turnInFlight?: boolean, agentAvailable?: boolean }} [input]
  * @returns {"steer" | "queue"}
  */
+/**
+ * Is a failed turn worth one more attempt?
+ *
+ * Exactly one retry, and only for a cause that looks transient - the transport, a socket, a timeout, a rate
+ * limit, a 5xx. A deterministic failure (a rejected request, a bad model id) would fail again, and spending a
+ * second call on it helps nobody. Pure, so the policy can be asserted rather than hoped for.
+ *
+ * @param {{ error?: unknown, attempt?: number, enabled?: boolean }} [input]
+ * @returns {boolean}
+ */
+export function shouldRetryTurn({ error = "", attempt = 1, enabled = true } = {}) {
+  if (!enabled) return false;
+  if (attempt >= 2) return false;
+  const text = String(error ?? "");
+  return /TRANSPORT|transport|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|fetch failed|timed ?out|429|rate.?limit|50[234]|overloaded/i.test(text);
+}
+
 export function interjectDecision({ enabled = false, turnInFlight = false, agentAvailable = false } = {}) {
   if (!enabled || !turnInFlight || !agentAvailable) return "queue";
   return "steer";
@@ -270,6 +287,7 @@ export function interjectReason({ enabled = false, turnInFlight = false, agentAv
   if (!agentAvailable) return "this harness exposes no agent.steer";
   if (!turnInFlight) return "no turn was running for this chat at that moment";
   return "queued";
+
 }
 
 /**
@@ -1208,6 +1226,7 @@ export function apply(ctx, config = {}) {
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
+        retry: (await state.loadPrefs()).retry !== false,
         authLine: await authStatusLine(),
         deliveryLine: await deliveryStatusLine(),
         formatLine: await formatStatusLine(),
@@ -1333,6 +1352,18 @@ export function apply(ctx, config = {}) {
         ? "💬 插话功能 → 开。agent 还在回复时你发的消息会**立即插进当前回合**（它下一步就能看到），而不是排队等下一轮。关掉就在私聊里发 /interject off 或取消卡片上的勾选。"
         : "💬 插话功能 → 关。正在回复时发来的消息会**排队成下一轮**，等这轮说完再处理。");
       noteRoute("/command", { command: "interject", value: next, chatId });
+      return true;
+    }
+
+    if (command.name === "retry") {
+      const wanted = parseSwitch(command.args);
+      const current = (await state.loadPrefs()).retry !== false;
+      const next = wanted ?? !current;
+      await state.savePrefs({ retry: next });
+      await reply(next
+        ? "🔁 失败自动重试 → 开。回合因为**传输类错误**（超时、连接被重置、限流、5xx）失败时，会自动重试**一次**，并在聊天里说明；确定性错误（请求被拒、模型不可用）不会重试，避免白花 token。"
+        : "🔁 失败自动重试 → 关。回合失败时直接告诉你错误，不再自动重试。");
+      noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
 
@@ -1621,7 +1652,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0, retried: 0, retryFailed: 0 };
 
 /**
  * Every interjection decision, kept for later inspection.
@@ -1942,9 +1973,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const plain = prefsForTurn.format !== "raw";
     const streamer = delivery === "stream" ? wecomStreamer(frame, plain) : undefined;
     activeStreamer = streamer;
-    const waiting = collectors.wait(sessionId, message2?.id);
-    await agent.followup(message2);
-    const outcome = await waiting;
+    let outcome = await (async () => {
+      const waiting = collectors.wait(sessionId, message2?.id);
+      await agent.followup(message2);
+      return waiting;
+    })();
+    // A turn that dies in the transport leaves the person with nothing at all. One retry fixes the common
+    // case; shouldRetryTurn keeps it to one, and only for a cause that looks transient.
+    if (outcome.error && shouldRetryTurn({ error: outcome.error, attempt: 1, enabled: prefsForTurn.retry !== false })) {
+      counters.retried += 1;
+      ctx.logger?.warn?.("[dsh-wechat-media] turn failed (%s); retrying once", outcome.error);
+      await replyWecomInParts(frame, `⚠️ 上一轮失败：${outcome.error}\n正在重试一次…`, "stream-retry", undefined, chatId);
+      // A fresh user message: handing the same object back could be taken as already seen.
+      const retryMessage = await userMessage(prompt);
+      const retryWaiting = collectors.wait(sessionId, retryMessage?.id);
+      await agent.followup(retryMessage);
+      outcome = await retryWaiting;
+      if (outcome.error) counters.retryFailed += 1;
+    }
     activeStreamer = undefined;
     if (streamer) ctx.logger?.info?.("[dsh-wechat-media] streamed %d chunk(s) to %s before the final answer", streamer.chunks(), chatId);
     // Never leave the chat without an answer: mirror what the personal-WeChat path
@@ -2290,9 +2336,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         ctx.logger?.warn?.("[dsh-wechat-media] steering failed, queueing instead: %s", error?.message ?? error);
       }
     }
-    const waiting = collectors.wait(sessionId, message2?.id);
-    agent.followup(message2);
-    const outcome = await waiting;
+    let outcome = await (async () => {
+      const waiting = collectors.wait(sessionId, message2?.id);
+      agent.followup(message2);
+      return waiting;
+    })();
+    // Same rule as the WeCom path: one retry, transient causes only, and never a silent second failure.
+    if (outcome.error && shouldRetryTurn({ error: outcome.error, attempt: 1, enabled: (await state.loadPrefs()).retry !== false })) {
+      counters.retried += 1;
+      ctx.logger?.warn?.("[dsh-wechat-media] turn failed (%s); retrying once", outcome.error);
+      for (const chunk of chunkText(`⚠️ 上一轮失败：${outcome.error}\n正在重试一次…`)) await sendText(account, chatId, chunk);
+      const retryMessage = await userMessage(prompt);
+      const retryWaiting = collectors.wait(sessionId, retryMessage?.id);
+      agent.followup(retryMessage);
+      outcome = await retryWaiting;
+      if (outcome.error) counters.retryFailed += 1;
+    }
 
     if (outcome.error) {
       // Chunked and logged rather than sliced-and-swallowed: a long error is still an
@@ -3226,6 +3285,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             await state.savePrefs({ interject: args.interject === "true" });
             note = `插话功能 → ${args.interject === "true" ? "开（正在回复时新消息插进当前回合）" : "关（新消息排队成下一轮）"}`;
             noteRoute("/panel", { action: "interject", value: args.interject });
+          } else if (args.retry) {
+            await state.savePrefs({ retry: args.retry === "true" });
+            note = `失败自动重试 → ${args.retry === "true" ? "开（传输类错误重试一次）" : "关"}`;
+            noteRoute("/panel", { action: "retry", value: args.retry });
           } else if (args.cancel) {
             const chatId = chatFallback();
             const cancelled = chatId ? approvals.cancel(accountId, chatId) : false;
