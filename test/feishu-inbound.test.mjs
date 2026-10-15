@@ -481,8 +481,8 @@ await test("a group is skipped when only friends are answered, as on the other t
   }
 });
 
-await test("an attachment that cannot be fetched is still described", async () => {
-  const app = await boot();
+await test("an attachment that can be fetched becomes a path for the model", async () => {
+  const app = await boot({ resources: "bytes" });
   try {
     app.socket().deliver(messageEvent({ messageType: "image", content: { image_key: "img_v2_drive" } }));
     await settle();
@@ -492,13 +492,13 @@ await test("an attachment that cannot be fetched is still described", async () =
     assert.ok(produced, "the attachment event produced something to answer");
     assert.equal(app.queued.length, 1);
     const prompt = app.queued[0].content[0].text;
-    // Attachments are fetched now. This harness answers a resource request with JSON, so the download cannot
-    // succeed here - and that is the behaviour worth pinning: the attachment is still described, and the
-    // failure is stated. The success path is covered by feishu.test.mjs (whose stub returns real bytes) and
-    // by the live run against the real API.
-    assert.match(prompt, /img_v2_drive/, "the model is told what arrived");
-    assert.match(prompt, /飞书图片/, "including what kind of attachment it is");
-    assert.ok(/未保存|未能下载/.test(prompt), "and that it could not be fetched, rather than being left to guess");
+    // Attachments are fetched for real now, so this pins the success path: which endpoint was called, with which
+    // parameter, and that the model is handed a path on disk rather than a note saying it could not be saved. The
+    // failure path is pinned by the guards in wiring.test.mjs, which assert the honest note is still in the code.
+    const downloads = app.fetchCalls.filter((call) => call.url.includes("/resources/"));
+    assert.ok(downloads.length >= 1, "the resource endpoint is called");
+    assert.match(downloads[0].url, /type=image/, "with the resource type the live API requires");
+    assert.match(prompt, /wechat-inbox|\.jpg|\.png/, "the model is handed a path on disk, not just a note");
   } finally {
     await app.close();
   }

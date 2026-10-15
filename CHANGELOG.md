@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.23.18
+## 0.23.19
+
+- **The driver-level success path for Feishu attachments is tested, and passes.** When the download first shipped, its
+  one driver test pinned the *failure* path, because the tools had no token and a success could never happen. With that
+  fixed, the test now boots the harness with `resources: "bytes"`, asserts the resource endpoint was called with
+  `type=image`, and asserts the prompt hands the model a path on disk. It ran 5 times without a flake.
+- Falsified: pointing the stub back at JSON makes it fail. The failure path stays pinned by the guards in
+  `wiring.test.mjs`, which assert the honest note is still in the code.
+- 24 suites / 420 cases.
 
 - **The session export could not find the transcript.** It assumed `sessions/<one-level>/session.v4.jsonl.zstd`; the
   host nests it deeper, so the first real call answered "没有在 …\sessions 找到会话记录" against a directory that does
