@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.23.11
+## 0.23.12
+
+- **`/state` reports `feishu.tenantHost`.** Until now the setting existed in the config chain (saved → config →
+  `FEISHU_TENANT_HOST`) but was invisible from the outside, so the Web UI could not show the saved value and a reload
+  would have looked empty. This is the prerequisite for a panel field; the field itself is still outstanding.
+- The guard for this asserts what actually exists rather than what was intended: `/state` reports it, the preference
+  route accepts `feishuTenantHost`, and the chain is saved → config → env. A panel field was attempted in the same
+  round, broke `client.js` during insertion, and was rolled back - the guard says so instead of pretending.
+- 24 suites / 420 cases.
 
 - **One of the fourteen call sites still had no token, so `feishu_doc_create` failed while its siblings worked.**
   The fix in 0.23.10 covered thirteen of them; the append inside the create tool used a different target variable and

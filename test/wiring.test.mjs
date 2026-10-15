@@ -649,5 +649,13 @@ await test("every document tool fetches its own token", () => {
   assert.equal(tokens, 14, `every document helper call is handed a token (found ${tokens})`);
 });
 
+await test("the tenant host is configurable and reported", () => {
+  // The panel field is not in place yet (an insertion broke client.js and was rolled back), so what is asserted here
+  // is what actually exists: /state reports the setting, and the preference route accepts it. The panel field is
+  // recorded as outstanding rather than pretended.
+  assert.match(host, /tenantHost: settings\.tenantHost \|\| null/, "/state reports the tenant host");
+  assert.match(host, /feishuTenantHost: "tenantHost"/, "the preference route accepts it");
+  assert.match(host, /tenantHost: pick\(saved\.tenantHost, given\.tenantHost, env\.FEISHU_TENANT_HOST\)/, "saved, config or env");
+});;
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

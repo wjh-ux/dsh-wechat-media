@@ -2694,6 +2694,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       webhook: channels.webhook,
       partial: channels.partial,
       domain: feishuDomain(settings.domain),
+      tenantHost: settings.tenantHost || null,
       // Identifiers, not secrets: the app_id is needed to tell two apps apart, and the secret is
       // reported only as "set", never echoed.
       appId: settings.appId || null,
