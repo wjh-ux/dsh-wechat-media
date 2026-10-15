@@ -642,11 +642,20 @@ await test("every new Feishu document tool reports failure instead of swallowing
   }
   assert.match(host, /catch \(error\) \{\s*\n\s*noteRoute\("\/feishu-doc", \{ action: "bitable-read", error/, "a failed read is reported with its reason");
 });
-await test("every document tool fetches its own token", () => {
-  // Shipped without this once: 13 of 14 helper call sites were fixed and the fourteenth failed in production
-  // ("appending to a document needs a tenant_access_token"). Asserted as an exact count so losing one is visible.
-  const tokens = (host.match(/token: await feishuToken\(\)/g) ?? []).length;
-  assert.equal(tokens, 14, `every document helper call is handed a token (found ${tokens})`);
+await test("every Feishu document helper call fetches its own token", () => {
+  // Shipped without this twice: the tools passed no token at all, then one of fourteen call sites was missed while
+  // its siblings worked ("appending to a document needs a tenant_access_token"). A fixed count of 14 then went stale
+  // the moment the panel route added call sites, and a floor of 11 would have let a broken one through - so each
+  // helper is compared against itself instead of against a number.
+  const helpers = ["feishuCreateDoc", "feishuReadDoc", "feishuAppendText", "feishuWikiResolve", "feishuSheetCreate", "feishuSheetRead", "feishuSheetWrite", "feishuBitableCreate", "feishuBitableTables", "feishuBitableWrite", "feishuBitableRead"];
+  let seen = 0;
+  for (const helper of helpers) {
+    const all = (host.match(new RegExp(`await ${helper}\\(`, "g")) ?? []).length;
+    const withToken = (host.match(new RegExp(`await ${helper}\\(\\{\\s*token:`, "g")) ?? []).length;
+    assert.equal(withToken, all, `${helper}: ${all - withToken} of ${all} call sites skip the token`);
+    seen += all;
+  }
+  assert.ok(seen >= 20, `the helpers are called from both the tools and the panel route (${seen} call sites)`);
 });
 
 await test("the tenant host is configurable from the panel, the route and the environment", () => {

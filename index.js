@@ -4230,6 +4230,89 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   ctx.inject(["webServer"], (webCtx) => {
     const routes = [
       {
+        // One route for the Web UI's Feishu document actions. The panel has no token of its own - the host holds the
+        // credentials - so every action the panel offers is executed here through the same helpers the tools use.
+        kind: "exact",
+        path: "/dsh-wechat-media/feishu-doc",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "").trim();
+          const link = String(body.link ?? "").trim();
+          const text = String(body.text ?? "");
+          noteRoute("/feishu-doc", { action: `panel-${action}` });
+          try {
+            if (action === "create") {
+              const settings = feishuConfig();
+              const title = String(body.title ?? "").trim() || "未命名文档";
+              const created = await feishuCreateDoc({ token: await feishuToken(), title, tenantHost: settings.tenantHost });
+              const written = text.trim() ? await feishuAppendText({ token: await feishuToken(), documentId: created.documentId, text }) : { blocks: 0 };
+              return json(res, 200, {
+                ok: true,
+                action,
+                documentId: created.documentId,
+                title: created.title,
+                url: created.url || null,
+                blocks: written.blocks,
+                // Say why there is no link instead of handing over a link built from the API host, which opens a
+                // generic page rather than the document.
+                note: created.url ? "" : "没有配置 tenantHost，因此不返回链接（用 API 主机拼出来的链接打不开）",
+              });
+            }
+            if (action === "read") {
+              const ref = feishuDocRef(link);
+              if (!ref.kind) return json(res, 200, { ok: false, error: "没有识别出文档：请给 /docx/<id>、/wiki/<id> 链接或文档 id" });
+              let documentId = ref.id;
+              if (ref.kind === "wiki") documentId = (await feishuWikiResolve({ token: await feishuToken(), nodeToken: ref.id })).objToken;
+              const got = await feishuReadDoc({ token: await feishuToken(), documentId });
+              return json(res, 200, { ok: true, action, documentId: got.documentId, chars: got.content.length, content: got.content });
+            }
+            if (action === "append") {
+              const ref = feishuDocRef(link);
+              if (!ref.kind) return json(res, 200, { ok: false, error: "没有识别出文档 id" });
+              let documentId = ref.id;
+              if (ref.kind === "wiki") documentId = (await feishuWikiResolve({ token: await feishuToken(), nodeToken: ref.id })).objToken;
+              const written = await feishuAppendText({ token: await feishuToken(), documentId, text });
+              return json(res, 200, { ok: true, action, documentId, blocks: written.blocks, revision: written.revisionId });
+            }
+            if (action === "sheet-read" || action === "sheet-write") {
+              const spreadsheetToken = feishuSheetTokenFrom(link);
+              if (!spreadsheetToken) return json(res, 200, { ok: false, error: "没有识别出表格 token" });
+              const range = String(body.range ?? "").trim();
+              if (!range) return json(res, 200, { ok: false, error: "需要范围，例如 A1:C5" });
+              if (action === "sheet-read") {
+                const got = await feishuSheetRead({ token: await feishuToken(), spreadsheetToken, range });
+                return json(res, 200, { ok: true, action, range: got.range, rows: got.values.length, values: got.values });
+              }
+              let rows;
+              try { rows = JSON.parse(text); } catch { return json(res, 200, { ok: false, error: "内容不是合法 JSON 行数组，例如 [[\"a\",\"b\"]]" }); }
+              if (!Array.isArray(rows) || !rows.length) return json(res, 200, { ok: false, error: "内容必须是非空行数组" });
+              const wrote = await feishuSheetWrite({ token: await feishuToken(), spreadsheetToken, range, values: rows });
+              return json(res, 200, { ok: true, action, range: wrote.range, updatedCells: wrote.updatedCells, revision: wrote.revision });
+            }
+            if (action === "bitable-read" || action === "bitable-write") {
+              const appToken = feishuBitableTokenFrom(link);
+              if (!appToken) return json(res, 200, { ok: false, error: "没有识别出多维表格 app_token" });
+              const tableId = String(body.tableId ?? "").trim() || (await feishuBitableTables({ token: await feishuToken(), appToken })).tableId;
+              if (!tableId) return json(res, 200, { ok: false, error: "该多维表格没有可用的数据表" });
+              if (action === "bitable-read") {
+                const got = await feishuBitableRead({ token: await feishuToken(), appToken, tableId, recordId: body.recordId, pageSize: body.pageSize });
+                return json(res, 200, { ok: true, action, tableId, records: got.items.length, items: got.items });
+              }
+              let fields;
+              try { fields = JSON.parse(text); } catch { return json(res, 200, { ok: false, error: "字段不是合法 JSON 对象，例如 {\"文本\":\"hello\"}" }); }
+              if (!fields || typeof fields !== "object" || !Object.keys(fields).length) return json(res, 200, { ok: false, error: "字段必须是非空对象" });
+              const wrote = await feishuBitableWrite({ token: await feishuToken(), appToken, tableId, fields });
+              return json(res, 200, { ok: true, action, tableId, recordId: wrote.recordId, fields: wrote.fields });
+            }
+            return json(res, 200, { ok: false, error: `未知 action：${action || "(空)"}` });
+          } catch (error) {
+            return json(res, 200, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
         kind: "exact",
         path: "/dsh-wechat-media/state",
         handler: async (req, res) => {

@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.23.13
+## 0.23.14
+
+- **A host route for the Web UI's document actions**: `POST /dsh-wechat-media/feishu-doc` with
+  `action=create|read|append|sheet-read|sheet-write|bitable-read|bitable-write`. The panel holds no credentials, so
+  every action it will offer runs here, through the same helpers the tools use - no second implementation to drift.
+- The route reports a missing `tenantHost` instead of returning a link built from the API host, which opens a generic
+  page rather than the document.
+- The token guard was rebuilt: instead of a fixed count (which went stale the moment this route added call sites) each
+  helper is compared against itself, so a call site that skips the token fails with a precise message. Falsified by
+  removing one token from the route.
+- **Still outstanding:** the panel UI itself (the export button and the operations area). The route is usable from the
+  command line meanwhile.
+- 24 suites / 420 cases.
 
 - **The Web UI can set the tenant host.** A field in the Feishu block fills `feishuTenantHost`; Save submits it, and the
   value comes back from `/state` after a reload. This is what makes a created document return as a link you can open
