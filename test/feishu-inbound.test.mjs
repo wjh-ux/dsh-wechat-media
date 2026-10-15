@@ -247,6 +247,15 @@ async function boot({ feishu = { appId: "cli_drive", appSecret: "secret-drive", 
       await route.handler({ socket: { remoteAddress: "127.0.0.1" }, method: "GET", url: "/dsh-wechat-media/state" }, res);
       return JSON.parse(body);
     },
+    /** Call the /prefs route the way the Web UI panel does, and read the raw body back. */
+    async callPrefs(query) {
+      const route = routes.find((candidate) => candidate.path === "/dsh-wechat-media/prefs");
+      if (!route) throw new Error("the /prefs route was not registered");
+      let body = "";
+      const res = { status: 0, writeHead(status) { this.status = status; }, end(chunk) { body += String(chunk ?? ""); } };
+      await route.handler({ socket: { remoteAddress: "127.0.0.1" }, method: "GET", url: `/dsh-wechat-media/prefs?${query}` }, res);
+      return { status: res.status, body, json: body ? JSON.parse(body) : {} };
+    },
     async close() {
       for (const dispose of effects) {
         try {
@@ -525,5 +534,61 @@ await test("disposing the plugin closes the long connection", async () => {
   }
 });
 
+await test("Feishu is configured from the panel and works without a restart", async () => {
+  // v0.23.0 exists because the only ways in were the config file and environment variables - a `setx`
+  // plus a DSH restart just to try a bot. This drives the route the panel writes to.
+  const app = await boot({ feishu: {}, prefs: {} });
+  try {
+    assert.equal((await app.readState()).feishu.configured, false, "nothing is configured to begin with");
+
+    const saved = await app.callPrefs("feishuAppId=cli_panel&feishuAppSecret=panel-secret&feishuTo=oc_panel");
+    assert.equal(saved.status, 200);
+    assert.equal(saved.json.ok, true);
+    // The secret goes in and never comes back - not in the response, not in /state.
+    assert.doesNotMatch(saved.body, /panel-secret/, "the saved secret must not be echoed");
+    assert.equal(saved.json.feishu.secretSet, true);
+    assert.equal(saved.json.feishu.configured, true);
+    assert.deepEqual([...saved.json.feishu.savedFields].sort(), ["appId", "appSecret", "to"]);
+    assert.deepEqual([...saved.json.feishuChanged].sort(), ["feishuAppId", "feishuAppSecret", "feishuTo"]);
+
+    const after = await app.readState();
+    assert.equal(after.feishu.app, true, "the app channel is now usable");
+    assert.equal(after.feishu.appId, "cli_panel");
+    assert.equal(after.feishu.sources.appSecret, "saved", "and the panel is where it came from");
+    assert.doesNotMatch(JSON.stringify(after), /panel-secret/);
+    // Saving reconnects: the fake socket accepts the handshake, so it must actually be connected.
+    assert.equal(after.feishu.connection.state, "connected", "saving restarts the long connection");
+
+    // Clearing is deliberate (an empty value), and it must drop the connection rather than leave it
+    // running against credentials the user just removed.
+    const cleared = await app.callPrefs("feishuAppSecret=");
+    assert.equal(cleared.json.feishu.secretSet, false);
+    assert.equal((await app.readState()).feishu.configured, false);
+
+    // A domain that is neither feishu, lark nor a URL is refused instead of stored.
+    const refused = await app.callPrefs("feishuDomain=nonsense");
+    assert.equal(refused.status, 400);
+    assert.match(String(refused.json.error), /feishuDomain must be/);
+  } finally {
+    await app.close();
+  }
+});
+
+await test("a blank field never clears a saved secret", async () => {
+  // The panel's Save button sends only what was typed, and the route treats an empty *string* as a
+  // clear - so the two must not be confused. This pins the rule the UI depends on.
+  const app = await boot({ feishu: {}, prefs: {} });
+  try {
+    await app.callPrefs("feishuAppSecret=first-secret");
+    assert.equal((await app.readState()).feishu.secretSet, true);
+    // Saving something else entirely leaves the secret alone.
+    await app.callPrefs("feishuTo=oc_other");
+    const state = await app.readState();
+    assert.equal(state.feishu.secretSet, true, "an unrelated save must not drop the secret");
+    assert.deepEqual([...state.feishu.savedFields].sort(), ["appSecret", "to"]);
+  } finally {
+    await app.close();
+  }
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

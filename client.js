@@ -184,6 +184,21 @@ window.__ModuleLoader__.load({
           approvalHint: "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.",
           inboxLabel: "Inbound files are saved in",
           wecomLabel: "WeCom (企业微信)",
+  feishuLabel: "Feishu (飞书 / Lark)",
+  feishuAppId: "App ID (cli_…)",
+  feishuAppSecret: "App Secret (leave blank to keep the saved one)",
+  feishuWebhookUrl: "Custom webhook URL",
+  feishuWebhookSecret: "Webhook signing secret (optional)",
+  feishuDomainLabel: "Platform",
+  feishuTo: "Default receive id (chat_id / open_id)",
+  feishuLong: "Receive over the long connection (no public URL needed)",
+  feishuSave: "Save Feishu settings",
+  feishuClear: "Clear saved Feishu settings",
+  feishuSavedHere: "saved from this panel",
+  feishuFromConfig: "from the plugin config or the environment",
+  feishuConnection: "Long connection",
+  feishuNotConfigured: "Not configured yet",
+  feishuFormHint: "Saving takes effect immediately - no DSH restart, no setx.",
           notConfigured: "not configured",
           configure: "Configure",
           inboxPlaceholder: "absolute path, e.g. D:\\wechat-files",
@@ -272,6 +287,21 @@ window.__ModuleLoader__.load({
           approvalHint: "敏感操作会在微信里问你：回 1 批准一次，回 2 拒绝。",
           inboxLabel: "微信收到的文件保存在",
           wecomLabel: "企业微信",
+  feishuLabel: "飞书（飞书 / Lark）",
+  feishuAppId: "App ID（cli_…）",
+  feishuAppSecret: "App Secret（留空则保留已保存的值）",
+  feishuWebhookUrl: "自定义机器人 Webhook 地址",
+  feishuWebhookSecret: "Webhook 签名密钥（可选）",
+  feishuDomainLabel: "平台",
+  feishuTo: "默认接收方 id（chat_id / open_id）",
+  feishuLong: "用长连接接收（不需要公网地址）",
+  feishuSave: "保存飞书配置",
+  feishuClear: "清除面板保存的飞书配置",
+  feishuSavedHere: "由面板保存",
+  feishuFromConfig: "来自插件配置或环境变量",
+  feishuConnection: "长连接",
+  feishuNotConfigured: "尚未配置",
+  feishuFormHint: "保存后立即生效 —— 不需要重启 DSH，也不需要 setx。",
           notConfigured: "未配置",
           configure: "配置",
           inboxPlaceholder: "绝对路径，例如 D:\\wechat-files",
@@ -300,6 +330,10 @@ window.__ModuleLoader__.load({
         const [snapshot, setSnapshot] = react.useState(undefined);
         const [error, setError] = react.useState(undefined);
         const [busy, setBusy] = react.useState(false);
+      // The Feishu form is controlled: only the fields the person actually filled are sent, so a blank
+      // input can never clear a saved secret by accident (an empty value *does* clear when it is sent
+      // deliberately - that is what the Clear button does).
+      const [feishuDraft, setFeishuDraft] = react.useState({});
         const [code, setCode] = react.useState("");
 
         const t = (key, fallback) => {
@@ -524,6 +558,32 @@ window.__ModuleLoader__.load({
           } finally {
             setBusy(false);
           }
+        /**
+         * Save the Feishu settings from the panel.
+         *
+         * `mode: "filled"` sends only what the person typed (so blanks never wipe a stored secret);
+         * `mode: "clear"` sends explicit empties for exactly the named fields. Both go to `/prefs`,
+         * which is the route the panel writes to - the card route is handled by the host as well, so
+         * the two cannot disagree.
+         */
+        async function setFeishu(patch, mode = "filled") {
+          const params = new URLSearchParams();
+          for (const [field, value] of Object.entries(patch ?? {})) {
+            if (mode === "filled" && (value === undefined || value === null || String(value).trim() === "")) continue;
+            params.set(field, String(value ?? ""));
+          }
+          if ([...params.keys()].length === 0) return;
+          setBusy(true);
+          try {
+            await api(`/prefs?${params.toString()}`);
+            setFeishuDraft({});
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
         }
 
         /**
@@ -872,6 +932,123 @@ window.__ModuleLoader__.load({
               h("a", { key: "p", className: "dswxBtn", href: `${BASE}/pick-folder`, style: { cursor: "pointer" } }, t("browse", "Browse…")),
             ]),
             h("p", { key: "h", className: "dswxMeta" }, t("inboxFormHint", "Saving opens the control panel; use the back button there to return.")),
+          ]),
+          // Feishu: configurable from here, and saving reconnects at once. The whole point of this block
+          // is that trying a bot no longer costs a `setx` and a DSH restart.
+          h("div", { key: "feishu", className: "dswxHint" }, [
+            h("p", { key: "t" }, [
+              `${t("feishuLabel", "Feishu (飞书 / Lark)")}: `,
+              snapshot?.feishu?.configured
+                ? `${snapshot.feishu.app ? `app bot${snapshot.feishu.appId ? ` (${snapshot.feishu.appId})` : ""}` : ""}${snapshot.feishu.app && snapshot.feishu.webhook ? " + " : ""}${snapshot.feishu.webhook ? "webhook" : ""}`
+                : t("feishuNotConfigured", "Not configured yet"),
+              ` · ${t("feishuConnection", "Long connection")}: ${snapshot?.feishu?.connection?.state ?? "?"}`,
+              snapshot?.feishu?.connection?.lastError ? ` (${snapshot.feishu.connection.lastError})` : "",
+            ]),
+            snapshot?.feishu?.savedFields?.length
+              ? h("p", { key: "saved", className: "dswxMeta" }, `${t("feishuSavedHere", "saved from this panel")}: ${snapshot.feishu.savedFields.join(", ")}`)
+              : null,
+            h("p", { key: "counters", className: "dswxMeta" }, [
+              `events ${snapshot?.feishu?.counters?.events ?? 0} · answered ${snapshot?.feishu?.counters?.answered ?? 0}`,
+              ` · ignored ${snapshot?.feishu?.counters?.ignored ?? 0} · errors ${snapshot?.feishu?.counters?.errors ?? 0}`,
+            ]),
+            h("div", { key: "row1", className: "dswxRow" }, [
+              h("input", {
+                key: "id",
+                className: "dswxInput",
+                placeholder: t("feishuAppId", "App ID (cli_…)"),
+                value: feishuDraft.feishuAppId ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuAppId: event.target.value })),
+              }),
+              h("input", {
+                key: "sec",
+                className: "dswxInput",
+                type: "password",
+                autoComplete: "new-password",
+                placeholder: t("feishuAppSecret", "App Secret (leave blank to keep the saved one)"),
+                value: feishuDraft.feishuAppSecret ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuAppSecret: event.target.value })),
+              }),
+            ]),
+            h("div", { key: "row2", className: "dswxRow" }, [
+              h("input", {
+                key: "wh",
+                className: "dswxInput",
+                placeholder: t("feishuWebhookUrl", "Custom webhook URL"),
+                value: feishuDraft.feishuWebhookUrl ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuWebhookUrl: event.target.value })),
+              }),
+              h("input", {
+                key: "whs",
+                className: "dswxInput",
+                type: "password",
+                autoComplete: "new-password",
+                placeholder: t("feishuWebhookSecret", "Webhook signing secret (optional)"),
+                value: feishuDraft.feishuWebhookSecret ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuWebhookSecret: event.target.value })),
+              }),
+            ]),
+            h("div", { key: "row3", className: "dswxRow" }, [
+              h("select", {
+                key: "d",
+                className: "dswxInput",
+                value: feishuDraft.feishuDomain ?? (snapshot?.feishu?.domain === "https://open.larksuite.com" ? "lark" : "feishu"),
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuDomain: event.target.value })),
+              }, [
+                h("option", { key: "f", value: "feishu" }, "feishu (open.feishu.cn)"),
+                h("option", { key: "l", value: "lark" }, "lark (open.larksuite.com)"),
+              ]),
+              h("input", {
+                key: "to",
+                className: "dswxInput",
+                placeholder: t("feishuTo", "Default receive id (chat_id / open_id)"),
+                value: feishuDraft.feishuTo ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuTo: event.target.value })),
+              }),
+            ]),
+            h("label", { key: "lc", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                disabled: busy,
+                checked: Boolean(feishuDraft.feishuLongConnection ?? (snapshot?.feishu?.longConnectionWanted !== false ? "true" : "false") === "true"),
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuLongConnection: event.target.checked ? "true" : "false" })),
+              }),
+              ` ${t("feishuLong", "Receive over the long connection (no public URL needed)")}`,
+            ]),
+            h("div", { key: "btns", className: "dswxRow" }, [
+              h("button", {
+                key: "s",
+                type: "button",
+                className: "dswxBtn dswxPrimary",
+                disabled: busy,
+                // Only what was typed is sent, so a blank field cannot wipe a saved secret.
+                onClick: () => setFeishu({
+                  ...feishuDraft,
+                  feishuLongConnection: feishuDraft.feishuLongConnection ?? (snapshot?.feishu?.longConnectionWanted !== false ? "true" : "false"),
+                }),
+              }, t("feishuSave", "Save Feishu settings")),
+              h("button", {
+                key: "c",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                // Deliberate empties: this is the only path that clears a stored field.
+                onClick: () => setFeishu({
+                  feishuAppId: "",
+                  feishuAppSecret: "",
+                  feishuWebhookUrl: "",
+                  feishuWebhookSecret: "",
+                  feishuTo: "",
+                }, "clear"),
+              }, t("feishuClear", "Clear saved Feishu settings")),
+            ]),
+            h("p", { key: "hint", className: "dswxMeta" }, t("feishuFormHint", "Saving takes effect immediately - no DSH restart, no setx.")),
           ]),
           h("p", { key: "wecom", className: "dswxHint" }, [
             `${t("wecomLabel", "WeCom (企业微信)")}: ${snapshot?.wecom?.bot?.authenticated ? "long connection ✓" : snapshot?.wecom?.configured ? (snapshot.wecom.via ?? "configured") : t("notConfigured", "not configured")} · `,

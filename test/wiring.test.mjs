@@ -419,7 +419,12 @@ await test("the Feishu send half is wired, and never claims what it cannot do", 
 await test("the Feishu receive half is wired, end to end", () => {
   // The long connection is opened through the lifecycle, so it is started and disposed with the plugin.
   assert.match(host, /import \{ FeishuLongConnection \} from "\.\/feishu-ws\.js";/, "the host imports the long connection");
-  assert.match(host, /ctx\.effect\(\(\) => \{\s*\n\s*void startFeishuLongConnection\(\);\s*\n\s*return \(\) => stopFeishuLongConnection\(\);/, "it is started and stopped by the scope");
+  assert.match(host, /ctx\.effect\(\(\) => \{\s*\n\s*startFeishuAfterPrefs\(\);\s*\n\s*return \(\) => stopFeishuLongConnection\(\);/, "it is started and stopped by the scope");
+  // The start must wait for the saved settings to be in the cache: `feishuConfig()` is synchronous and
+  // the settings the panel saved (v0.23.0) live in prefs, so starting in parallel with the load would
+  // connect with the config/env values and report the panel's settings as absent.
+  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{\s*\n\s*void refreshFeishuSavedPrefs\(\)\s*\n\s*\.then\(\(\) => startFeishuLongConnection\(\)\)/, "the saved settings are loaded before the connection starts");
+  assert.match(host, /async function refreshFeishuSavedPrefs\(/, "the cache has one writer");
   assert.match(host, /connection\.onEvent\(/, "events are handed to the connection");
   assert.match(host, /async function handleFeishuEvent\(appId, event\)/, "and answered by a handler that reports its own failures");
   assert.match(host, /async function startFeishuLongConnection\(/, "the connection is started in one place");
@@ -453,6 +458,33 @@ await test("the Feishu receive half is wired, end to end", () => {
   assert.match(host, /长连接接收：\$\{feishuWsReason\(\)\}/, "/feishu explains why the long connection is not up");
   assert.match(host, /feishuWsEnabled\(\)\s*\n\s*\? `长连接接收：已连接/, "/feishu claims connected only via feishuWsEnabled()");
   assert.match(host, /飞书暂未实现逐字预览/, "/feishu admits that a stream preference is answered whole here");
+});
+await test("the panel can configure Feishu without setx and without a restart", () => {
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  // One table names the fields, and both routes go through the same apply path - the panel writes
+  // /prefs while the cards write /panel, and v0.20.0 shipped a switch wired to only one of them.
+  assert.match(host, /const FEISHU_PREF_FIELDS = Object\.freeze\(\{/, "one table names the fields");
+  assert.match(host, /const FEISHU_PREF_SWITCHES = Object\.freeze\(\{ feishuLongConnection/, "and one names the booleans");
+  assert.match(host, /if \(feishuPatch\.error\) return json\(res, 400/, "/prefs validates before saving");
+  assert.match(host, /const applied = await applyFeishuPrefs\(args\);/, "/panel uses the same path");
+  assert.match(host, /await state\.savePrefs\(\{ feishu: result\.patch \}\);/, "the settings are saved in prefs");
+  assert.match(host, /await startFeishuLongConnection\(\{ force: true \}\)/, "saving restarts the long connection");
+  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{\s*\n\s*void refreshFeishuSavedPrefs\(\)/, "and startup loads the saved settings first");
+  // Secrets never travel back: one redaction helper, used by every route that returns prefs.
+  assert.match(host, /function publicPrefs\(prefs = \{\}\) \{/, "there is one redaction helper");
+  // Three: the normal /prefs return, the Feishu-save return, and /state (which also carries prefs).
+  assert.equal((host.match(/prefs: publicPrefs\(/g) ?? []).length, 3, "every response that returns prefs redacts it");
+  assert.match(host, /prefs: publicPrefs\(prefs\),/, "/state redacts the stored settings too");
+  assert.doesNotMatch(host, /json\(res, 200, \{ ok: true, prefs \}\)/, "no route hands the raw prefs back");
+  // The panel block itself.
+  assert.match(clientSource, /feishuLabel:/, "the block is labelled");
+  assert.equal((clientSource.match(/feishuLabel:/g) ?? []).length, 2, "in both languages");
+  assert.match(clientSource, /feishuAppSecret: event\.target\.value/, "with an app secret input");
+  assert.equal((clientSource.match(/type: "password"/g) ?? []).length, 2, "both secrets are masked inputs");
+  assert.match(clientSource, /async function setFeishu\(patch, mode = "filled"\)/, "saving goes through one helper");
+  assert.match(clientSource, /await api\(`\/prefs\?\$\{params\.toString\(\)\}`\)/, "which writes the route the panel uses");
+  assert.match(clientSource, /if \(mode === "filled" && \(value === undefined \|\| value === null \|\| String\(value\)\.trim\(\) === ""\)\) continue;/, "and never sends a blank field by accident");
+  assert.match(clientSource, /feishuClear:/, "clearing is a deliberate, separate action");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

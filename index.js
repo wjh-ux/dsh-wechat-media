@@ -2292,9 +2292,49 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // that will receive events. Configuration comes from `config.feishu` with environment fallbacks,
   // and no secret is ever logged or echoed back - only whether it is set.
 
-  /** The Feishu configuration in force: `config.feishu` first, the environment second. */
+  /**
+   * The Feishu settings saved from the Web UI panel or a card, kept in a module-level cache.
+   *
+   * `feishuConfig()` is synchronous and called from many places (tools, `/state`, the long
+   * connection), while prefs are loaded asynchronously - so the saved half is mirrored here and
+   * refreshed whenever it changes. Before this, the only ways in were the plugin config file and
+   * environment variables, which meant `setx` and a DSH restart just to try a bot.
+   */
+  let feishuSavedPrefs = {};
+
+  /** Re-read the saved Feishu settings. Called at apply time and after every save. */
+  async function refreshFeishuSavedPrefs() {
+    try {
+      const prefs = await state.loadPrefs();
+      feishuSavedPrefs = prefs?.feishu && typeof prefs.feishu === "object" ? prefs.feishu : {};
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not read the saved Feishu settings: %s", error?.message ?? error);
+      feishuSavedPrefs = {};
+    }
+    return feishuSavedPrefs;
+  }
+
+  /** The Feishu settings saved in prefs (empty string means "cleared", so it falls through). */
+  function feishuSaved() {
+    return feishuSavedPrefs ?? {};
+  }
+
+  /** Where the value in force came from - the panel should be able to say so. */
+  function feishuSourceFor(key) {
+    const saved = String(feishuSaved()[key] ?? "").trim();
+    if (saved) return "saved";
+    if (String((config.feishu ?? {})[key] ?? "").trim()) return "config";
+    return "env";
+  }
+
+  /**
+   * The Feishu configuration in force: what the panel saved first, then `config.feishu`, then the
+   * environment. An empty saved value counts as "not set", so clearing a field in the panel falls
+   * back to config and the environment rather than pinning an empty string.
+   */
   function feishuConfig() {
     const given = config.feishu ?? {};
+    const saved = feishuSaved();
     const env = process.env;
     const pick = (...values) => {
       for (const value of values) {
@@ -2303,19 +2343,110 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       }
       return "";
     };
+    // `longConnection` is a boolean, so it cannot ride on `pick`: saved wins, then config, then env.
+    const savedLong = saved.longConnection;
+    const longConnection = savedLong === true || savedLong === false
+      ? savedLong
+      : !(given.longConnection === false || String(env.FEISHU_LONG_CONNECTION ?? "").toLowerCase() === "false");
     return {
-      webhookUrl: pick(given.webhookUrl, env.FEISHU_WEBHOOK_URL),
-      secret: pick(given.secret, env.FEISHU_WEBHOOK_SECRET),
-      appId: pick(given.appId, env.FEISHU_APP_ID),
-      appSecret: pick(given.appSecret, env.FEISHU_APP_SECRET),
-      domain: pick(given.domain, env.FEISHU_DOMAIN) || "feishu",
-      to: pick(given.to, env.FEISHU_TO),
+      webhookUrl: pick(saved.webhookUrl, given.webhookUrl, env.FEISHU_WEBHOOK_URL),
+      secret: pick(saved.secret, given.secret, env.FEISHU_WEBHOOK_SECRET),
+      appId: pick(saved.appId, given.appId, env.FEISHU_APP_ID),
+      appSecret: pick(saved.appSecret, given.appSecret, env.FEISHU_APP_SECRET),
+      domain: pick(saved.domain, given.domain, env.FEISHU_DOMAIN) || "feishu",
+      to: pick(saved.to, given.to, env.FEISHU_TO),
       // The long connection is what lets an app bot receive without a public address. It is on
-      // whenever credentials exist and can be switched off explicitly, in config or environment.
-      longConnection: !(given.longConnection === false || String(env.FEISHU_LONG_CONNECTION ?? "").toLowerCase() === "false"),
-      verificationToken: pick(given.verificationToken, env.FEISHU_VERIFICATION_TOKEN),
-      encryptKey: pick(given.encryptKey, env.FEISHU_ENCRYPT_KEY),
+      // whenever credentials exist and can be switched off explicitly, in the panel, config or env.
+      longConnection,
+      verificationToken: pick(saved.verificationToken, given.verificationToken, env.FEISHU_VERIFICATION_TOKEN),
+      encryptKey: pick(saved.encryptKey, given.encryptKey, env.FEISHU_ENCRYPT_KEY),
+      // For diagnosis only: which half is in force, per field.
+      sources: {
+        appId: feishuSourceFor("appId"),
+        appSecret: feishuSourceFor("appSecret"),
+        webhookUrl: feishuSourceFor("webhookUrl"),
+        domain: feishuSourceFor("domain"),
+        to: feishuSourceFor("to"),
+      },
     };
+  }
+
+  /**
+   * A prefs snapshot safe to hand back over the loopback API.
+   *
+   * The Feishu secrets are the only values in prefs that must never be echoed - `/prefs` used to return
+   * the whole object, so saving a secret sent it straight back in the response (a test caught it). The
+   * field is replaced rather than deleted, so a reader can still see that something is saved.
+   */
+  function publicPrefs(prefs = {}) {
+    const feishu = prefs?.feishu && typeof prefs.feishu === "object" ? prefs.feishu : undefined;
+    if (!feishu) return prefs;
+    const safe = { ...feishu };
+    for (const key of ["appSecret", "secret", "verificationToken", "encryptKey"]) {
+      if (key in safe) safe[key] = safe[key] ? "***" : "";
+    }
+    return { ...prefs, feishu: safe };
+  }
+
+  /** The Feishu fields a route may set, with the prefs key each one maps to. */
+  const FEISHU_PREF_FIELDS = Object.freeze({
+    feishuAppId: "appId",
+    feishuAppSecret: "appSecret",
+    feishuWebhookUrl: "webhookUrl",
+    feishuWebhookSecret: "secret",
+    feishuDomain: "domain",
+    feishuTo: "to",
+    feishuVerificationToken: "verificationToken",
+    feishuEncryptKey: "encryptKey",
+  });
+
+  /** The Feishu fields a route may set that are booleans rather than strings. */
+  const FEISHU_PREF_SWITCHES = Object.freeze({ feishuLongConnection: "longConnection" });
+
+  /**
+   * Merge Feishu fields from route arguments into the saved settings.
+   *
+   * An empty string **clears** a field (that is how the panel's "clear" works), anything else sets
+   * it. Returns the patch and what changed, so the caller can decide whether a reconnect is worth
+   * it - and a validation error for a domain that is neither `feishu`, `lark` nor an explicit URL.
+   */
+  function feishuPrefsPatch(args = {}) {
+    const patch = { ...(feishuSaved() ?? {}) };
+    const changed = [];
+    for (const [field, key] of Object.entries(FEISHU_PREF_FIELDS)) {
+      if (args[field] === undefined) continue;
+      const value = String(args[field] ?? "").trim();
+      if (key === "domain" && value && !/^https?:\/\//i.test(value) && !["feishu", "lark"].includes(value)) {
+        return { error: `feishuDomain must be "feishu", "lark" or an https URL, got "${value}"` };
+      }
+      if (value) patch[key] = value;
+      else delete patch[key];
+      changed.push(field);
+    }
+    for (const [field, key] of Object.entries(FEISHU_PREF_SWITCHES)) {
+      if (args[field] === undefined) continue;
+      const wanted = parseSwitch(args[field]);
+      if (wanted === undefined) return { error: `${field} must be "true" or "false"` };
+      patch[key] = wanted;
+      changed.push(field);
+    }
+    return { patch, changed };
+  }
+
+  /**
+   * Apply a Feishu patch and make it take effect **without a restart**: the saved cache is
+   * refreshed, then the long connection is restarted with the new settings.
+   */
+  async function applyFeishuPrefs(args = {}) {
+    const result = feishuPrefsPatch(args);
+    if (result.error) return { error: result.error };
+    if (!result.changed.length) return { changed: [], feishu: await feishuState() };
+    await state.savePrefs({ feishu: result.patch });
+    await refreshFeishuSavedPrefs();
+    // Restarting is the point: a new app id/secret must connect now, and clearing one must drop the
+    // old connection rather than leave it running against credentials the user just removed.
+    await startFeishuLongConnection({ force: true });
+    return { changed: result.changed, feishu: await feishuState() };
   }
 
   /** Which Feishu channels this machine can actually use, and which one is missing. */
@@ -2550,6 +2681,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       encryptKeySet: Boolean(settings.encryptKey),
       longConnection: feishuWsEnabled(),
       longConnectionWanted: feishuWsWanted(settings),
+      // What the panel saved (field **names** only - a value never leaves the host) and where each
+      // setting in force came from, so the UI can say "saved here" rather than guess.
+      savedFields: Object.keys(feishuSaved()).sort(),
+      sources: settings.sources,
       connection: feishuWsStatus,
       lastEventAt: feishuLastEventAt,
       inboundError: feishuInboundError,
@@ -2869,15 +3004,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     counters.feishuAnswered += 1;
   }
 
+
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a harness without
   // it still gets the long connection instead of losing the feature.
+  // The saved settings must be in the cache before anything asks `feishuConfig()` for them - the tools,
+  // `/state` and the long connection all read it synchronously - so the connection is started *after*
+  // the cache is warm, never in parallel with it. `apply` itself is synchronous, hence the chain.
+  const startFeishuAfterPrefs = () => {
+    void refreshFeishuSavedPrefs()
+      .then(() => startFeishuLongConnection())
+      .catch((error) => ctx.logger?.warn?.("[dsh-wechat-media] could not start the feishu long connection: %s", error?.message ?? error));
+  };
   if (typeof ctx.effect === "function") {
     ctx.effect(() => {
-      void startFeishuLongConnection();
+      startFeishuAfterPrefs();
       return () => stopFeishuLongConnection();
     }, "dsh-wechat-media: feishu long connection");
   } else {
-    void startFeishuLongConnection();
+    startFeishuAfterPrefs();
   }
 
   /** Send one message through whichever WeCom path is configured. */
@@ -3748,7 +3892,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             inboxRoot: await resolvedInbox(),
             inboxRootDefault: inboxRoot(dshHome),
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
-            prefs,
+            // Public view: the Feishu secrets live in prefs now, and `/state` is readable over loopback.
+            prefs: publicPrefs(prefs),
             tokens: summarize(await state.loadTokens()),
             // Why a live preview did or did not appear: deltas seen, previews sent, previews the
             // streamer refused, and the shape of the last frame.
@@ -3922,6 +4067,21 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
           if (asBool(body.retry) !== null) patch.retry = asBool(body.retry);
+          // The Feishu block of the Web UI panel writes here. It is handled before the reply because a
+          // changed app id/secret has to reconnect the long connection, and the response then carries
+          // the fresh state so the panel can show "connected" or the reason it is not.
+          const feishuPatch = feishuPrefsPatch(Object.fromEntries(
+            Object.keys({ ...FEISHU_PREF_FIELDS, ...FEISHU_PREF_SWITCHES }).map((field) => [field, body[field]]),
+          ));
+          if (feishuPatch.error) return json(res, 400, { error: feishuPatch.error });
+          if (feishuPatch.changed.length) {
+            const applied = await applyFeishuPrefs(Object.fromEntries(
+              Object.keys({ ...FEISHU_PREF_FIELDS, ...FEISHU_PREF_SWITCHES }).map((field) => [field, body[field]]),
+            ));
+            if (applied.error) return json(res, 400, { error: applied.error });
+            const prefsAfter = await state.savePrefs({});
+            return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), feishu: applied.feishu, feishuChanged: applied.changed });
+          }
           if (body.format !== undefined && body.format !== "") {
             const mode = String(body.format).trim().toLowerCase();
             if (!["plain", "raw"].includes(mode)) return json(res, 400, { error: `format must be "plain" or "raw", got "${body.format}"` });
@@ -3950,7 +4110,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             else patch.inboxDir = value;
           }
           const prefs = await state.savePrefs(patch);
-          json(res, 200, { ok: true, prefs });
+          json(res, 200, { ok: true, prefs: publicPrefs(prefs) });
         },
       },
       {
@@ -4212,6 +4372,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             await state.savePrefs({ retry: args.retry === "true" });
             note = `失败自动重试 → ${args.retry === "true" ? "开（传输类错误重试一次）" : "关"}`;
             noteRoute("/panel", { action: "retry", value: args.retry });
+          } else if (Object.keys({ ...FEISHU_PREF_FIELDS, ...FEISHU_PREF_SWITCHES }).some((field) => args[field] !== undefined)) {
+            const applied = await applyFeishuPrefs(args);
+            if (applied.error) {
+              note = `飞书配置未保存：${applied.error}`;
+            } else {
+              note = `飞书配置已更新（${applied.changed.length} 项）→ ${applied.feishu.configured ? (applied.feishu.connection?.state === "connected" ? "长连接已连接" : `长连接：${applied.feishu.connection?.state ?? "未连接"}`) : "尚未配置完整"}`;
+              noteRoute("/panel", { action: "feishu", changed: applied.changed });
+            }
           } else if (args.cancel) {
             const chatId = chatFallback();
             const cancelled = chatId ? approvals.cancel(accountId, chatId) : false;

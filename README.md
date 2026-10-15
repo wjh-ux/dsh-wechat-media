@@ -194,10 +194,28 @@ Two kinds of Feishu bot exist, and both are supported, because they solve differ
 | Can receive | no | yes - over the **long connection**, with no public URL |
 | Config | `feishu.webhookUrl`, `feishu.secret` | `feishu.appId`, `feishu.appSecret` |
 
-Both come from `config.feishu` in the plugin config, or from the environment
-(`FEISHU_WEBHOOK_URL` / `FEISHU_WEBHOOK_SECRET` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_DOMAIN` /
-`FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`). `feishu.domain` is `feishu` (mainland China) or `lark`
-(international); an explicit URL also works. **Changing configuration needs a DSH restart.**
+### Configuring it from the panel / 在面板里配置（不用 setx，不用重启）
+
+The Web UI panel has a **Feishu** block: App ID, App Secret, the custom-webhook URL and its signing secret, the
+platform (`feishu` / `lark`), a default receive id, and the long-connection switch. **Saving reconnects immediately** -
+there is no `setx` and no DSH restart, which used to be the only way in.
+
+Values are resolved in this order, so a field the panel leaves alone keeps whatever config or environment provides:
+
+1. what the panel saved (`prefs.feishu`),
+2. `config.feishu` in the plugin config,
+3. the environment: `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_WEBHOOK_URL` / `FEISHU_WEBHOOK_SECRET` /
+   `FEISHU_DOMAIN` / `FEISHU_TO` / `FEISHU_LONG_CONNECTION` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`.
+
+Two rules make that safe:
+
+- **A blank field is never sent** by the panel's Save button, so saving something else cannot wipe a stored secret.
+  Clearing is a separate, deliberate action (the Clear button sends explicit empties).
+- **Secrets never come back.** `/state` and `/prefs` report *whether* a secret is set, never its value - one redaction
+  helper covers every response that carries prefs (a test found the leak that made this rule necessary).
+
+`feishu.domain` is `feishu` (mainland China) or `lark` (international); an explicit URL also works. `/state` reports
+`savedFields` and, per field, whether the value in force came from the panel, the config or the environment.
 
 Tools: `feishu_send_text` (text or markdown, `to` + `toType` optional - `chat_id` by default, `open_id`/`user_id`/`email`
 also accepted) and `feishu_send_file` (`path`, `kind` = file/image/audio/video). The reply always says which channel it

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.23.0
+
+- **Feishu can be configured from the Web UI panel, and saving takes effect immediately.** Until now the only ways in
+  were the plugin config file and environment variables - a `setx` plus a DSH restart just to try a bot. The panel now
+  has a Feishu block (App ID, App Secret, custom-webhook URL and signing secret, platform, default receive id, and the
+  long-connection switch), values resolve **panel → config → environment** field by field, and saving restarts the long
+  connection with the new settings. Both routes accept the fields - `/prefs` (what the panel writes) and `/panel`
+  (what the cards write), which is the mistake v0.20.0 made with a different switch.
+- **A leak, found by the test written for this change.** Feishu secrets are now stored in prefs, and both `/state` and
+  `/prefs` returned the whole prefs object - so saving a secret sent it straight back in the response, over plain HTTP.
+  One `publicPrefs()` helper redacts every response that carries prefs, and the test asserts the secret never appears.
+  Verified by **breaking the redaction and watching the assertion fail**, then restoring the file byte for byte.
+- Two safety rules the panel depends on: its Save button sends **only** the fields that were typed (so a blank input can
+  never wipe a stored secret), and clearing is a separate action that sends explicit empties. The route still treats an
+  empty string as a clear.
+- `/state.feishu` gained `savedFields` (names only) and `sources` (which half each value came from), so the panel
+  can say "saved here" instead of guessing.
+- Tests: **24 suites / 396 cases**, including two that boot the plugin, drive the real `/prefs` route and read the real
+  `/state` route back.
+
 ## 0.22.0
 
 - **Feishu, second half: receiving - over the long connection, so no public URL is needed.** Feishu offers two ways to
