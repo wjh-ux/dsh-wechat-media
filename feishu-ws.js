@@ -195,6 +195,26 @@ export function encodeFrame(frame = {}) {
  *             headers: Array<{ key: string, value: string }>, payloadEncoding?: string, payloadType?: string,
  *             payload?: Buffer, LogIDNew?: string }}
  */
+/**
+ * The bytes of an inbound WebSocket frame.
+ *
+ * Node's global `WebSocket` may hand binary frames over as a **Blob**, an ArrayBuffer or a view - and
+ * `Buffer.from(blob)` throws ("Received an instance of Blob"), which is exactly how the first real frames were
+ * lost in production while every test, feeding Buffers to a fake socket, passed. `decodeFrame` wants bytes, so
+ * normalise every shape here.
+ *
+ * @param {any} raw
+ * @returns {Promise<Buffer>}
+ */
+export async function frameBytes(raw) {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+  if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+  if (raw && typeof raw.arrayBuffer === "function") return Buffer.from(await raw.arrayBuffer());
+  if (typeof raw === "string") return Buffer.from(raw, "utf8");
+  return Buffer.from(raw ?? []);
+}
+
 export function decodeFrame(input) {
   const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input ?? []);
   const frame = { SeqID: 0, LogID: 0, service: 0, method: 0, headers: [] };
@@ -517,6 +537,8 @@ export class FeishuLongConnection {
       let socket;
       try {
         socket = this.webSocketFactory(url);
+        // Ask for ArrayBuffer rather than Blob: the frame decoder wants bytes, and Blob copies cost.
+        try { socket.binaryType = "arraybuffer"; } catch { /* not supported everywhere; frameBytes copes */ }
       } catch (error) {
         this.state = CONNECTION_STATE.failed;
         this.#report(error);
@@ -615,7 +637,7 @@ export class FeishuLongConnection {
     this.stats.received += 1;
     let frame;
     try {
-      frame = decodeFrame(Buffer.isBuffer(raw) ? raw : Buffer.from(raw ?? []));
+      frame = decodeFrame(await frameBytes(raw));
     } catch (error) {
       // Unparseable data is reported; silently dropping it would hide a protocol change.
       this.#report(new Error(`could not decode an inbound frame: ${error?.message ?? error}`));

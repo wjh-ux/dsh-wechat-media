@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.23.3
+
+- **The first real Feishu frames were thrown away, and only production showed it.** Node's global `WebSocket` hands
+  binary frames over as a **Blob**; the decoder did `Buffer.from(raw)`, which throws `Received an instance of
+  Blob`. Every test fed Buffers to a fake socket, so the whole suite passed while the live connection reported
+  `feishuErrors` growing and `stats.received` staying at zero. `frameBytes()` now accepts Buffer, ArrayBuffer,
+  typed-array views and Blob (the socket also asks for `arraybuffer`), and a regression test covers all four shapes
+  **plus the throwing form**, so the trap itself is pinned.
+- Found by reading the running plugin after the credentials were fixed - the long connection had connected, and the
+  error the plugin reported named the Blob.
+- 24 suites / 399 cases.
+
 ## 0.23.2
 
 - **The panel now shows what is saved, and says so when it saves.** The Feishu fields read only their local draft, so

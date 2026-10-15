@@ -28,8 +28,7 @@ import {
   encodeHeader,
   headersToObject,
   postHandshake,
-  startFeishuLongConnection,
-} from "../feishu-ws.js";
+  startFeishuLongConnection, frameBytes } from "../feishu-ws.js";
 
 let passed = 0;
 let failed = 0;
@@ -631,5 +630,24 @@ await test("a factory that throws is reported, and start rejects", async () => {
   connection.stop();
 });
 
+await test("a binary frame is read as Buffer, ArrayBuffer, view or Blob", async () => {
+  // The first real frames were lost in production because Node's global WebSocket hands binary frames over as a
+  // **Blob**, and Buffer.from(blob) throws "Received an instance of Blob". Every test fed Buffers to a fake
+  // socket, so nothing caught it. This asserts all four shapes, and the fifth line pins the trap itself.
+  const frame = { SeqID: 1, LogID: 2, service: 1, method: 1, headers: [{ key: "type", value: "event" }], payload: Buffer.from("{}", "utf8") };
+  const bytes = encodeFrame(frame);
+  const shapes = [
+    bytes,
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    new Uint8Array(bytes),
+    new Blob([bytes]),
+  ];
+  for (const raw of shapes) {
+    const decoded = decodeFrame(await frameBytes(raw));
+    assert.equal(decoded.headers[0].value, "event");
+    assert.equal(decoded.method, 1);
+  }
+  assert.throws(() => Buffer.from(new Blob([bytes])), /Blob/, "the old path really does throw");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
