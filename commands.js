@@ -66,6 +66,12 @@ export const COMMANDS = [
     summary: "失败自动重试：回合因传输类错误（超时/连接重置/限流/5xx）失败时自动重试一次；不带参数则切换",
   },
   {
+    name: "feishu",
+    aliases: ["飞书", "lark"],
+    usage: "/feishu [test [to]]",
+    summary: "飞书机器人：显示配置状态（应用机器人 / 自定义 webhook），test 发一条自测消息",
+  },
+  {
     name: "tokens",
     aliases: ["token", "用量"],
     usage: "/tokens [reset|1-30]",
@@ -186,6 +192,7 @@ function size(bytes) {
  * @param {string} [input.tokenLine] the one-line token summary (see tokens.js)
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
+ * @param {string} [input.feishuLine] the one-line Feishu status (see index.js)
  */
 export function statusText({
   transport,
@@ -200,6 +207,7 @@ export function statusText({
   interject = false,
   lastInterjection = null,
   retry = true,
+  feishuLine,
   authLine,
   deliveryLine,
   formatLine,
@@ -234,10 +242,11 @@ export function statusText({
   );
   lines.push(`失败自动重试：${retry ? "开" : "关"}（传输类错误自动重试一次）`);
   if (lastInterjection) lines.push(`  最近一次判定：${lastInterjection.decision === "steer" ? "已插进当前回合" : "排队"}（${lastInterjection.reason}）`);
+  if (feishuLine) lines.push(feishuLine);
   if (authLine) lines.push(authLine);
   if (deliveryLine) lines.push(deliveryLine);
   if (formatLine) lines.push(formatLine);
   if (tokenLine) lines.push(tokenLine);
-  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /retry · /auth · /delivery · /format · /tokens");
+  lines.push("", "命令：/help · /status · /new · /stop · /friends · /interject · /retry · /feishu · /auth · /delivery · /format · /tokens");
   return lines.join("\n");
 }

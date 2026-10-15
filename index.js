@@ -90,6 +90,18 @@ import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
+import {
+  feishuDomain,
+  feishuFileType,
+  feishuMediaContent,
+  feishuPostContent,
+  feishuSendMessage,
+  feishuTenantToken,
+  feishuTextContent,
+  feishuUploadFile,
+  feishuUploadImage,
+  feishuWebhookSend,
+} from "./feishu.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
 // `TypeError: wecom.streamBody is not a function` inside the reply's try/catch, so every
@@ -116,7 +128,7 @@ const DEDUP_LIMIT = 500;
  * runs during a turn, the automatic reply relay must stand down, or the model
  * would answer twice (once through the tool, once through the relay).
  */
-const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_send_voice", "wecom_send_voice"]);
+const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_send_voice", "wecom_send_text", "wecom_send_file", "wecom_send_voice", "feishu_send_text", "feishu_send_file"]);
 
 export const name = "dsh-wechat-media";
 /** `agents` drives sessions; tools and the web server are optional per profile. */
@@ -1227,6 +1239,7 @@ export function apply(ctx, config = {}) {
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
         retry: (await state.loadPrefs()).retry !== false,
+        feishuLine: feishuStatusLine(),
         authLine: await authStatusLine(),
         deliveryLine: await deliveryStatusLine(),
         formatLine: await formatStatusLine(),
@@ -1364,6 +1377,42 @@ export function apply(ctx, config = {}) {
         ? "🔁 失败自动重试 → 开。回合因为**传输类错误**（超时、连接被重置、限流、5xx）失败时，会自动重试**一次**，并在聊天里说明；确定性错误（请求被拒、模型不可用）不会重试，避免白花 token。"
         : "🔁 失败自动重试 → 关。回合失败时直接告诉你错误，不再自动重试。");
       noteRoute("/command", { command: "retry", value: next, chatId });
+      return true;
+    }
+    if (command.name === "feishu") {
+      const argsText = String(command.args ?? "").trim();
+      if (/^test\b/i.test(argsText)) {
+        const rest = argsText.replace(/^test\b/i, "").trim();
+        const [receiveId = "", toType = ""] = rest.split(/\s+/);
+        try {
+          const sent = await feishuSendText({ text: `dsh-wechat-media 飞书自测 · ${new Date().toISOString()}`, to: receiveId, toType });
+          noteRoute("/feishu", { action: "test", via: sent.via, to: sent.to });
+          if (sent.via === "app") {
+            await reply(`✅ 飞书自测已通过**应用机器人**发出（发往 ${sent.to}，message_id ${sent.messageId}）。`);
+          } else if (sent.via === "webhook") {
+            await reply("✅ 飞书自测已通过**自定义 webhook 机器人**发出。");
+          } else {
+            await reply(sent.reason);
+          }
+        } catch (error) {
+          noteRoute("/feishu", { action: "test", error: String(error?.message ?? error) });
+          await reply(`❌ 飞书自测失败：${error?.message ?? error}`);
+        }
+        return true;
+      }
+      const settings = feishuConfig();
+      const channels = feishuChannels(settings);
+      await reply([
+        feishuStatusLine(),
+        `应用机器人：${channels.app ? "已配置" : "未配置"}${channels.partial ? "（⚠️ app_id 与 app_secret 只填了一个）" : ""}`,
+        `自定义 webhook：${channels.webhook ? "已配置" : "未配置"}`,
+        `发送目标（feishu.to）：${settings.to || "（未设置）"}`,
+        "",
+        "用法：/feishu test [接收方 id] [chat_id|open_id|user_id|email] 发一条自测消息；id 类型省略时按前缀猜（oc_ / ou_ / 含 @）。",
+        "发文件/图片用 feishu_send_file 工具（需要应用机器人；自定义 webhook 只能发文本）。",
+        "密钥只显示「已设置/未设置」，不会回显；配置改动后需要重启 DSH。",
+      ].join("\n"));
+      noteRoute("/command", { command: "feishu", chatId });
       return true;
     }
 
@@ -2019,6 +2068,212 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     void startWecomBot();
   }
 
+  // ── Feishu (飞书 / Lark) ─────────────────────────────────────────────────────
+  //
+  // Two kinds of bot, one sender. A **custom webhook bot** needs nothing but its URL and can only
+  // carry text / rich text; an **app bot** (app_id + app_secret) can also send files and is the half
+  // that will receive events. Configuration comes from `config.feishu` with environment fallbacks,
+  // and no secret is ever logged or echoed back - only whether it is set.
+
+  /** The Feishu configuration in force: `config.feishu` first, the environment second. */
+  function feishuConfig() {
+    const given = config.feishu ?? {};
+    const env = process.env;
+    const pick = (...values) => {
+      for (const value of values) {
+        const text = String(value ?? "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+    return {
+      webhookUrl: pick(given.webhookUrl, env.FEISHU_WEBHOOK_URL),
+      secret: pick(given.secret, env.FEISHU_WEBHOOK_SECRET),
+      appId: pick(given.appId, env.FEISHU_APP_ID),
+      appSecret: pick(given.appSecret, env.FEISHU_APP_SECRET),
+      domain: pick(given.domain, env.FEISHU_DOMAIN) || "feishu",
+      to: pick(given.to, env.FEISHU_TO),
+      verificationToken: pick(given.verificationToken, env.FEISHU_VERIFICATION_TOKEN),
+      encryptKey: pick(given.encryptKey, env.FEISHU_ENCRYPT_KEY),
+    };
+  }
+
+  /** Which Feishu channels this machine can actually use, and which one is missing. */
+  function feishuChannels(settings = feishuConfig()) {
+    const app = Boolean(settings.appId && settings.appSecret);
+    const webhook = Boolean(settings.webhookUrl);
+    return {
+      app,
+      webhook,
+      // Half-configured credentials are the most confusing state, so they are named rather than
+      // folded into "not configured".
+      partial: Boolean(settings.appId) !== Boolean(settings.appSecret),
+    };
+  }
+
+  /** What to do when nothing is configured - actionable, never an exception. */
+  function feishuSetupHint() {
+    return "飞书还没有配置。二选一：\n" +
+      "① 自定义机器人（只能发文本/富文本）：飞书群里「设置 → 群机器人 → 添加机器人 → 自定义机器人」，把 webhook 地址填到插件配置 feishu.webhookUrl（或环境变量 FEISHU_WEBHOOK_URL）；有签名校验时再填 feishu.secret。\n" +
+      "② 应用机器人（能发文件、将来能收消息）：飞书开放平台建自建应用，开通 im:message 权限并发布版本，把 app_id/app_secret 填到 feishu.appId / feishu.appSecret（或 FEISHU_APP_ID / FEISHU_APP_SECRET）；发送目标填 feishu.to（chat_id / open_id / user_id / email）。\n" +
+      "配置改完需要重启 DSH 生效。";
+  }
+
+  /**
+   * The `tenant_access_token`, reused until shortly before it expires.
+   *
+   * Feishu hands one out per app and it lasts ~2 hours, so fetching it per message would be both slow
+   * and rate-limited. The cache is keyed by the credentials, so changing them cannot reuse a stale token.
+   */
+  let feishuTokenCache = { key: "", token: "", expiresAt: 0 };
+  async function feishuToken(settings = feishuConfig()) {
+    // The secret is hashed into the key rather than stored in it: a rotated secret must not keep reusing
+    // the old token, and the cache has no business holding the secret in plain sight either.
+    const key = `${settings.appId}|${settings.domain}|${createHash("sha256").update(String(settings.appSecret)).digest("hex").slice(0, 16)}`;
+    const now = Date.now();
+    if (feishuTokenCache.token && feishuTokenCache.key === key && feishuTokenCache.expiresAt - 60_000 > now) {
+      return feishuTokenCache.token;
+    }
+    const fresh = await feishuTenantToken({ appId: settings.appId, appSecret: settings.appSecret, domain: settings.domain });
+    feishuTokenCache = { key, token: fresh.token, expiresAt: fresh.expiresAt };
+    return fresh.token;
+  }
+
+  /**
+   * Send text through whichever Feishu channel is configured.
+   *
+   * The app path wins when it exists: it can do everything a webhook can, it reports a `message_id`,
+   * and it is the same credentials the receive half will use. A webhook is the fallback for a machine
+   * that only has a group robot.
+   */
+  async function feishuSendText({ text, markdown = false, webhookUrl, to, toType } = {}) {
+    const settings = feishuConfig();
+    const channels = feishuChannels(settings);
+    const body = String(text ?? "");
+    const msgType = markdown ? "post" : "text";
+    if (channels.app) {
+      const receiveId = String(to ?? settings.to ?? "").trim();
+      if (!receiveId) {
+        throw new Error("the Feishu app bot needs a receive id - pass `to` (chat_id / open_id / user_id / email) or set feishu.to");
+      }
+      const token = await feishuToken(settings);
+      const sent = await feishuSendMessage({
+        token,
+        receiveId,
+        receiveIdType: String(toType ?? "").trim() || feishuReceiveIdType(receiveId),
+        msgType,
+        content: markdown ? feishuPostContent(body) : feishuTextContent(body),
+        domain: settings.domain,
+      });
+      return { via: "app", kind: msgType, to: receiveId, messageId: sent.messageId };
+    }
+    const url = String(webhookUrl ?? settings.webhookUrl ?? "").trim();
+    if (url) {
+      // The webhook takes `content` as an object while the message API takes it as a JSON string, so the
+      // shape is parsed back out of the same builder rather than written a second time here.
+      await feishuWebhookSend({
+        webhookUrl: url,
+        secret: settings.secret,
+        msgType,
+        content: JSON.parse(markdown ? feishuPostContent(body) : feishuTextContent(body)),
+      });
+      return { via: "webhook", kind: msgType };
+    }
+    return { via: "none", reason: feishuSetupHint() };
+  }
+
+  /**
+   * Guess the `receive_id_type` from the id itself, so `to` alone is usually enough.
+   *
+   * Feishu ids are self-describing: `oc_` is a chat, `ou_`/`on_` a user in an app's own namespace.
+   * Anything unrecognised goes as `chat_id`, which is what a bot is normally given.
+   */
+  function feishuReceiveIdType(receiveId = "") {
+    const text = String(receiveId);
+    if (text.startsWith("ou_") || text.startsWith("on_")) return "open_id";
+    if (text.includes("@")) return "email";
+    return "chat_id";
+  }
+
+  /**
+   * Send a local file through Feishu.
+   *
+   * Images are uploaded as images so they render inline; everything else travels as an uploaded file
+   * with the `file_type` Feishu expects (audio and video are message types of their own, but they are
+   * uploaded the same way). A custom webhook bot cannot carry a file at all - that is a platform limit,
+   * and the only honest answer is to say so and name the fix.
+   */
+  async function feishuSendFile({ filePath, to, toType, kind, filename } = {}) {
+    const settings = feishuConfig();
+    const channels = feishuChannels(settings);
+    if (!channels.app) {
+      if (channels.webhook) {
+        return {
+          via: "webhook",
+          refused: true,
+          reason: "自定义机器人（webhook）发不了文件——这是飞书平台的限制：webhook 只能发文本/富文本。要发文件请在插件配置里填 feishu.appId / feishu.appSecret（应用机器人）后重启。",
+        };
+      }
+      return { via: "none", reason: feishuSetupHint() };
+    }
+    const prepared = await prepareOutbound(String(filePath ?? "").trim(), { maxBytes: maxMediaBytes });
+    const receiveId = String(to ?? settings.to ?? "").trim();
+    if (!receiveId) {
+      throw new Error("the Feishu app bot needs a receive id - pass `to` (chat_id / open_id / user_id / email) or set feishu.to");
+    }
+    const receiveIdType = String(toType ?? "").trim() || feishuReceiveIdType(receiveId);
+    const name = String(filename ?? "").trim() || prepared.name;
+    const wanted = String(kind ?? "").trim().toLowerCase() || (prepared.kind === "image" ? "image" : "file");
+    const bytes = await readFile(prepared.path);
+    const token = await feishuToken(settings);
+    if (wanted === "image") {
+      const uploaded = await feishuUploadImage({ token, bytes, filename: name, domain: settings.domain });
+      const sent = await feishuSendMessage({
+        token,
+        receiveId,
+        receiveIdType,
+        msgType: "image",
+        content: feishuMediaContent("image", uploaded.imageKey),
+        domain: settings.domain,
+      });
+      return { via: "app", kind: "image", to: receiveId, messageId: sent.messageId, bytes: prepared.bytes };
+    }
+    const fileType = feishuFileType(name, { kind: wanted });
+    const uploaded = await feishuUploadFile({ token, bytes, filename: name, fileType, domain: settings.domain });
+    // `audio` and `media` (video) are their own message types; all three carry a `file_key`.
+    const msgType = wanted === "audio" ? "audio" : wanted === "video" ? "media" : "file";
+    const sent = await feishuSendMessage({
+      token,
+      receiveId,
+      receiveIdType,
+      msgType,
+      content: feishuMediaContent("file", uploaded.fileKey),
+      domain: settings.domain,
+    });
+    return { via: "app", kind: msgType, to: receiveId, messageId: sent.messageId, bytes: prepared.bytes, fileType };
+  }
+
+  /** One line for `/status`: which Feishu channels are configured - never a secret, only whether it is set. */
+  function feishuStatusLine() {
+    const settings = feishuConfig();
+    const channels = feishuChannels(settings);
+    const which = channels.app && channels.webhook
+      ? "应用机器人 + 自定义 webhook"
+      : channels.app
+        ? "应用机器人（可发文件；接收半边下一版）"
+        : channels.webhook
+          ? "自定义 webhook（只能发文本/富文本）"
+          : "未配置（/feishu 看怎么配）";
+    const flags = [
+      `${new URL(feishuDomain(settings.domain)).host}`,
+      `签名 ${settings.secret ? "已设置" : "未设置"}`,
+      `校验令牌 ${settings.verificationToken ? "已设置" : "未设置"}`,
+      `加密密钥 ${settings.encryptKey ? "已设置" : "未设置"}`,
+    ];
+    if (channels.partial) flags.push("⚠️ app_id/app_secret 只填了一个");
+    return `飞书：${which} · ${flags.join(" · ")}`;
+  }
+
   /** Send one message through whichever WeCom path is configured. */
   async function wecomSendText({ text, markdown = false, webhookUrl, to } = {}) {
     const config = await state.loadWecom();
@@ -2621,6 +2876,66 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
+      // ── Feishu (飞书 / Lark) tools ────────────────────────────────────────
+
+      const feishuText = define({
+        name: "feishu_send_text",
+        description:
+          "Send a text or markdown message through Feishu (飞书 / Lark). Uses the configured app bot (feishu.appId/appSecret - needs a receive id), or a custom webhook bot (feishu.webhookUrl), or an explicit webhookUrl for this call. A custom webhook bot can only carry text/rich text; Feishu renders markdown natively on both paths.",
+        parameters: {
+          text: { type: "string", required: true, description: "Message text." },
+          markdown: { type: "boolean", description: "Send it as rich text (Feishu draws markdown itself) instead of plain text." },
+          webhookUrl: { type: "string", description: "Override the configured custom-webhook URL for this call." },
+          to: { type: "string", description: "The app bot's receive id: chat_id, open_id, user_id or email. Required on the app path unless feishu.to is set; a webhook ignores it." },
+          toType: { type: "string", description: "Which kind of id `to` is. Guessed from the id when omitted (oc_ → chat_id, ou_/on_ → open_id, @ → email)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 30000,
+        async execute(args) {
+          const text = String(args?.text ?? "");
+          if (!text.trim()) return "nothing to send: `text` is empty";
+          try {
+            const sent = await feishuSendText({ text, markdown: Boolean(args?.markdown), webhookUrl: args?.webhookUrl, to: args?.to, toType: args?.toType });
+            noteRoute("/feishu", sent);
+            if (sent.via === "app") return `sent a ${sent.kind} message through the Feishu app bot to ${sent.to}（message_id ${sent.messageId}）`;
+            if (sent.via === "webhook") return `sent a ${sent.kind} message to the Feishu custom webhook bot`;
+            return sent.reason;
+          } catch (error) {
+            noteRoute("/feishu", { action: "send-text", error: String(error?.message ?? error) });
+            return `could not send to Feishu: ${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuFile = define({
+        name: "feishu_send_file",
+        description:
+          "Send a local file, image, audio or video through Feishu (飞书 / Lark). Needs the app bot (feishu.appId/appSecret) plus a receive id: a custom webhook bot cannot carry files at all, and this tool says so instead of reporting a success that never arrived.",
+        parameters: {
+          path: { type: "string", required: true, description: "Absolute path of the local file." },
+          to: { type: "string", description: "The receive id: chat_id, open_id, user_id or email. Falls back to feishu.to." },
+          toType: { type: "string", description: "Which kind of id `to` is; guessed from the id when omitted." },
+          kind: { type: "string", description: "file (default), image, audio or video - decides the upload type and the message type." },
+          filename: { type: "string", description: "Name to send it under; defaults to the file's own name." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 300000,
+        async execute(args) {
+          const filePath = String(args?.path ?? args?.filePath ?? "");
+          if (!filePath) return "nothing to send: `path` is empty";
+          try {
+            const sent = await feishuSendFile({ filePath, to: args?.to, toType: args?.toType, kind: args?.kind, filename: args?.filename });
+            noteRoute("/feishu", sent);
+            if (sent.refused) return sent.reason;
+            if (sent.via === "app") return `sent ${filePath} as ${sent.kind} through the Feishu app bot to ${sent.to}（message_id ${sent.messageId}）`;
+            return sent.reason;
+          } catch (error) {
+            noteRoute("/feishu", { action: "send-file", error: String(error?.message ?? error) });
+            return `could not send ${filePath} to Feishu: ${error?.message ?? error}`;
+          }
+        },
+      });
+
       const sendVoiceTool = define({
         name: "wechat_send_voice",
         description:
@@ -2733,7 +3048,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       });
 
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

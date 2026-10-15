@@ -158,7 +158,11 @@ await test("both inbound paths answer /commands instead of forwarding them", () 
 await test("/new moves the chat onto a new generation, /stop cancels the turn", () => {
   const at = host.indexOf("async function runChatCommand");
   assert.ok(at > -1);
-  const body = host.slice(at, at + 10000);
+  // Slice the whole dispatcher, not an arbitrary number of characters: every command added lengthens
+  // it, and a fixed window silently stops checking the handlers that fall past the end (adding /feishu
+  // pushed /stop out of a 10000-character window and this test failed for the wrong reason).
+  const after = host.slice(at + 10).search(/\n  (?:async )?function /);
+  const body = host.slice(at, after > -1 ? at + 10 + after : at + 20000);
   assert.match(body, /const generation = previous \+ 1/, "/new must bump the generation");
   assert.match(body, /sessionIdFor\(accountId, chatId, generation\)/, "...and route to the new session id");
   assert.match(body, /conversations\.delete\(previousId\)/, "...and forget the old conversation");
@@ -366,6 +370,48 @@ await test("the retry switch is reachable from the command, the host and the Web
   assert.match(host, /正在重试一次/, "the chat is told what is happening");
   assert.match(clientSource, /async function setRetry\(/, "the Web UI can set it");
   assert.match(clientSource, /snapshot\?\.prefs\?\.retry !== false/, "and shows the current value");
+});
+await test("the Feishu send half is wired, and never claims what it cannot do", () => {
+  // Two channels, one sender: an app bot (files, and a message_id to report) and a custom webhook bot
+  // (text only). The platform limit is the interesting part - a webhook genuinely cannot carry a file,
+  // and the tool has to say that instead of reporting a success that never arrived.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  const feishuSource = readFileSync(join(root, "feishu.js"), "utf8");
+  assert.match(host, /import \{[\s\S]*?\} from "\.\/feishu\.js";/, "the host imports the Feishu module");
+  assert.match(host, /name: "feishu_send_text"/, "the text tool exists");
+  assert.match(host, /name: "feishu_send_file"/, "the file tool exists");
+  assert.match(
+    host,
+    /const DELIVERY_TOOLS = new Set\(\[[^\]]*"feishu_send_text", "feishu_send_file"\]/,
+    "both count as the answer being delivered",
+    // Every platform that can answer by sending must list all of its send tools, or the relay     // duplicates an answer that already went out. WeCom text/file were missing until this was asserted.     for (const tool of ["wechat_send_text", "wechat_send_file", "wecom_send_text", "wecom_send_file", "feishu_send_text", "feishu_send_file"]) {       assert.match(host, new RegExp(`const DELIVERY_TOOLS = new Set\\(\\[[^\\]]*"${tool}"`), `${tool} counts as delivering the answer`);     }
+  );
+  // Every platform that can answer by sending must list all of its send tools, or the relay
+  // duplicates an answer that already went out. WeCom text/file were missing until this was asserted.
+  for (const tool of ["wechat_send_text", "wechat_send_file", "wecom_send_text", "wecom_send_file", "feishu_send_text", "feishu_send_file"]) {
+    assert.match(host, new RegExp(`const DELIVERY_TOOLS = new Set\\(\\[[^\\]]*"${tool}"`), `${tool} counts as delivering the answer`);
+  }
+  assert.match(host, /feishuText, feishuFile\]\)/, "and both are registered with the harness");
+  assert.match(host, /function feishuConfig\(\)/, "the configuration is resolved in one place");
+  assert.match(host, /FEISHU_WEBHOOK_URL/, "with the documented webhook environment fallback");
+  assert.match(host, /FEISHU_APP_SECRET/, "and the app-bot ones");
+  assert.match(host, /feishuTenantToken\(/, "the app path fetches a tenant token");
+  assert.match(host, /let feishuTokenCache/, "and reuses it instead of asking per message");
+  assert.match(host, /function feishuReceiveIdType\(/, "the receive id type is derived from the id");
+  assert.match(host, /command\.name === "feishu"/, "the /feishu command is handled");
+  assert.match(commandsSource, /name: "feishu",/, "and listed in the command table");
+  assert.match(host, /feishuLine: feishuStatusLine\(\)/, "/status is handed the Feishu line");
+  assert.match(commandsSource, /^  feishuLine,$/m, "which the renderer declares as a parameter");
+  assert.match(commandsSource, /if \(feishuLine\) lines\.push\(feishuLine\);/, "and pushes outside the lines array");
+  assert.match(commandsSource, /\/feishu/, "the footer names the command");
+  // The honest half.
+  assert.match(host, /自定义机器人（webhook）发不了文件/, "a webhook-only setup is told the truth about files");
+  assert.match(host, /refused: true/, "as a refusal rather than a success");
+  assert.match(host, /feishuSetupHint\(\)/, "and an unconfigured machine gets instructions, not an exception");
+  // No secret may be echoed back, in any form.
+  assert.doesNotMatch(host, /\$\{settings\.appSecret\}/, "the app secret is never interpolated anywhere");
+  assert.doesNotMatch(host, /\$\{settings\.secret\}/, "nor the webhook secret");
+  assert.match(feishuSource, /feishuDecryptEvent/, "the receive half's helpers are already in place");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

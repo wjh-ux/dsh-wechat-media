@@ -1,9 +1,9 @@
 {
   "name": "dsh-wechat-media",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "private": false,
   "type": "module",
-  "description": "Personal WeChat for DeepSeek Harness (dsh): QR-code login over Tencent's iLink channel, one DSH conversation per contact or group, and two-way text, image, video, document and archive transfer",
+  "description": "Personal WeChat, WeCom and Feishu (飞书) for DeepSeek Harness (dsh): QR-code login over Tencent's iLink channel, one DSH conversation per contact or group, two-way text, image, video, document and archive transfer, and Feishu bots (custom webhook and app)",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -13,7 +13,10 @@
     "ilink",
     "clawbot",
     "bridge",
-    "media"
+    "media",
+    "feishu",
+    "lark",
+    "wecom"
   ],
   "license": "MIT",
   "repository": {
@@ -34,12 +37,15 @@
     "index.js",
     "client.js",
     "commands.js",
+"feishu.js",
     "ilink.js",
     "login.js",
     "media.js",
+"plain-text.js",
     "state.js",
     "session.js",
     "tokens.js",
+"voice.js",
     "wecom.js",
     "ws-client.js",
     "wecom-bot.js",

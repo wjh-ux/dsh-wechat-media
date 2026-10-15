@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.21.0
+
+- **Feishu (飞书 / Lark) support, first half: sending.** A new `feishu.js` speaks to both kinds of Feishu bot, and every
+  endpoint, field and algorithm in it was read from the official `@larksuiteoapi/node-sdk` 1.75.0 (MIT) source rather
+  than recalled - the download was verified against its registry hash before it was opened.
+  - **Custom webhook bot** (`feishu.webhookUrl`, optional `secret`): text and rich text. Its signature is the trap of
+    this API - `HMAC-SHA256(key = timestamp + "\n" + secret, data = "")`, base64 - confirmed against an independent
+    Rust implementation (`lark-webhook-notify`, Apache-2.0) **and its published test vector**, and an interactive card
+    goes under `card` while everything else goes under `content`.
+  - **App bot** (`feishu.appId` / `feishu.appSecret`): `tenant_access_token` with caching, messages, replies,
+    image/file upload (multipart built by hand - the plugin stays dependency-free), and `file_type` mapping.
+  - Inbound event verification and decryption are implemented and tested, ready for the receive half: the AES layout is
+    `sha256(encryptKey)` with the **first 16 bytes of the ciphertext as the IV**, and the signature is
+    `sha256(timestamp + nonce + encryptKey + body)` (`sha1` with the verification token when unencrypted).
+- Tools `feishu_send_text` and `feishu_send_file`, both in `DELIVERY_TOOLS`, plus a `/feishu` command
+  (`/飞书`, `/lark`) that reports the configured channels - **never echoing a secret, only whether one is set** - and
+  can send a self-test. A webhook-only setup **refuses** to pretend it can send files, and says why.
+- `package.json.files` was missing `feishu.js`, `voice.js` and `plain-text.js`: `package.test.mjs` enumerates
+  host modules from that field, so it had never imported them, and an `npm publish` would have shipped without them.
+  **(GitHub releases were never affected - they carry the whole tree.)**
+- `DELIVERY_TOOLS` listed `wecom_send_voice` but not `wecom_send_text`/`wecom_send_file`: a WeCom answer sent with
+  those tools was relayed a second time as text. Both are listed now, and a guard asserts the set is symmetric across
+  platforms.
+- Tests: **22 suites / 345 cases**, including a new `test/feishu-wiring.test.mjs` that does not inspect source text but
+  **calls `apply()` with a fake context and executes the tools against a stubbed fetch** (33 assertions: the webhook
+  signature, the `post` shape, "webhook-only cannot send files and sends nothing", one token fetch for two sends,
+  `oc_`/`ou_` inference, three upload paths, and that no secret ever reaches a request body).
+
 ## 0.20.1
 
 - **The Web UI checkbox from v0.20.0 did nothing, and this makes it work.** The retry switch was wired into the

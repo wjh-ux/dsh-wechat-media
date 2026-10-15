@@ -183,6 +183,40 @@ file name comes from `Content-Disposition` because the payload carries none. Not
 scheme (AES-128-ECB). A download that fails says so in the chat instead of dropping the attachment silently, and
 `/state` counts both outcomes (`counters.mediaDownloaded` / `counters.mediaFailed`).
 
+## Feishu (飞书 / Lark) / 飞书机器人
+
+Two kinds of Feishu bot exist, and both are supported, because they solve different problems.
+
+| | Custom webhook bot | App bot |
+|---|---|---|
+| Credentials | the webhook URL (and its signing secret, if set) | `app_id` + `app_secret` |
+| Can send | text and rich text | text, rich text, images, files, audio |
+| Can receive | no | yes (via the event route) |
+| Config | `feishu.webhookUrl`, `feishu.secret` | `feishu.appId`, `feishu.appSecret` |
+
+Both come from `config.feishu` in the plugin config, or from the environment
+(`FEISHU_WEBHOOK_URL` / `FEISHU_WEBHOOK_SECRET` / `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_DOMAIN` /
+`FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY`). `feishu.domain` is `feishu` (mainland China) or `lark`
+(international); an explicit URL also works. **Changing configuration needs a DSH restart.**
+
+Tools: `feishu_send_text` (text or markdown, `to` + `toType` optional - `chat_id` by default, `open_id`/`user_id`/`email`
+also accepted) and `feishu_send_file` (`path`, `kind` = file/image/audio/video). The reply always says which channel it
+used and gives the `message_id`, so "sent" is not a guess.
+
+**A webhook-only setup cannot send files, and says exactly that** rather than reporting a success that never arrived -
+the custom bot API has no file message at all. Configure `appId`/`appSecret` for that.
+
+`/feishu` (`/飞书`, `/lark`) reports what is configured - **never the secret itself, only whether one is set** - and
+`/feishu test [id] [type]` sends a self-test.
+
+Every endpoint and algorithm here was read from the official `@larksuiteoapi/node-sdk` 1.75.0 source, not recalled:
+messages are `POST /open-apis/im/v1/messages?receive_id_type=…`, the token is
+`POST /open-apis/auth/v3/tenant_access_token/internal`, media is `POST /open-apis/im/v1/images` and `/files`, an event's
+AES key is `sha256(encryptKey)` with the **first 16 bytes of the ciphertext as the IV**, and the event signature is
+`sha256(timestamp + nonce + encryptKey + body)` in hex (`sha1` with the verification token when the event is
+unencrypted). The custom-webhook signature is the trap of that API - `HMAC-SHA256(key = timestamp + "\n" + secret,
+data = "")`, base64 - and it is checked against an independent implementation's published test vector.
+
 ## Chat commands / 聊天里的命令
 
 A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and
@@ -198,6 +232,7 @@ through (a blocked chat cannot run commands either).
 | `/delivery` | `/发送方式` | How a reply is sent: `whole` (the finished answer, once) or `stream` (**word by word**, WeCom only - personal WeChat cannot edit a sent message). No argument shows the current mode. |
 | `/auth` | `/授权` | Authorization level for approvals: `/auth 严格` / `适中` / `完全权限` / `仅查看` (also `strict`, `moderate`, `full`, `readonly`). No argument lists them. |
 | `/interject` | `/插话` | Turns **interjection** on or off: with it on, a message sent while the agent is still answering joins *that* turn instead of queueing its own. No argument toggles. |
+| `/feishu` | `/飞书` `/lark` | Reports the Feishu channels that are configured (**never the secret itself** - only whether one is set), and `/feishu test [id] [type]` sends a self-test through the available channel. |
 | `/retry` | `/重试` | Retries a turn **once** when it fails in the transport (a timeout, a reset connection, a rate limit, a 5xx). A deterministic failure is never retried - that would only spend a second call to fail the same way. On by default, and the same switch is a checkbox in the Web UI panel. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
