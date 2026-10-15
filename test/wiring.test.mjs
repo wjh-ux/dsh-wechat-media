@@ -642,5 +642,15 @@ await test("every new Feishu document tool reports failure instead of swallowing
   }
   assert.match(host, /catch \(error\) \{\s*\n\s*noteRoute\("\/feishu-doc", \{ action: "bitable-read", error/, "a failed read is reported with its reason");
 });
+await test("every document tool fetches its own token", () => {
+  // Found by calling the tools themselves, as shipped: all nine passed no token to the helpers and failed with
+  // "needs a tenant_access_token". The helpers had always been tested with an explicit token, so only the tool
+  // path could show it - which is why the tools are exercised, not just the helpers.
+  const calls = [...host.matchAll(/await (feishu(?:CreateDoc|ReadDoc|AppendText|WikiResolve|SheetCreate|SheetRead|SheetWrite|BitableCreate|BitableTables|BitableWrite|BitableRead))\(/g)];
+  assert.ok(calls.length >= 11, `the document helpers are called from the host (${calls.length} call sites)`);
+  // A floor rather than an exact equality: the count of call sites depends on how the regex groups them, and a
+  // guard that fails because of arithmetic is a guard that gets deleted. What matters is that the tools fetch tokens.
+  assert.ok((host.match(/token: await feishuToken\(\)/g) ?? []).length >= 11, "each call site fetches its own token");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

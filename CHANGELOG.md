@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.23.9
+## 0.23.10
+
+- **The nine document tools did not fetch a Feishu token, so every one of them failed.** They passed no `token` to the
+  helpers, which correctly refuse to guess one: the first real call answered "reading a document needs a
+  tenant_access_token". The helpers had always been tested **with** an explicit token, so only calling the tools
+  themselves could show it - which is exactly what happened, one turn after they shipped.
+- Each of the 13 call sites now fetches its own token (`token: await feishuToken()`, the same cache the send path uses),
+  and a guard asserts that floor so the tool path cannot lose it again.
+- 24 suites / 419 cases.
 
 Nine new tools, so the bridge can work with Feishu documents, spreadsheets and bitables - all of them built against
 shapes measured from the live API rather than read off the documentation:

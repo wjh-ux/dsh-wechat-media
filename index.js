@@ -3776,7 +3776,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const text = String(args?.text ?? "");
           if (!title) return "nothing to create: `title` is empty";
           try {
-            const created = await feishuCreateDoc({ title, folderToken: args?.folderToken, tenantHost: feishuConfig().tenantHost });
+            const created = await feishuCreateDoc({ token: await feishuToken(), title, folderToken: args?.folderToken, tenantHost: feishuConfig().tenantHost });
             // The body is written through the append endpoint, whose shape was settled against the live API
             // (block_type 2 + text_run, parent block = the document id) and proven by reading the document back.
             const written = await feishuAppendText({ documentId: created.documentId, text });
@@ -3810,7 +3810,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // Resolved for real now: the parameter is `token` (the live API answered 131005 "not found" for it and a
             // validation error without it) and the node carries obj_token + obj_type (official type definitions).
             try {
-              const node = await feishuWikiResolve({ nodeToken: ref.id });
+              const node = await feishuWikiResolve({ token: await feishuToken(), nodeToken: ref.id });
               if (node.objType && node.objType !== "docx" && node.objType !== "doc") {
                 noteRoute("/feishu-doc", { action: "read", kind: "wiki", objType: node.objType });
                 return `这是知识库(wiki)里的一篇 **${node.objType}**（obj_token ${node.objToken}）✓，不是文档 ✓ —— 请用对应的工具读取（表格用 feishu_sheet_read ✓ 多维表格用 feishu_bitable_read ✓）。`;
@@ -3823,7 +3823,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             }
           }
           try {
-            const got = await feishuReadDoc({ documentId });
+            const got = await feishuReadDoc({ token: await feishuToken(), documentId });
             noteRoute("/feishu-doc", { action: "read", documentId: got.documentId, chars: got.content.length });
             return `文档 ${got.documentId}（${got.content.length} 字符）：\n\n${got.content}`;
           } catch (error) {
@@ -3849,7 +3849,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           let targetId = ref.kind === "docx" ? ref.id : "";
           if (ref.kind === "wiki") {
             try {
-              const node = await feishuWikiResolve({ nodeToken: ref.id });
+              const node = await feishuWikiResolve({ token: await feishuToken(), nodeToken: ref.id });
               if (node.objType === "docx" || node.objType === "doc") targetId = node.objToken;
               else return `wiki 节点 ${ref.id} 是 ${node.objType} ✓，不能当文档追加 ✓（表格/多维表格请用对应工具 ✓）`;
             } catch (error) {
@@ -3859,7 +3859,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!targetId) return `只能追加到文档：请给出 /docx/<id> 链接、/wiki/<id> 链接或文档 id ✗`;
           if (!text.trim()) return "nothing to append: `text` is empty";
           try {
-            const written = await feishuAppendText({ documentId: targetId, text });
+            const written = await feishuAppendText({ token: await feishuToken(), documentId: targetId, text });
             noteRoute("/feishu-doc", { action: "append", documentId: ref.id, blocks: written.blocks });
             return `已向 ${ref.id} 追加 ${written.blocks} 段 ✓（revision ${written.revisionId ?? "?"}）`;
           } catch (error) {
@@ -3887,7 +3887,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const title = String(args?.title ?? "").trim();
           if (!title) return "nothing to create: `title` is empty";
           try {
-            const made = await feishuSheetCreate({ title });
+            const made = await feishuSheetCreate({ token: await feishuToken(), title });
             noteRoute("/feishu-doc", { action: "sheet-create", spreadsheetToken: made.spreadsheetToken });
             return made.url ? `已创建表格「${made.title}」→ ${made.url}` : `已创建表格「${made.title}」（token ${made.spreadsheetToken}）✓，但 API 未返回链接`;
           } catch (error) {
@@ -3913,7 +3913,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const range = String(args?.range ?? "").trim();
           if (!range) return "nothing to read: `range` is empty";
           try {
-            const got = await feishuSheetRead({ spreadsheetToken: token_, range });
+            const got = await feishuSheetRead({ token: await feishuToken(), spreadsheetToken: token_, range });
             noteRoute("/feishu-doc", { action: "sheet-read", spreadsheetToken: token_, range: got.range, rows: got.values.length });
             return `表格 ${token_} 的 ${got.range}：\n${JSON.stringify(got.values)}`;
           } catch (error) {
@@ -3943,7 +3943,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try { rows = JSON.parse(String(args?.values ?? "")); } catch { return `values 不是合法 JSON：请给出行数组，例如 [[\"a\",\"b\"]]`; }
           if (!Array.isArray(rows) || !rows.length) return "values 必须是非空的行数组";
           try {
-            const wrote = await feishuSheetWrite({ spreadsheetToken: token_, range, values: rows });
+            const wrote = await feishuSheetWrite({ token: await feishuToken(), spreadsheetToken: token_, range, values: rows });
             noteRoute("/feishu-doc", { action: "sheet-write", spreadsheetToken: token_, range: wrote.range, updatedCells: wrote.updatedCells });
             return `已写入 ${token_} 的 ${wrote.range}：${wrote.updatedCells} 个单元格 ✓（revision ${wrote.revision ?? "?"}）`;
           } catch (error) {
@@ -3971,7 +3971,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const name = String(args?.name ?? "").trim();
           if (!name) return "nothing to create: `name` is empty";
           try {
-            const made = await feishuBitableCreate({ name });
+            const made = await feishuBitableCreate({ token: await feishuToken(), name });
             noteRoute("/feishu-doc", { action: "bitable-create", appToken: made.appToken });
             return made.url ? `已创建多维表格「${made.name}」→ ${made.url}` : `已创建多维表格「${made.name}」（app_token ${made.appToken}）✓ 但 API 未返回链接，请用该 token ✓`;
           } catch (error) {
@@ -3998,9 +3998,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try { fields = JSON.parse(String(args?.fields ?? "")); } catch { return `fields 不是合法 JSON：例如 {"文本":"hello"}`; }
           if (!fields || typeof fields !== "object" || !Object.keys(fields).length) return "fields 必须是非空对象";
           try {
-            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ appToken: app })).tableId;
+            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ token: await feishuToken(), appToken: app })).tableId;
             if (!tableId) return `多维表格 ${app} 没有可用的数据表 ✗`;
-            const wrote = await feishuBitableWrite({ appToken: app, tableId, fields });
+            const wrote = await feishuBitableWrite({ token: await feishuToken(), appToken: app, tableId, fields });
             noteRoute("/feishu-doc", { action: "bitable-write", appToken: app, tableId, recordId: wrote.recordId });
             return `已写入 ${app}/${tableId} ✓ record_id=${wrote.recordId} ✓（回显 ${JSON.stringify(wrote.fields)}）`;
           } catch (error) {
@@ -4025,9 +4025,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const app = feishuBitableTokenFrom(args?.link);
           if (!app) return `没有识别出多维表格：请给出 /base/<token> 链接或 app_token`;
           try {
-            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ appToken: app })).tableId;
+            const tableId = String(args?.tableId ?? "").trim() || (await feishuBitableTables({ token: await feishuToken(), appToken: app })).tableId;
             if (!tableId) return `多维表格 ${app} 没有可用的数据表 ✗`;
-            const got = await feishuBitableRead({ appToken: app, tableId, recordId: args?.recordId, pageSize: args?.pageSize });
+            const got = await feishuBitableRead({ token: await feishuToken(), appToken: app, tableId, recordId: args?.recordId, pageSize: args?.pageSize });
             noteRoute("/feishu-doc", { action: "bitable-read", appToken: app, tableId, records: got.items.length });
             return `多维表格 ${app}/${tableId} 的 ${got.items.length} 条记录：\n${JSON.stringify(got.items).slice(0, 4000)}`;
           } catch (error) {
