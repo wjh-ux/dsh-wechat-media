@@ -1025,6 +1025,16 @@ window.__ModuleLoader__.load({
                 disabled: busy,
                 onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuTo: event.target.value })),
               }),
+              h("input", {
+                key: "tenantHost",
+                className: "dswxInput",
+                // The host a person opens documents on. Without it a created document comes back as an id with an
+                // explanation, because a link built from the API host opens a generic page rather than the document.
+                placeholder: t("feishuTenantHost", "Tenant host, e.g. ccnje3t5tkro.feishu.cn (needed for document links)"),
+                value: feishuDraft.feishuTenantHost ?? snapshot?.feishu?.tenantHost ?? "",
+                disabled: busy,
+                onChange: (event) => setFeishuDraft((draft) => ({ ...draft, feishuTenantHost: event.target.value })),
+              }),
             ]),
             h("label", { key: "lc", className: "dswxMeta" }, [
               h("input", {

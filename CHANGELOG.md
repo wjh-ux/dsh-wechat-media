@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.23.12
+## 0.23.13
+
+- **The Web UI can set the tenant host.** A field in the Feishu block fills `feishuTenantHost`; Save submits it, and the
+  value comes back from `/state` after a reload. This is what makes a created document return as a link you can open
+  instead of an id with an explanation.
+- Added with a precise edit rather than a generated insertion: the previous attempt built the same change with a script,
+  landed inside an element, broke `client.js` and was rolled back. The same change as two exact string replacements
+  took one attempt.
+- The guard now covers the panel field as well as `/state` and the preference chain.
+- 24 suites / 420 cases.
 
 - **`/state` reports `feishu.tenantHost`.** Until now the setting existed in the config chain (saved → config →
   `FEISHU_TENANT_HOST`) but was invisible from the outside, so the Web UI could not show the saved value and a reload

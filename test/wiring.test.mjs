@@ -649,13 +649,16 @@ await test("every document tool fetches its own token", () => {
   assert.equal(tokens, 14, `every document helper call is handed a token (found ${tokens})`);
 });
 
-await test("the tenant host is configurable and reported", () => {
-  // The panel field is not in place yet (an insertion broke client.js and was rolled back), so what is asserted here
-  // is what actually exists: /state reports the setting, and the preference route accepts it. The panel field is
-  // recorded as outstanding rather than pretended.
+await test("the tenant host is configurable from the panel, the route and the environment", () => {
+  // The field exists so a created document can come back as a link a person can open: without a tenant host the tools
+  // return the id and say why, because a link built from the API host opens a generic page rather than the document.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
   assert.match(host, /tenantHost: settings\.tenantHost \|\| null/, "/state reports the tenant host");
   assert.match(host, /feishuTenantHost: "tenantHost"/, "the preference route accepts it");
   assert.match(host, /tenantHost: pick\(saved\.tenantHost, given\.tenantHost, env\.FEISHU_TENANT_HOST\)/, "saved, config or env");
+  assert.match(clientSource, /feishuTenantHost/, "the panel has a field for it");
+  assert.match(clientSource, /feishuDraft\.feishuTenantHost \?\? snapshot\?\.feishu\?\.tenantHost/, "and shows the saved value after a reload");
+  assert.match(clientSource, /feishuTenantHost: event\.target\.value/, "typing fills the draft that Save submits");
 });;
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
