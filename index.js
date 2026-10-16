@@ -24,8 +24,9 @@
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -144,6 +145,33 @@ const DEDUP_LIMIT = 500;
  * would answer twice (once through the tool, once through the relay).
  */
 const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_send_voice", "wecom_send_text", "wecom_send_file", "wecom_send_voice", "feishu_send_text", "feishu_send_file"]);
+/**
+ * Which build this process is running.
+ *
+ * A `link:`-installed plugin is edited in place, so "the files on disk" and "the code this process
+ * loaded" are two different things - and the version number alone does not say which one is live.
+ * `/state` and `/status` therefore report three facts together: the version read from this package's
+ * own `package.json`, the newest mtime among the shipped files (`builtAt`, i.e. when this build was
+ * written), and the moment this module was imported (`loadedAt`, i.e. when the host loaded it).
+ *
+ * `builtAt` earlier than `loadedAt` means the running code *is* the build on disk. A `builtAt` later
+ * than `loadedAt` means the files were edited after this process started, so a restart is owed -
+ * which used to have to be inferred from timestamps on disk and the process list.
+ */
+const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
+const LOADED_AT = new Date().toISOString();
+
+/**
+ * The one-line build report `/status` prints. Pure, and exported for that reason: the interesting
+ * case is the gap between the two timestamps - a process serving files that were edited after it
+ * started - and that case deserves a test rather than a comment.
+ */
+export function buildLineText({ version = "", builtAt = "", loadedAt = "" } = {}) {
+  const when = (iso) => (iso ? iso.replace("T", " ").slice(0, 16) : "未知");
+  const stale = Boolean(builtAt && loadedAt && builtAt > loadedAt);
+  return `版本：${version || "未知"} · 构建 ${when(builtAt)} · 加载 ${when(loadedAt)}` +
+    (stale ? "（磁盘上的文件比本进程新，重启后才生效）" : "");
+}
 
 export const name = "dsh-wechat-media";
 /** `agents` drives sessions; tools and the web server are optional per profile. */
@@ -1456,6 +1484,7 @@ export function apply(ctx, config = {}) {
         interject: (await state.loadPrefs()).interject === true,
         retry: (await state.loadPrefs()).retry !== false,
         feishuLine: feishuStatusLine(),
+        buildLine: await buildStatusLine(),
         authLine: await authStatusLine(),
         deliveryLine: await deliveryStatusLine(),
         formatLine: await formatStatusLine(),
@@ -2816,6 +2845,81 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /** One line for `/status`: which Feishu channels are configured - never a secret, only whether it is set. */
+  /**
+   * The version and build identity behind `/state` and `/status`: read once from this package's own
+   * manifest, then cached for the life of the process (a running process cannot become a different
+   * build without being restarted, which is the whole point of reporting `loadedAt`).
+   */
+  let buildIdentity;
+  async function buildInfo() {
+    buildIdentity ??= (async () => {
+      let manifest = {};
+      try {
+        manifest = JSON.parse(await readFile(join(PLUGIN_ROOT, "package.json"), "utf8"));
+      } catch (error) {
+        return {
+          version: `(package.json 读不出来：${error?.message ?? error})`,
+          builtAt: "",
+          loadedAt: LOADED_AT,
+          pluginRoot: PLUGIN_ROOT,
+        };
+      }
+      return {
+        version: typeof manifest.version === "string" ? manifest.version : "",
+        builtAt: await shippedNewestMtime(manifest),
+        loadedAt: LOADED_AT,
+        pluginRoot: PLUGIN_ROOT,
+      };
+    })();
+    return buildIdentity;
+  }
+
+  /**
+   * When this build's shipped files were last written. `files[]` names exactly what ships, so that
+   * is what is stat'ed; a manifest without it falls back to walking the directory, skipping
+   * `node_modules` and `.git`, which are never part of a build. An unreadable entry contributes
+   * nothing rather than failing `/state` - a missing timestamp is better than a missing state.
+   */
+  async function shippedNewestMtime(manifest) {
+    const stamp = async (path) => {
+      try {
+        return (await stat(path)).mtimeMs;
+      } catch {
+        return 0;
+      }
+    };
+    let newest = 0;
+    if (Array.isArray(manifest.files) && manifest.files.length > 0) {
+      for (const file of manifest.files) newest = Math.max(newest, await stamp(join(PLUGIN_ROOT, file)));
+    } else {
+      const walk = async (dir) => {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            if (entry.name === "node_modules" || entry.name === ".git") continue;
+            await walk(join(dir, entry.name));
+            continue;
+          }
+          newest = Math.max(newest, await stamp(join(dir, entry.name)));
+        }
+      };
+      try {
+        await walk(PLUGIN_ROOT);
+      } catch {
+        /* an unreadable directory reports no build time, not a broken /state */
+      }
+    }
+    return newest ? new Date(newest).toISOString() : "";
+  }
+
+  /**
+   * The `/status` line, from the same cached identity `/state` reports - so the two can never
+   * disagree about which build is running - and formatted by the exported `buildLineText`, which
+   * owns the wording and the "files are newer than this process" warning.
+   */
+  async function buildStatusLine() {
+    return buildLineText(await buildInfo());
+  }
+
   function feishuStatusLine() {
     const settings = feishuConfig();
     const channels = feishuChannels(settings);
@@ -4809,9 +4913,16 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const accounts = await state.loadAccounts();
           const prefs = await state.loadPrefs();
           const routes = await state.loadRoutes();
+          const build = await buildInfo();
           json(res, 200, {
             ok: true,
             stateRoot,
+            // Which build is answering, read from this package's manifest rather than a literal, so
+            // it cannot drift from the version that was published.
+            version: build.version,
+            builtAt: build.builtAt,
+            loadedAt: build.loadedAt,
+            pluginRoot: build.pluginRoot,
             inboxRoot: await resolvedInbox(),
             inboxRootDefault: inboxRoot(dshHome),
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,

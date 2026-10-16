@@ -193,6 +193,7 @@ function size(bytes) {
  * @param {string} [input.lastInboundAt] ISO time of the last inbound message
  * @param {string} [input.inbox] where inbound media lands
  * @param {string} [input.feishuLine] the one-line Feishu status (see index.js)
+ * @param {string} [input.buildLine] which build is answering - version, built and loaded times (see index.js)
  */
 export function statusText({
   transport,
@@ -208,6 +209,7 @@ export function statusText({
   lastInterjection = null,
   retry = true,
   feishuLine,
+  buildLine,
   authLine,
   deliveryLine,
   formatLine,
@@ -222,6 +224,9 @@ export function statusText({
     `会话：${chatId || "?"}`,
     `DSH 会话：${sessionId || "?"}${generation > 0 ? `（第 ${generation + 1} 段，/new 过的）` : ""}`,
   ];
+  // First question anyone asks about a bridge that is misbehaving: which build is this, and is it
+  // the build on disk? Answered before the counters, because a stale process explains all of them.
+  if (buildLine) lines.push(buildLine);
   const botState = bot
     ? `${bot.authenticated ? "已认证" : bot.connected ? "已连接未认证" : "未连接"}${bot.error ? `（${bot.error}）` : ""}`
     : "未配置";

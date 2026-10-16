@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.24.0
+
+- **`/state` and `/status` now say which build is answering.** A `link:`-installed plugin is edited in place, so
+  "the files on disk" and "the code this process loaded" are two different things - and the version number alone
+  cannot tell them apart. `/state` gained `version`, `builtAt`, `loadedAt` and `pluginRoot`; the chat `/status`
+  command prints the first three as one line, and adds a warning when the files are newer than the process
+  (`磁盘上的文件比本进程新，重启后才生效`). Until now that question could only be answered by comparing file mtimes
+  against process start times by hand.
+- The version comes from this package's own `package.json` - never a literal, so it cannot drift from what was
+  published - and `builtAt` is the newest mtime among the files the manifest ships. `builtAt` earlier than
+  `loadedAt` means the running code *is* the build on disk; later means a restart is owed.
+- Guards, on the record because half of this feature is easy to wire up wrong: the wiring suite asserts the field
+  is declared, rendered and fed at the call site (the v0.19.5 lesson - a parameter `statusText` does not declare is
+  dropped silently), that the version is read from the manifest rather than typed in, and that no
+  `version: "x.y.z"` literal exists in the host. The Feishu inbound suite reads `/state` through the registered
+  route and recomputes `builtAt` from the manifest, so reporting `loadedAt` instead, or only the manifest's own
+  mtime, or a constant, each fail. The warning case has its own test through the exported pure
+  `buildLineText`: a stale build is called out, an up-to-date one is not, and missing timestamps read
+  as unknown rather than as 1970.
+- 26 suites / 444 cases, none skipped. (The four voice cases skip where a machine has no speech engine and no
+  ffmpeg; in the environment this release was tested in they run, which is the whole of the difference from the
+  437/439 figures earlier entries recorded.)
+
 ## 0.23.27
 
 - **A cookbook for the Feishu half: `docs/build-a-knowledge-base.md`.** One real job, written down end to end - a
@@ -18,8 +41,7 @@
   that was accepted, not as a check.
 - A packaging test keeps the document honest: it must be listed in `files[]` and linked from the README. Falsified
   both ways (removing it from `files[]`, and removing the link) before being kept.
-- 26 suites / 437 cases, 4 more skipped here for lack of a speech engine and ffmpeg (the previous entry recorded 439
-  from a run that counted those differently; the numbers on this machine are the ones below).
+- 26 suites / 441 cases (437 passed, 4 skipped on that machine: no speech engine, no ffmpeg).
 
 ## 0.23.26
 

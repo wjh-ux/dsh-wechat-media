@@ -353,6 +353,37 @@ await test("interjection decisions are recorded, not just counted", () => {
   assert.match(host, /export function interjectReason/, "and the reason is a named function, so it can be asserted");
   assert.match(host, /no turn was running for this chat at that moment/, "the most likely reason is spelled out");
 });
+await test("the build line is declared, rendered and fed - beside the /state fields it summarises", () => {
+  // Same lesson as the interjection record above: handing statusText() a parameter it does not declare
+  // drops it silently, so both halves are asserted, plus the route those two numbers come from.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  assert.match(host, /buildLine: await buildStatusLine\(\)/, "/status is handed the build line at the call site");
+  assert.match(commandsSource, /buildLine,/, "statusText declares the parameter");
+  assert.match(commandsSource, /if \(buildLine\) lines\.push\(buildLine\)/, "and renders it");
+  assert.match(host, /version: build\.version,/, "/state carries the version");
+  assert.match(host, /builtAt: build\.builtAt,/, "and the build time");
+  // The version must be read from the manifest, not typed in: a literal cannot be checked against the
+  // published package.json, and drifts on the next release.
+  assert.match(host, /JSON\.parse\(await readFile\(join\(PLUGIN_ROOT, "package\.json"\), "utf8"\)\)/, "the version is read from this package's own manifest");
+  assert.doesNotMatch(host, /version: "\d+\.\d+\.\d+"/, "never a hard-coded version");
+});
+await test("the build line names both times, and warns when the files are newer", async () => {
+  // The whole reason the line exists: a `link:`-installed plugin keeps serving the code it loaded,
+  // so "the files changed after this process started" has to be visible rather than inferred.
+  const mod = await import("../index.js");
+  assert.equal(typeof mod.buildLineText, "function", "the formatter is exported, so it can be tested");
+  const current = mod.buildLineText({ version: "1.2.3", builtAt: "2026-10-16T10:00:00.000Z", loadedAt: "2026-10-16T11:00:00.000Z" });
+  assert.match(current, /版本：1\.2\.3/);
+  assert.match(current, /构建 2026-10-16 10:00/);
+  assert.match(current, /加载 2026-10-16 11:00/);
+  assert.doesNotMatch(current, /重启/, "a process that is up to date says nothing about restarting");
+  const stale = mod.buildLineText({ version: "1.2.3", builtAt: "2026-10-16T12:00:00.000Z", loadedAt: "2026-10-16T11:00:00.000Z" });
+  assert.match(stale, /重启后才生效/, "files newer than the process are called out");
+  // Missing timestamps are reported as unknown rather than as 1970 or an empty gap.
+  const unknown = mod.buildLineText({});
+  assert.match(unknown, /版本：未知 · 构建 未知 · 加载 未知/);
+  assert.doesNotMatch(unknown, /重启/, "and no warning is invented from nothing");
+});
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.
