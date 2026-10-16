@@ -109,6 +109,15 @@ test("the host half never statically imports a harness package", () => {
   }
 });
 
+test("the cookbook ships and the README links to it", () => {
+  // A document that is not in files[] never reaches an installed copy, and one nobody
+  // links to is never found - both are silent losses, so both are checked here.
+  const doc = "docs/build-a-knowledge-base.md";
+  assert.ok(pkg.files.includes(doc), `${doc} must be listed in package.json files[]`);
+  const readme = readFileSync(join(root, "README.md"), "utf8");
+  assert.ok(readme.includes(`./${doc}`), `README.md must link to ./${doc}`);
+});
+
 test("the patch inserts exactly one row and carries no secret", () => {
   const yaml = readFileSync(join(root, "cordis.patch.yml"), "utf8");
   const inserts = [...yaml.matchAll(/- id: ([A-Za-z0-9_-]+)/g)].map((m) => m[1]);

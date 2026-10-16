@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.23.27
+
+- **A cookbook for the Feishu half: `docs/build-a-knowledge-base.md`.** One real job, written down end to end - a
+  997-paragraph Chinese Word question bank (312 questions, no tables) parsed into structured data, deduplicated to
+  285, corrected in 64 places against the laws and the ministries' own wording, uploaded to a Feishu bitable, then
+  verified field by field (285/285) and used to answer questions inside the chat. It ships with the plugin and the
+  README links to it.
+- The parts worth reusing are spelled out rather than implied: a parser state machine for a short-answer block that
+  alternates question and answer (an "ends with ？" test silently swallowed three questions), self-checks that turn a
+  wrong answer key into a symptom you can trace, exact **and** near-duplicate detection with the human decision kept
+  in one file, six parallel review passes that report only what is not `ok`, and a bitable that arrives with four
+  default fields and no tool to add a fifth - so the fields are extended over the REST API before the first row is
+  written.
+- **Uploads are idempotent and verified.** The uploader purges existing records before writing, and a second script
+  pulls the remote table back and diffs it against the local data field by field; "code: 0" is treated as a request
+  that was accepted, not as a check.
+- A packaging test keeps the document honest: it must be listed in `files[]` and linked from the README. Falsified
+  both ways (removing it from `files[]`, and removing the link) before being kept.
+- 26 suites / 437 cases, 4 more skipped here for lack of a speech engine and ffmpeg (the previous entry recorded 439
+  from a run that counted those differently; the numbers on this machine are the ones below).
+
 ## 0.23.26
 
 - **The launch test no longer needs a browser to be installed.** It asked the machine for Chrome, which passed here and

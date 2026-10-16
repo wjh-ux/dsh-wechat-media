@@ -545,6 +545,19 @@ page, so the tools will not build a link from it. Set `tenantHost` (panel or `/p
 - The card's HTTP routes refuse anything that does not arrive over loopback.
 - **Use a spare WeChat account if you can.** Personal-account automation is at your own risk.
 
+## Cookbook / 实战文档
+
+- **[Turning a Word question bank into a Feishu bitable](./docs/build-a-knowledge-base.md)** — the whole pipeline
+  behind one real job: a 997-paragraph Word question bank (312 questions, no tables) parsed into structured data,
+  deduplicated to 285, corrected in 64 places against the law and the ministries' own wording, uploaded to a
+  Feishu bitable, verified field by field, and then used to answer questions inside the chat. It records the
+  mistakes as well as the method: soft line breaks that shift paragraph numbers, short-answer blocks that defeat a
+  "ends with ？" test, a bitable that ships with four default fields and no tool to add more, and absolute wording
+  ("all", "only", "every") as the best detector of a question whose premise does not hold.
+
+  一份 Word 题库从解析、查重、并行事实复核、写入飞书多维表格到逐字段回读校验的完整记录，附带 9 个可复用的
+  脚本骨架和这次踩过的坑。
+
 ## Prior art / 相关工作
 
 This is not the first WeChat bridge for dsh, and the protocol work stands on Tencent's own MIT-licensed
