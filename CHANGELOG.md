@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.23.23
+## 0.23.24
+
+- **`/state` reports a saved Tavily key from startup.** Only the Feishu cache was warmed when the plugin started, so
+  `/state` reported `keySet: false` - and appeared to have lost the key - until the first search happened to refresh the
+  cache. The saved key was never lost; the reported state was stale. Startup now warms every cache `/state` reads, in
+  one chain, each refresh before the long connection starts.
+- The two guards that pinned the old startup *adjacency* were rewritten as properties ("the saved settings are refreshed
+  before the connection starts"), and a new guard asserts that all three caches are warmed at startup. Both falsified:
+  moving the connection first, or warming only Feishu, fails them.
+- 26 suites / 439 cases.
 
 - **Browser automation for the chat channels.** Six tools - `browser_open`, `browser_text`, `browser_click`,
   `browser_type`, `browser_screenshot`, `browser_close` - drive a real browser over the Chrome DevTools Protocol, with

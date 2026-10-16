@@ -3282,7 +3282,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // `/state` and the long connection all read it synchronously - so the connection is started *after*
   // the cache is warm, never in parallel with it. `apply` itself is synchronous, hence the chain.
   const startFeishuAfterPrefs = () => {
-    void refreshFeishuSavedPrefs()
+    // Every cache that `/state` reads is warmed here too, in one chain. Warming only Feishu meant `/state` reported a
+    // saved Tavily key as unset until the first search refreshed it, which read as a lost key rather than a stale cache.
+    void refreshTavilySavedPrefs()
+      .then(() => refreshBrowserSavedPrefs())
+      .then(() => refreshFeishuSavedPrefs())
       .then(() => startFeishuLongConnection())
       .catch((error) => ctx.logger?.warn?.("[dsh-wechat-media] could not start the feishu long connection: %s", error?.message ?? error));
   };

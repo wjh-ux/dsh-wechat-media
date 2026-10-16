@@ -427,7 +427,10 @@ await test("the Feishu receive half is wired, end to end", () => {
   // The start must wait for the saved settings to be in the cache: `feishuConfig()` is synchronous and
   // the settings the panel saved (v0.23.0) live in prefs, so starting in parallel with the load would
   // connect with the config/env values and report the panel's settings as absent.
-  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{\s*\n\s*void refreshFeishuSavedPrefs\(\)\s*\n\s*\.then\(\(\) => startFeishuLongConnection\(\)\)/, "the saved settings are loaded before the connection starts");
+  // Property rather than adjacency: the saved settings must be refreshed *before* the connection starts. Pinning the
+  // next line meant that adding another cache to the startup chain read as a broken startup. Falsifiable: move the
+  // connection before the refreshes and this fails.
+  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{[\s\S]*?refreshFeishuSavedPrefs\(\)[\s\S]*?startFeishuLongConnection\(\)/, "the saved settings are loaded before the connection starts");
   assert.match(host, /async function refreshFeishuSavedPrefs\(/, "the cache has one writer");
   assert.match(host, /connection\.onEvent\(/, "events are handed to the connection");
   assert.match(host, /async function handleFeishuEvent\(appId, event\)/, "and answered by a handler that reports its own failures");
@@ -473,7 +476,7 @@ await test("the panel can configure Feishu without setx and without a restart", 
   assert.match(host, /const applied = await applyFeishuPrefs\(args\);/, "/panel uses the same path");
   assert.match(host, /await state\.savePrefs\(\{ feishu: result\.patch \}\);/, "the settings are saved in prefs");
   assert.match(host, /await startFeishuLongConnection\(\{ force: true \}\)/, "saving restarts the long connection");
-  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{\s*\n\s*void refreshFeishuSavedPrefs\(\)/, "and startup loads the saved settings first");
+  assert.match(host, /const startFeishuAfterPrefs = \(\) => \{[\s\S]*?refreshFeishuSavedPrefs\(\)[\s\S]*?startFeishuLongConnection\(\)/, "and startup loads the saved settings first");
   // Secrets never travel back: one redaction helper, used by every route that returns prefs.
   assert.match(host, /function publicPrefs\(prefs = \{\}\) \{/, "there is one redaction helper");
   // Counted rather than pinned, and limited to responses: the number of routes returning prefs grew when the Tavily

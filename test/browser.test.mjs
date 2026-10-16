@@ -218,6 +218,19 @@ await test("the six browser tools exist, share one session, and never fail silen
   assert.match(host, /join\(await resolvedInbox\(\), "browser"\)/, "a screenshot lands in the shared inbox");
 });
 
+// Startup must warm every cache `/state` reads, not just Feishu's. The bug this guards: only Feishu's cache was warmed,
+// so `/state` reported a saved Tavily key as unset until the first search refreshed it, which read as a lost key. The
+// order matters as much as the presence: each refresh must precede the connection.
+await test("startup warms every cache /state reads, not just Feishu's", () => {
+  const start = host.indexOf("const startFeishuAfterPrefs");
+  assert.ok(start > 0, "the startup chain exists");
+  const chain = host.slice(start, start + 900);
+  for (const name of ["refreshTavilySavedPrefs", "refreshBrowserSavedPrefs", "refreshFeishuSavedPrefs"]) {
+    assert.ok(chain.includes(name), `${name} runs at startup`);
+    assert.ok(chain.indexOf(name) < chain.indexOf("startFeishuLongConnection"), `${name} is warm before the connection starts`);
+  }
+});
+
 await test("the browser settings reach the panel, the route and the environment", () => {
   assert.match(host, /browser: browserState\(\),/, "/state reports the browser settings");
   assert.match(host, /const browserPatch = browserPrefsPatch/, "/prefs accepts them");
