@@ -117,7 +117,9 @@ await test("the Tavily key is redacted by every reader, including when no Feishu
 
 await test("the tool is registered, refreshes before each call, and reports failures", () => {
   assert.match(host, /name: "tavily_search"/, "the tool exists");
-  assert.match(host, /feishuBitableReadTool, tavilySearchTool\]\)/, "and it is registered with the harness");
+  // Registered inside the loop that hands tools to the harness, without pinning the neighbours: the exact-string form
+  // went stale the moment the browser tools were added - the same brittleness that has now bitten four times today.
+  assert.match(host, /for \(const definition of \[[^\]]*tavilySearchTool[^\]]*\]\)/, "and it is registered with the harness");
   assert.match(host, /await refreshTavilySavedPrefs\(\);/, "it re-reads the saved settings before searching");
   // The reason has to be in the message: asserting only that "Tavily 搜索失败" appears passed even after the
   // `${error?.message}` was removed, which falsification caught. A failure that says nothing is the thing to avoid.

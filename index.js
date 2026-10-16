@@ -2570,6 +2570,96 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return { changed: result.changed, tavily: tavilyState() };
   }
 
+  /** The browser settings saved in prefs, cached the same way the others are. */
+  let browserSavedPrefs = {};
+
+  /** Re-read the saved browser settings. */
+  async function refreshBrowserSavedPrefs() {
+    try {
+      const prefs = await state.loadPrefs();
+      browserSavedPrefs = prefs?.browser && typeof prefs.browser === "object" ? prefs.browser : {};
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not read the saved browser settings: %s", error?.message ?? error);
+      browserSavedPrefs = {};
+    }
+    return browserSavedPrefs;
+  }
+
+  /**
+   * The browser settings in force: what the panel saved first, then `config.browser`, then the environment. The default
+   * profile lives under $DSH_HOME, so the plugin never touches the profile a person actually browses with.
+   */
+  function browserConfig() {
+    const given = config.browser ?? {};
+    const saved = browserSavedPrefs ?? {};
+    const pick = (...values) => {
+      for (const value of values) {
+        const text = String(value ?? "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+    const savedHeadless = saved.headless;
+    return {
+      channel: (pick(saved.channel, given.channel, process.env.DSH_BROWSER_CHANNEL) || "chrome").toLowerCase(),
+      port: Number(pick(saved.port, given.port, process.env.DSH_BROWSER_PORT)) || 9222,
+      headless: savedHeadless === true || savedHeadless === false
+        ? savedHeadless
+        : !(given.headless === false || String(process.env.DSH_BROWSER_HEADLESS ?? "").toLowerCase() === "false"),
+      profileDir: pick(saved.profileDir, given.profileDir, process.env.DSH_BROWSER_PROFILE) || join(dshHome, "browser-profile"),
+    };
+  }
+
+  /** The browser fields a route may set, and the booleans among them. */
+  const BROWSER_PREF_FIELDS = Object.freeze({
+    browserChannel: "channel",
+    browserPort: "port",
+    browserProfileDir: "profileDir",
+  });
+  const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless" });
+
+  /** Apply the browser fields from a request body; a boolean field is read as a boolean, not as the string "false". */
+  function browserPrefsPatch(args = {}) {
+    const patch = {};
+    const changed = [];
+    for (const [field, key] of Object.entries(BROWSER_PREF_FIELDS)) {
+      if (args[field] === undefined) continue;
+      patch[key] = String(args[field] ?? "").trim();
+      changed.push(key);
+    }
+    for (const [field, key] of Object.entries(BROWSER_PREF_SWITCHES)) {
+      if (args[field] === undefined) continue;
+      patch[key] = args[field] === true || String(args[field]).toLowerCase() === "true";
+      changed.push(key);
+    }
+    return { patch, changed };
+  }
+
+  /** What a reader may know about the browser settings. */
+  function browserState() {
+    const settings = browserConfig();
+    const saved = browserSavedPrefs ?? {};
+    const given = config.browser ?? {};
+    const source = (key) => (saved[key] !== undefined && saved[key] !== "" ? "saved" : given[key] !== undefined && given[key] !== "" ? "config" : "env");
+    return {
+      channel: settings.channel,
+      port: settings.port,
+      headless: settings.headless,
+      profileDir: settings.profileDir,
+      sources: { channel: source("channel"), port: source("port"), headless: source("headless"), profileDir: source("profileDir") },
+      prefFields: [...Object.keys(BROWSER_PREF_FIELDS), ...Object.keys(BROWSER_PREF_SWITCHES)],
+    };
+  }
+
+  /** Apply a browser patch. Nothing to reconnect: the next browser action reads the refreshed settings. */
+  async function applyBrowserPrefs(args = {}) {
+    const result = browserPrefsPatch(args);
+    if (!result.changed.length) return { changed: [], browser: browserState() };
+    await state.savePrefs({ browser: result.patch });
+    await refreshBrowserSavedPrefs();
+    return { changed: result.changed, browser: browserState() };
+  }
+
   /** Which Feishu channels this machine can actually use, and which one is missing. */
   function feishuChannels(settings = feishuConfig()) {
     const app = Boolean(settings.appId && settings.appSecret);
@@ -4298,7 +4388,138 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       });
 
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool]) {
+      // ── Browser tools ───────────────────────────────────────────────────────────────────────────────────────
+      // One session for the plugin: `browser_open` starts one (or attaches to an already-listening port), the other
+      // tools act on that same page, and `browser_close` ends it. Without a shared session every tool would start its
+      // own browser and nothing would connect.
+      let browserLive = null;
+
+      /** Bring up (or reuse) the browser and its page session. */
+      async function browserEnsure() {
+        const mod = await import("./browser.js");
+        const settings = browserConfig();
+        if (browserLive?.session) return { mod, settings, live: browserLive };
+        let pid = null;
+        let started = false;
+        try {
+          // Something already listening on the port is attached to rather than duplicated.
+          await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
+        } catch {
+          const launched = await mod.browserLaunch({ channel: settings.channel, port: settings.port, headless: settings.headless, profileDir: settings.profileDir });
+          pid = launched.pid ?? null;
+          started = true;
+        }
+        const page = await mod.browserPageTarget({ port: settings.port });
+        const session = mod.createCdpSession(page.webSocketDebuggerUrl);
+        await session.ready;
+        await session.send("Page.enable");
+        browserLive = { session, port: settings.port, pid, started, url: String(page.url ?? "") };
+        return { mod, settings, live: browserLive };
+      }
+
+      /** Wrap a tool body so a failure always comes back as a sentence with the reason in it. */
+      const browserTool = (name, description, parameters, run, timeoutMs = 180000) => define({
+        name,
+        description,
+        parameters,
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs,
+        async execute(args) {
+          try {
+            const answer = await run(args ?? {});
+            noteRoute("/browser", { action: name, ok: true });
+            return answer;
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/browser", { action: name, ok: false, error: reason });
+            return `${name} 失败：${reason}`;
+          }
+        },
+      });
+
+      const browserOpenTool = browserTool(
+        "browser_open",
+        "Open a URL in a real browser (the machine's own Chrome or Edge, with its own profile) and return the page title. Later browser_* calls act on the same page.",
+        { url: { type: "string", required: true, description: "http:// or https:// address to open." } },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const url = String(args.url ?? "").trim();
+          if (!url) throw new Error("需要一个 url");
+          const opened = await mod.browserOpen(live.session, url);
+          live.url = opened.url;
+          return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${live.started ? "" : "（接管了端口 " + live.port + " 上已开的浏览器）"}`;
+        },
+      );
+
+      const browserTextTool = browserTool(
+        "browser_text",
+        "Read the current page's title and visible text. Use it after browser_open.",
+        { maxChars: { type: "number", description: "How much text to return (default 4000, max 20000)." } },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const read = await mod.browserText(live.session, { maxChars: args.maxChars });
+          return `${read.title || "（无标题）"}\n${read.url}\n\n${read.text}${read.truncated ? "\n…（已截断，可加大 maxChars）" : ""}`;
+        },
+      );
+
+      const browserClickTool = browserTool(
+        "browser_click",
+        "Click an element on the current page by CSS selector.",
+        { selector: { type: "string", required: true, description: "CSS selector, e.g. \"#submit\" or \"a.more\"." } },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const clicked = await mod.browserClick(live.session, args.selector);
+          return `已点击 ${clicked.selector}（坐标 ${clicked.x},${clicked.y}${clicked.text ? `，元素文字：${clicked.text}` : ""}）`;
+        },
+      );
+
+      const browserTypeTool = browserTool(
+        "browser_type",
+        "Type text into an element on the current page, by CSS selector.",
+        {
+          selector: { type: "string", required: true, description: "CSS selector of the input." },
+          text: { type: "string", required: true, description: "Text to type." },
+        },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const typed = await mod.browserType(live.session, args.selector, args.text);
+          return `已向 ${typed.selector} 输入 ${typed.chars} 个字符`;
+        },
+      );
+
+      const browserScreenshotTool = browserTool(
+        "browser_screenshot",
+        "Take a PNG screenshot of the current page, save it into the shared inbox and return its path. Send it to the chat afterwards with the matching send tool.",
+        { fileName: { type: "string", description: "Optional file name; a timestamped one is used otherwise." } },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const bytes = await mod.browserScreenshot(live.session);
+          const { mkdir } = await import("node:fs/promises");
+          const dir = join(await resolvedInbox(), "browser");
+          await mkdir(dir, { recursive: true });
+          const name = String(args.fileName ?? "").trim() || `page-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+          const target = join(dir, name.endsWith(".png") ? name : `${name}.png`);
+          await writeFile(target, bytes);
+          return `截图已保存：${target}（${bytes.length} 字节，PNG）✓ 用 wechat_send_file / wecom_send_file / feishu_send_file 就能发到聊天里 ✓`;
+        },
+      );
+
+      const browserCloseTool = browserTool(
+        "browser_close",
+        "Close the browser session this plugin opened. A browser it merely attached to is left running.",
+        {},
+        async () => {
+          if (!browserLive) return "当前没有浏览器会话（无需关闭）";
+          const { session, pid, started, port } = browserLive;
+          try { session.close(); } catch { /* already gone */ }
+          browserLive = null;
+          if (!started) return `已断开与端口 ${port} 上浏览器的连接（那是你自己开的，我没有关它 ✓）`;
+          try { process.kill(pid); } catch { /* already gone */ }
+          return `已关闭本次启动的浏览器（pid ${pid}）✓`;
+        },
+      );
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -4616,6 +4837,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             feishu: await feishuState(),
             // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
             tavily: tavilyState(),
+            browser: browserState(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),
@@ -4798,6 +5020,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (applied.error) return json(res, 400, { error: applied.error });
             const prefsAfter = await state.savePrefs({});
             return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), tavily: applied.tavily, tavilyChanged: applied.changed });
+          }
+          // The browser block saves the same way and likewise needs no reconnect: the next browser action reads the
+          // refreshed settings. Its switch (headless) goes through the boolean rules, not the string ones.
+          const browserArgs = Object.fromEntries(
+            Object.keys({ ...BROWSER_PREF_FIELDS, ...BROWSER_PREF_SWITCHES }).map((field) => [field, body[field]]),
+          );
+          const browserPatch = browserPrefsPatch(browserArgs);
+          if (browserPatch.changed.length) {
+            const applied = await applyBrowserPrefs(browserArgs);
+            const prefsAfter = await state.savePrefs({});
+            return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), browser: applied.browser, browserChanged: applied.changed });
           }
           if (body.format !== undefined && body.format !== "") {
             const mode = String(body.format).trim().toLowerCase();

@@ -344,6 +344,9 @@ window.__ModuleLoader__.load({
       // Tavily keeps its own draft and notice, for the same reason: none of it is a Feishu preference either.
       const [tavilyDraft, setTavilyDraft] = react.useState({});
       const [tavilyNotice, setTavilyNotice] = react.useState(undefined);
+      // The browser block does the same: channel/port/profile/headless are its own, not Feishu's.
+      const [browserDraft, setBrowserDraft] = react.useState({});
+      const [browserNotice, setBrowserNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
         const t = (key, fallback) => {
@@ -1231,6 +1234,78 @@ window.__ModuleLoader__.load({
             h("p", { key: "tavilystate", className: "dswxMeta" }, snapshot?.tavily
               ? `Tavily：${snapshot.tavily.keySet ? "已设置 key" : "免密钥模式"} · 结果条数 ${snapshot.tavily.maxResults} · 深度 ${snapshot.tavily.searchDepth}`
               : "Tavily：状态未知"),
+            // Browser automation: the machine's own Chrome or Edge, driven over CDP. No download, no npm install, and a
+            // profile of its own under $DSH_HOME so the browser a person actually uses is never touched.
+            h("p", { key: "browserlabel", className: "dswxMeta" }, t("browserLabel", "浏览器自动化（微信 / 企业微信 / 飞书 会话可用）")),
+            h("div", { key: "browserrow", className: "dswxRow" }, [
+              h("select", {
+                key: "channel",
+                className: "dswxInput",
+                value: browserDraft.browserChannel ?? snapshot?.browser?.channel ?? "chrome",
+                disabled: busy,
+                onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserChannel: event.target.value })),
+              }, [
+                h("option", { key: "chrome", value: "chrome" }, "Chrome"),
+                h("option", { key: "edge", value: "edge" }, "Edge"),
+              ]),
+              h("input", {
+                key: "port",
+                className: "dswxInput",
+                placeholder: t("browserPort", "调试端口（默认 9222）"),
+                defaultValue: String(snapshot?.browser?.port ?? ""),
+                disabled: busy,
+                onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserPort: event.target.value })),
+              }),
+              h("input", {
+                key: "profile",
+                className: "dswxInput",
+                placeholder: t("browserProfile", "配置目录（默认 $DSH_HOME/browser-profile）"),
+                defaultValue: String(snapshot?.browser?.profileDir ?? ""),
+                disabled: busy,
+                onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProfileDir: event.target.value })),
+              }),
+              h("label", { key: "headless", className: "dswxMeta" }, [
+                h("input", {
+                  key: "h",
+                  type: "checkbox",
+                  disabled: busy,
+                  checked: (browserDraft.browserHeadless ?? (snapshot?.browser?.headless !== false ? "true" : "false")) === "true",
+                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserHeadless: event.target.checked ? "true" : "false" })),
+                }),
+                t("browserHeadless", " 无头运行（不弹窗口）"),
+              ]),
+              h("button", {
+                key: "save",
+                type: "button",
+                className: "dswxBtn dswxPrimary",
+                disabled: busy,
+                onClick: async () => {
+                  const params = new URLSearchParams();
+                  for (const [field, value] of Object.entries(browserDraft)) {
+                    if (String(value ?? "").trim()) params.set(field, String(value));
+                  }
+                  if (![...params.keys()].length) {
+                    setBrowserNotice({ ok: false, text: "没有要保存的内容" });
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const applied = await api(`/prefs?${params.toString()}`);
+                    setBrowserDraft({});
+                    setBrowserNotice({ ok: true, text: `已保存（${(applied?.browserChanged ?? []).join("、") || "无变化"}）✓ 下一次浏览器动作即生效，不用重启 ✓` });
+                    await refresh();
+                  } catch (problem) {
+                    setBrowserNotice({ ok: false, text: `保存失败：${String(problem?.message ?? problem)}` });
+                  } finally {
+                    setBusy(false);
+                  }
+                },
+              }, t("browserSave", "保存浏览器设置")),
+            ]),
+            browserNotice ? h("p", { key: "browsernotice", className: "dswxMsg" }, browserNotice.text) : null,
+            h("p", { key: "browserstate", className: "dswxMeta" }, snapshot?.browser
+              ? `浏览器：${snapshot.browser.channel} · 端口 ${snapshot.browser.port} · ${snapshot.browser.headless ? "无头" : "有窗口"} · 配置目录 ${snapshot.browser.profileDir}`
+              : "浏览器：状态未知（重启后可见）"),
             Object.keys(feishuDraft).length
               ? h("p", { key: "unsaved", className: "dswxMeta" }, t("feishuUnsaved", "有未保存的改动 - 点 Save 才生效"))
               : null,

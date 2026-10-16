@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.23.22
+## 0.23.23
+
+- **Browser automation for the chat channels.** Six tools - `browser_open`, `browser_text`, `browser_click`,
+  `browser_type`, `browser_screenshot`, `browser_close` - drive a real browser over the Chrome DevTools Protocol, with
+  **no third-party dependency**: Node's own global WebSocket carries CDP. Verified live against Chrome 155: a page of
+  its own received typed input (17 and 25) and a real mouse click, and computed 42 by itself.
+- It uses the Chrome or Edge already on the machine and a **profile of its own** under `$DSH_HOME/browser-profile`, so
+  the browser a person actually browses with is never touched. Nothing to install: no npx, no npm install, no config
+  file - the panel picks the channel, the port and whether it runs headless.
+- `browser_screenshot` saves the PNG into the shared inbox and returns its path, so the picture can be sent straight to
+  WeChat, WeCom or Feishu: verified end to end (68,561-byte PNG delivered).
+- Every failure states its reason (`browser_click 失败：nothing on the page matches the selector "…"`) and is recorded
+  on the `/browser` route log.
+- Guards for the shared session, the inbox path and the reason in every failure - each falsified.
+- 26 suites / 438 cases.
 
 - **Tavily web search for the chat channels.** A `tavily_search` tool lets a WeChat / WeCom / Feishu conversation ask
   about something current and get real titles, links and snippets back. Every shape was copied from the user's own
