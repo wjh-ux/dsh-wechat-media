@@ -45,19 +45,23 @@ await test("launching waits for the port and reports where the browser is", asyn
   const spawnImpl = (file, args, options) => { spawned.push({ file, args, options }); return { pid: 4242, unref() {} }; };
   let attempts = 0;
   const fetchImpl = async () => { attempts += 1; if (attempts < 2) throw new Error("ECONNREFUSED"); return { ok: true, status: 200, json: async () => ({ Browser: "Chrome/155" }) }; };
-  const launched = await browserLaunch({ channel: "chrome", port: 9333, headless: true, profileDir: "C:\\tmp\\dsh-profile", spawnImpl, fetchImpl });
+  // The profile goes under the system temp directory. A hard-coded `C:\tmp\...` passed on a machine whose user can
+  // write to the root of C: and failed on the CI runner, whose user cannot - so the test was asserting the
+  // environment rather than the code. Falsifiable: point it back at a directory that cannot be created and this fails.
+  const profileDir = joinPath(process.env.TEMP || process.env.TMPDIR || "/tmp", "dsh-browser-test-profile");
+  const launched = await browserLaunch({ channel: "chrome", port: 9333, headless: true, profileDir, spawnImpl, fetchImpl });
   assert.equal(launched.pid, 4242);
   assert.equal(launched.port, 9333);
   assert.ok(attempts >= 2, "it retried until the port answered");
   const args = spawned[0].args.join(" ");
   assert.match(args, /--remote-debugging-port=9333/, "the port is passed");
-  assert.match(args, /--user-data-dir=C:\\tmp\\dsh-profile/, "the dedicated profile is passed");
+  assert.ok(args.includes(`--user-data-dir=${profileDir}`), "the dedicated profile is passed");
   assert.match(args, /--headless=new/, "headless when asked");
   assert.match(args, /--no-first-run/, "and it does not touch first-run state");
   assert.ok(args.endsWith("about:blank"), "it opens a blank page to have a target");
 
   // A browser that never answers must fail with the reason, not hang.
-  await assert.rejects(() => browserLaunch({ channel: "chrome", port: 9334, profileDir: "C:\\tmp\\x", spawnImpl, fetchImpl: async () => { throw new Error("ECONNREFUSED"); }, waitMs: 600 }), /never answered within 600ms/);
+  await assert.rejects(() => browserLaunch({ channel: "chrome", port: 9334, profileDir: joinPath(profileDir, "second"), spawnImpl, fetchImpl: async () => { throw new Error("ECONNREFUSED"); }, waitMs: 600 }), /never answered within 600ms/);
   assert.ok(spawned.length >= 2);
 });
 

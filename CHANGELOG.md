@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.23.24
+## 0.23.25
+
+- **The browser suite no longer assumes it can write to the root of `C:`.** One test passed a hard-coded `C:\tmp\...`
+  as the browser profile, which this machine's user can create and the CI runner's user cannot - so `Run every suite`
+  failed on CI while passing locally. The profile now comes from the system temp directory and the assertion compares
+  against the path actually used, so the test checks the code instead of the environment.
+- 26 suites / 439 cases.
 
 - **`/state` reports a saved Tavily key from startup.** Only the Feishu cache was warmed when the plugin started, so
   `/state` reported `keySet: false` - and appeared to have lost the key - until the first search happened to refresh the
