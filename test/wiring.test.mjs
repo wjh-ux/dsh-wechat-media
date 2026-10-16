@@ -363,9 +363,16 @@ await test("the build line is declared, rendered and fed - beside the /state fie
   assert.match(host, /version: build\.version,/, "/state carries the version");
   assert.match(host, /builtAt: build\.builtAt,/, "and the build time");
   // The version must be read from the manifest, not typed in: a literal cannot be checked against the
-  // published package.json, and drifts on the next release.
-  assert.match(host, /JSON\.parse\(await readFile\(join\(PLUGIN_ROOT, "package\.json"\), "utf8"\)\)/, "the version is read from this package's own manifest");
+  // published package.json, and drifts on the next release. It is read at import time, so it describes
+  // the loaded code - hence the ordering assertion rather than just a match.
+  assert.match(host, /JSON\.parse\(readFileSync\(join\(PLUGIN_ROOT, "package\.json"\), "utf8"\)\)/, "the version is read from this package's own manifest");
+  const readAt = host.indexOf('readFileSync(join(PLUGIN_ROOT, "package.json")');
+  assert.ok(readAt > -1 && readAt < host.indexOf("export const name"), "and read at import time, so it describes the code that is running");
   assert.doesNotMatch(host, /version: "\d+\.\d+\.\d+"/, "never a hard-coded version");
+  // builtAt, by contrast, must NOT be cached: a cached one answers with the disk as it looked when the
+  // first caller asked, which hides the very case this feature exists to expose.
+  assert.doesNotMatch(host, /buildIdentity\s*\?\?=/, "the identity is not memoised");
+  assert.match(host, /builtAt: await shippedNewestMtime\(MANIFEST\),/, "builtAt is computed per request");
 });
 await test("the build line names both times, and warns when the files are newer", async () => {
   // The whole reason the line exists: a `link:`-installed plugin keeps serving the code it loaded,

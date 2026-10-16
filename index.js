@@ -24,6 +24,7 @@
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,6 +161,19 @@ const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_
  */
 const PLUGIN_ROOT = dirname(fileURLToPath(import.meta.url));
 const LOADED_AT = new Date().toISOString();
+/**
+ * The manifest this process loaded, read at import time on purpose: `version` has to describe the code
+ * that is running, not the manifest that happens to be on disk when someone asks. It is the only
+ * synchronous read in this file - a top-level `await` would make the whole plugin module async, which
+ * is a much larger change than this field is worth.
+ */
+const MANIFEST = (() => {
+  try {
+    return JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
+})();
 
 /**
  * The one-line build report `/status` prints. Pure, and exported for that reason: the interesting
@@ -2857,32 +2871,31 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
   /** One line for `/status`: which Feishu channels are configured - never a secret, only whether it is set. */
   /**
-   * The version and build identity behind `/state` and `/status`: read once from this package's own
-   * manifest, then cached for the life of the process (a running process cannot become a different
-   * build without being restarted, which is the whole point of reporting `loadedAt`).
+   * The version and build identity behind `/state` and `/status`.
+   *
+   * `version` and `loadedAt` are fixed for the life of the process - the loaded code cannot change
+   * without a restart, which is the whole point of reporting `loadedAt` - but `builtAt` is recomputed
+   * on **every** request, and that asymmetry is deliberate. The first version of this cached the whole
+   * object, which meant a process that started at 20:04 kept answering "the build is from 20:02" after
+   * the files were replaced at 20:15: it reported the state of the disk as it was when someone first
+   * asked, which is the one moment the answer is guaranteed to be uninteresting. A live `builtAt` is
+   * what makes `builtAt > loadedAt` mean "the files are newer than this process".
    */
-  let buildIdentity;
   async function buildInfo() {
-    buildIdentity ??= (async () => {
-      let manifest = {};
-      try {
-        manifest = JSON.parse(await readFile(join(PLUGIN_ROOT, "package.json"), "utf8"));
-      } catch (error) {
-        return {
-          version: `(package.json 读不出来：${error?.message ?? error})`,
-          builtAt: "",
-          loadedAt: LOADED_AT,
-          pluginRoot: PLUGIN_ROOT,
-        };
-      }
+    if (!MANIFEST) {
       return {
-        version: typeof manifest.version === "string" ? manifest.version : "",
-        builtAt: await shippedNewestMtime(manifest),
+        version: "(package.json 读不出来)",
+        builtAt: "",
         loadedAt: LOADED_AT,
         pluginRoot: PLUGIN_ROOT,
       };
-    })();
-    return buildIdentity;
+    }
+    return {
+      version: typeof MANIFEST.version === "string" ? MANIFEST.version : "",
+      builtAt: await shippedNewestMtime(MANIFEST),
+      loadedAt: LOADED_AT,
+      pluginRoot: PLUGIN_ROOT,
+    };
   }
 
   /**

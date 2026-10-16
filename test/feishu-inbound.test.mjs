@@ -14,7 +14,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -665,6 +665,32 @@ await test("/state says which build is answering, and where it was loaded from",
     assert.equal(state.builtAt, new Date(newest).toISOString(), "builtAt is the newest shipped mtime");
     assert.ok(Date.parse(state.builtAt) >= Math.floor(manifestMtime), "which covers package.json itself");
   } finally {
+    await app.close();
+  }
+});
+
+await test("builtAt is computed when asked, not remembered from the first request", async () => {
+  // The failure this exists for: a process that started at 20:04 reported the build time it saw when
+  // /state was first called, so a build synced at 20:15 stayed invisible - exactly the staleness the
+  // field is supposed to reveal. One shipped file's mtime is moved forward, /state is read again, and
+  // the original mtime is put back, so nothing but the answer is affected.
+  const file = join(pluginRoot, "docs/build-a-knowledge-base.md");
+  const originalMtime = statSync(file).mtime;
+  const app = await boot();
+  try {
+    const before = await app.readState();
+    const bumped = new Date(Date.now() + 60_000);
+    await utimes(file, originalMtime, bumped);
+    const after = await app.readState();
+    assert.notEqual(after.builtAt, before.builtAt, "a file written after the first read must move builtAt");
+    assert.ok(
+      Math.abs(Date.parse(after.builtAt) - bumped.getTime()) < 1000,
+      `builtAt should follow the newest shipped file, got ${after.builtAt}`,
+    );
+    assert.equal(after.loadedAt, before.loadedAt, "while loadedAt stays fixed: only a restart changes it");
+    assert.equal(after.version, before.version, "and so does the version of the loaded code");
+  } finally {
+    await utimes(file, originalMtime, originalMtime);
     await app.close();
   }
 });

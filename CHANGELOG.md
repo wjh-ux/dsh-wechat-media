@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.24.2
+
+- **`builtAt` is computed when it is asked for, not remembered from the first request.** v0.24.0 memoised the
+  whole build identity, so a process that started at 20:04 kept answering "the build is from 20:02" after the files
+  were replaced at 20:15 - it reported the disk as it looked the first time anyone asked, which is the one moment
+  the answer is guaranteed to be uninteresting. `builtAt` now stats the shipped files on every `/state` request, so
+  `builtAt > loadedAt` really does mean "the files are newer than this process".
+- **`version` is read at import time instead of on first use**, for the opposite reason: it has to describe the code
+  that is running. It is the file's only synchronous read, because a top-level `await` would make the whole plugin
+  module async. `loadedAt` stays fixed for the same reason as before.
+- Guards: the Feishu inbound suite now moves a shipped file's mtime forward, reads `/state` again, and asserts
+  `builtAt` followed it while `version` and `loadedAt` did not - then puts the original mtime back. A memoised
+  `builtAt` turns that red; so does reporting `loadedAt` in its place. Six guards in total were falsified for this
+  feature, each restored byte-identical afterwards.
+- 26 suites / 445 cases.
+
 ## 0.24.1
 
 - **The `/status` build line renders its two timestamps in local time.** v0.24.0 sliced the ISO string, so on a
