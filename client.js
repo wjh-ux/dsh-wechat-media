@@ -336,11 +336,14 @@ window.__ModuleLoader__.load({
       const [feishuDraft, setFeishuDraft] = react.useState({});
       // The block reports its own outcome: a page-level banner is easy to miss, and "did my Save do
       // anything?" is exactly the question this panel exists to answer.
+      const [feishuNotice, setFeishuNotice] = react.useState(undefined);
       // The document/spreadsheet operations area keeps its own scratch state: none of it is a preference, so it must
       // not ride along with the settings draft that Save submits.
       const [feishuOps, setFeishuOps] = react.useState({ action: "create", link: "", range: "", text: "", result: "", ok: null });
       const [feishuOpsBusy, setFeishuOpsBusy] = react.useState(false);
-      const [feishuNotice, setFeishuNotice] = react.useState(undefined);
+      // Tavily keeps its own draft and notice, for the same reason: none of it is a Feishu preference either.
+      const [tavilyDraft, setTavilyDraft] = react.useState({});
+      const [tavilyNotice, setTavilyNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
         const t = (key, fallback) => {
@@ -1166,6 +1169,68 @@ window.__ModuleLoader__.load({
             feishuNotice
               ? h("p", { key: "notice", className: "dswxMsg" }, feishuNotice.text)
               : null,
+            // Tavily: web search for the chat channels. The key is never echoed back - the panel can say whether one is
+            // set and nothing more - and a blank field is never submitted, so a saved key cannot be wiped by accident.
+            h("p", { key: "tavilylabel", className: "dswxMeta" }, t("tavilyLabel", "Tavily 联网搜索（微信 / 企业微信 / 飞书 会话可用）")),
+            h("div", { key: "tavilyrow", className: "dswxRow" }, [
+              h("input", {
+                key: "key",
+                type: "password",
+                className: "dswxInput",
+                placeholder: snapshot?.tavily?.keySet
+                  ? t("tavilyKeySet", "已设置（留空则不修改）")
+                  : t("tavilyKey", "Tavily API Key（tvly-…；留空则用免密钥模式）"),
+                disabled: busy,
+                onChange: (event) => setTavilyDraft((draft) => ({ ...draft, tavilyApiKey: event.target.value })),
+              }),
+              h("input", {
+                key: "max",
+                className: "dswxInput",
+                placeholder: t("tavilyMax", "结果条数（默认 5）"),
+                defaultValue: String(snapshot?.tavily?.maxResults ?? ""),
+                disabled: busy,
+                onChange: (event) => setTavilyDraft((draft) => ({ ...draft, tavilyMaxResults: event.target.value })),
+              }),
+              h("input", {
+                key: "depth",
+                className: "dswxInput",
+                placeholder: t("tavilyDepth", "搜索深度 basic / advanced / fast"),
+                defaultValue: String(snapshot?.tavily?.searchDepth ?? ""),
+                disabled: busy,
+                onChange: (event) => setTavilyDraft((draft) => ({ ...draft, tavilySearchDepth: event.target.value })),
+              }),
+              h("button", {
+                key: "save",
+                type: "button",
+                className: "dswxBtn dswxPrimary",
+                disabled: busy,
+                onClick: async () => {
+                  const params = new URLSearchParams();
+                  for (const [field, value] of Object.entries(tavilyDraft)) {
+                    if (String(value ?? "").trim()) params.set(field, String(value));
+                  }
+                  if (![...params.keys()].length) {
+                    setTavilyNotice({ ok: false, text: "没有要保存的内容（留空不会覆盖已存的 key ✓）" });
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const applied = await api(`/prefs?${params.toString()}`);
+                    setTavilyDraft({});
+                    setTavilyNotice({ ok: true, text: `已保存（${(applied?.tavilyChanged ?? []).join("、") || "无变化"}）✓ 下一次搜索即生效，不用重启 ✓` });
+                    await refresh();
+                  } catch (problem) {
+                    setTavilyNotice({ ok: false, text: `保存失败：${String(problem?.message ?? problem)}` });
+                  } finally {
+                    setBusy(false);
+                  }
+                },
+              }, t("tavilySave", "保存 Tavily 设置")),
+            ]),
+            tavilyNotice ? h("p", { key: "tavilynotice", className: "dswxMsg" }, tavilyNotice.text) : null,
+            h("p", { key: "tavilystate", className: "dswxMeta" }, snapshot?.tavily
+              ? `Tavily：${snapshot.tavily.keySet ? "已设置 key" : "免密钥模式"} · 结果条数 ${snapshot.tavily.maxResults} · 深度 ${snapshot.tavily.searchDepth}`
+              : "Tavily：状态未知"),
             Object.keys(feishuDraft).length
               ? h("p", { key: "unsaved", className: "dswxMeta" }, t("feishuUnsaved", "有未保存的改动 - 点 Save 才生效"))
               : null,

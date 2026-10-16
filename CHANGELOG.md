@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.23.21
+## 0.23.22
+
+- **Tavily web search for the chat channels.** A `tavily_search` tool lets a WeChat / WeCom / Feishu conversation ask
+  about something current and get real titles, links and snippets back. Every shape was copied from the user's own
+  working plugin (`wjh-ux/dsh-mcp-tavily`, cited line by line in `tavily.js`) rather than guessed, and the live API was
+  called to check it: with a key, 3 results in ~3s; **keyless mode works too**, so search still functions before a key
+  is configured.
+- **The key is configured without a restart** and never echoed back: it lives in prefs (panel → `config.tavily` →
+  `TAVILY_API_KEY`), `publicPrefs` masks it - including the case that used to leak, a Tavily-only prefs object with no
+  Feishu block - and the panel can only say whether one is set.
+- Failures state their reason (`Tavily 搜索失败：…`) instead of returning an empty answer, and the tool re-reads the
+  saved settings before every call, so saving is enough.
+- Guards for all of it, each falsified: the mask, the registration, the reason in the message, and the panel's key
+  field (a text field, or a field pre-filled from state, both fail the guard).
+- 25 suites / 429 cases.
 
 - **The readable export was dropping the conversation.** 0.23.20 shortened 25 lines from 94,566 characters to 803 - by
   losing the spoken text and leaving type tags. The harvest walked `block/delta/chunk/data/message` but not `content`,

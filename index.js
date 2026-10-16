@@ -2332,6 +2332,46 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return feishuSavedPrefs ?? {};
   }
 
+  /** The Tavily settings saved in prefs, cached the same way the Feishu ones are. */
+  let tavilySavedPrefs = {};
+
+  /** Re-read the saved Tavily settings. Called at apply time and after every save, like the Feishu block. */
+  async function refreshTavilySavedPrefs() {
+    try {
+      const prefs = await state.loadPrefs();
+      tavilySavedPrefs = prefs?.tavily && typeof prefs.tavily === "object" ? prefs.tavily : {};
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not read the saved Tavily settings: %s", error?.message ?? error);
+      tavilySavedPrefs = {};
+    }
+    return tavilySavedPrefs;
+  }
+
+  /**
+   * The Tavily configuration in force: what the panel saved first, then `config.tavily`, then the environment
+   * (`TAVILY_API_KEY`). A blank saved value falls through rather than pinning an empty string - the same rule the
+   * Feishu fields follow, and the reason clearing a field in the panel does not break the environment setting.
+   *
+   * The key is only ever read here; it is never reported back (see `publicPrefs`), so `/state` can say whether one is
+   * set without disclosing it.
+   */
+  function tavilyConfig() {
+    const given = config.tavily ?? {};
+    const saved = tavilySavedPrefs ?? {};
+    const pick = (...values) => {
+      for (const value of values) {
+        const text = String(value ?? "").trim();
+        if (text) return text;
+      }
+      return "";
+    };
+    return {
+      apiKey: pick(saved.apiKey, given.apiKey, process.env.TAVILY_API_KEY),
+      maxResults: Number(pick(saved.maxResults, given.maxResults, process.env.TAVILY_MAX_RESULTS)) || 5,
+      searchDepth: pick(saved.searchDepth, given.searchDepth, process.env.TAVILY_SEARCH_DEPTH) || "basic",
+    };
+  }
+
   /** Where the value in force came from - the panel should be able to say so. */
   function feishuSourceFor(key) {
     const saved = String(feishuSaved()[key] ?? "").trim();
@@ -2388,18 +2428,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   /**
    * A prefs snapshot safe to hand back over the loopback API.
    *
-   * The Feishu secrets are the only values in prefs that must never be echoed - `/prefs` used to return
-   * the whole object, so saving a secret sent it straight back in the response (a test caught it). The
-   * field is replaced rather than deleted, so a reader can still see that something is saved.
+   * Secrets are the only values in prefs that must never be echoed - `/prefs` used to return the whole object, so
+   * saving a secret sent it straight back in the response (a test caught it). Fields are replaced rather than
+   * deleted, so a reader can still see that something is saved.
    */
   function publicPrefs(prefs = {}) {
-    const feishu = prefs?.feishu && typeof prefs.feishu === "object" ? prefs.feishu : undefined;
-    if (!feishu) return prefs;
-    const safe = { ...feishu };
-    for (const key of ["appSecret", "secret", "verificationToken", "encryptKey"]) {
-      if (key in safe) safe[key] = safe[key] ? "***" : "";
+    const safe = { ...prefs };
+    const feishu = prefs?.feishu && typeof prefs.feishu === "object" ? { ...prefs.feishu } : undefined;
+    if (feishu) {
+      for (const key of ["appSecret", "secret", "verificationToken", "encryptKey"]) {
+        if (key in feishu) feishu[key] = feishu[key] ? "***" : "";
+      }
+      safe.feishu = feishu;
     }
-    return { ...prefs, feishu: safe };
+    // The Tavily key is the same kind of secret as the Feishu ones and also lives in prefs, so it is redacted the
+    // same way rather than trusted to be absent. Without this, saving a Tavily key would echo it back - exactly the
+    // mistake the Feishu block made before a test caught it.
+    const tavily = prefs?.tavily && typeof prefs.tavily === "object" ? { ...prefs.tavily } : undefined;
+    if (tavily) {
+      if ("apiKey" in tavily) tavily.apiKey = tavily.apiKey ? "***" : "";
+      safe.tavily = tavily;
+    }
+    return safe;
   }
 
   /** The Feishu fields a route may set, with the prefs key each one maps to. */
@@ -2417,6 +2467,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
   /** The Feishu fields a route may set that are booleans rather than strings. */
   const FEISHU_PREF_SWITCHES = Object.freeze({ feishuLongConnection: "longConnection" });
+
+  /**
+   * The Tavily fields a route may set, mirroring the Feishu map so the panel, the routes and the tool share one
+   * definition of what is configurable. `apiKey` is redacted on the way out (see `publicPrefs`).
+   */
+  const TAVILY_PREF_FIELDS = Object.freeze({
+    tavilyApiKey: "apiKey",
+    tavilyMaxResults: "maxResults",
+    tavilySearchDepth: "searchDepth",
+  });
+
+  /** Apply the Tavily fields from a request body, ignoring the ones that were not sent. */
+  function tavilyPrefsPatch(args = {}) {
+    const patch = {};
+    const changed = [];
+    for (const [field, key] of Object.entries(TAVILY_PREF_FIELDS)) {
+      if (args[field] === undefined) continue;
+      patch[key] = String(args[field] ?? "").trim();
+      changed.push(key);
+    }
+    return { patch, changed };
+  }
 
   /**
    * Merge Feishu fields from route arguments into the saved settings.
@@ -2462,6 +2534,40 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     // old connection rather than leave it running against credentials the user just removed.
     await startFeishuLongConnection({ force: true });
     return { changed: result.changed, feishu: await feishuState() };
+  }
+
+  /**
+   * What a reader may know about the Tavily settings: whether a key is set, never the key itself. `keyless` is worth
+   * reporting because Tavily genuinely supports keyless search - "no key" is not the same as "cannot search".
+   */
+  function tavilyState() {
+    const settings = tavilyConfig();
+    const saved = tavilySavedPrefs ?? {};
+    const given = config.tavily ?? {};
+    const source = (key) => (String(saved[key] ?? "").trim() ? "saved" : String(given[key] ?? "").trim() ? "config" : "env");
+    return {
+      keySet: Boolean(settings.apiKey),
+      keyless: !settings.apiKey,
+      maxResults: settings.maxResults,
+      searchDepth: settings.searchDepth,
+      sources: { apiKey: source("apiKey"), maxResults: source("maxResults"), searchDepth: source("searchDepth") },
+      prefFields: Object.keys(TAVILY_PREF_FIELDS),
+    };
+  }
+
+  /**
+   * Apply a Tavily patch and make it take effect immediately.
+   *
+   * Unlike the Feishu patch there is nothing to reconnect: the search tool refreshes the saved settings before every
+   * call, so saving is enough - which is also why this block needs no restart.
+   */
+  async function applyTavilyPrefs(args = {}) {
+    const result = tavilyPrefsPatch(args);
+    if (result.error) return { error: result.error };
+    if (!result.changed.length) return { changed: [], tavily: tavilyState() };
+    await state.savePrefs({ tavily: result.patch });
+    await refreshTavilySavedPrefs();
+    return { changed: result.changed, tavily: tavilyState() };
   }
 
   /** Which Feishu channels this machine can actually use, and which one is missing. */
@@ -4148,8 +4254,51 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
+      // Web search for the chat channels, served by Tavily. Shapes come from the user's own working plugin (see
+      // tavily.js for the cited lines). The tool refreshes the saved settings before each call, so a key typed into
+      // the panel is in force on the very next search - no restart, and no apply-time hook to forget. The modules are
+      // imported here so the tool stays self-contained.
+      const tavilySearchTool = define({
+        name: "tavily_search",
+        description:
+          "Search the web with Tavily and get titles, links and snippets. Works with a Tavily API key (tvly-...) or, without one, in Tavily's keyless mode. Use it whenever a chat asks about something current.",
+        parameters: {
+          query: { type: "string", required: true, description: "What to search for." },
+          maxResults: { type: "number", description: "How many results (1-20); defaults to the configured value." },
+          searchDepth: { type: "string", description: "basic (default), advanced or fast." },
+          includeDomains: { type: "string", description: "Comma-separated domains to restrict the search to." },
+          excludeDomains: { type: "string", description: "Comma-separated domains to leave out." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          const { tavilySearch, formatTavilyResults } = await import("./tavily.js");
+          await refreshTavilySavedPrefs();
+          const settings = tavilyConfig();
+          const query = String(args?.query ?? "").trim();
+          if (!query) return "nothing to search for: `query` is empty";
+          const list = (value) => String(value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+          try {
+            const outcome = await tavilySearch({
+              query,
+              apiKey: settings.apiKey,
+              maxResults: args?.maxResults ?? settings.maxResults,
+              searchDepth: String(args?.searchDepth ?? settings.searchDepth),
+              includeDomains: list(args?.includeDomains),
+              excludeDomains: list(args?.excludeDomains),
+            });
+            noteRoute("/tavily", { action: "search", query, results: outcome.results.length, keyless: outcome.keyless });
+            return formatTavilyResults(outcome);
+          } catch (error) {
+            noteRoute("/tavily", { action: "search", error: String(error?.message ?? error) });
+            // Say what went wrong rather than returning an empty answer: the reason is what makes it fixable.
+            return `Tavily 搜索失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
       const disposers = [];
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -4465,6 +4614,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             counters: { ...counters },
             interjections: interjections.slice(-10),
             feishu: await feishuState(),
+            // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
+            tavily: tavilyState(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),
@@ -4634,6 +4785,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (applied.error) return json(res, 400, { error: applied.error });
             const prefsAfter = await state.savePrefs({});
             return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), feishu: applied.feishu, feishuChanged: applied.changed });
+          }
+          // The Tavily block saves the same way, except that nothing has to reconnect: the search tool re-reads the
+          // settings before every call, so the next search already uses what was just saved.
+          const tavilyPatch = tavilyPrefsPatch(Object.fromEntries(
+            Object.keys(TAVILY_PREF_FIELDS).map((field) => [field, body[field]]),
+          ));
+          if (tavilyPatch.changed.length) {
+            const applied = await applyTavilyPrefs(Object.fromEntries(
+              Object.keys(TAVILY_PREF_FIELDS).map((field) => [field, body[field]]),
+            ));
+            if (applied.error) return json(res, 400, { error: applied.error });
+            const prefsAfter = await state.savePrefs({});
+            return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), tavily: applied.tavily, tavilyChanged: applied.changed });
           }
           if (body.format !== undefined && body.format !== "") {
             const mode = String(body.format).trim().toLowerCase();

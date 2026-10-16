@@ -476,15 +476,27 @@ await test("the panel can configure Feishu without setx and without a restart", 
   assert.match(host, /const startFeishuAfterPrefs = \(\) => \{\s*\n\s*void refreshFeishuSavedPrefs\(\)/, "and startup loads the saved settings first");
   // Secrets never travel back: one redaction helper, used by every route that returns prefs.
   assert.match(host, /function publicPrefs\(prefs = \{\}\) \{/, "there is one redaction helper");
-  // Three: the normal /prefs return, the Feishu-save return, and /state (which also carries prefs).
-  assert.equal((host.match(/prefs: publicPrefs\(/g) ?? []).length, 3, "every response that returns prefs redacts it");
+  // Counted rather than pinned, and limited to responses: the number of routes returning prefs grew when the Tavily
+  // block landed, while an internal `resolveInboxDir({ prefs: await state.loadPrefs() })` is not a response at all
+  // (the first version of this check flagged it). What matters is that every response carrying prefs is redacted.
+  const responsePrefs = host
+    .split(/\r?\n/)
+    .filter((line) => line.includes("json(res"))
+    .flatMap((line) => [...line.matchAll(/prefs:\s*([A-Za-z0-9_.]+)/g)].map((match) => match[1]));
+  assert.ok(responsePrefs.length >= 3, `prefs is returned from ${responsePrefs.length} responses`);
+  for (const name of responsePrefs) {
+    assert.match(name, /^publicPrefs/, `prefs must be redacted before it is returned, found: ${name}`);
+  }
   assert.match(host, /prefs: publicPrefs\(prefs\),/, "/state redacts the stored settings too");
   assert.doesNotMatch(host, /json\(res, 200, \{ ok: true, prefs \}\)/, "no route hands the raw prefs back");
   // The panel block itself.
   assert.match(clientSource, /feishuLabel:/, "the block is labelled");
   assert.equal((clientSource.match(/feishuLabel:/g) ?? []).length, 2, "in both languages");
   assert.match(clientSource, /feishuAppSecret: event\.target\.value/, "with an app secret input");
-  assert.equal((clientSource.match(/type: "password"/g) ?? []).length, 2, "both secrets are masked inputs");
+  // At least the two Feishu secrets, and now the Tavily key as well: the property is "secrets are masked inputs", not
+  // a fixed count. The exact count was pinned here and broke the moment a third secret existed - for the right reason,
+  // but it read as a failure of the panel rather than of the assertion.
+  assert.ok((clientSource.match(/type: "password"/g) ?? []).length >= 2, "secret inputs are masked");
   assert.match(clientSource, /async function setFeishu\(patch, mode = "filled"\)/, "saving goes through one helper");
   assert.match(clientSource, /await api\(`\/prefs\?\$\{params\.toString\(\)\}`\)/, "which writes the route the panel uses");
   assert.match(clientSource, /if \(mode === "filled" && \(value === undefined \|\| value === null \|\| String\(value\)\.trim\(\) === ""\)\) continue;/, "and never sends a blank field by accident");
