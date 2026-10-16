@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.1
+
+- **The `/status` build line renders its two timestamps in local time.** v0.24.0 sliced the ISO string, so on a
+  UTC+8 machine it printed `构建 2026-10-16 12:02` for a build written at 20:02 by the reader's own clock - and a
+  timestamp that looks wrong is worse than no timestamp. `/state` still carries ISO UTC, which is what a program
+  wants; only the human-facing line converts.
+- The test recomputes the expected stamp from the same instant rather than comparing against a literal, because CI
+  runs in UTC where the naive version and the correct one agree - so the assertion has to be written in a way that
+  only a non-zero offset can distinguish.
+- Falsified: putting the ISO slice back turns the suite red on this machine (and only here, which is exactly why
+  the test is written the way it is).
+- 26 suites / 444 cases.
+
 ## 0.24.0
 
 - **`/state` and `/status` now say which build is answering.** A `link:`-installed plugin is edited in place, so

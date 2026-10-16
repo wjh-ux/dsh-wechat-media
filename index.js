@@ -165,9 +165,20 @@ const LOADED_AT = new Date().toISOString();
  * The one-line build report `/status` prints. Pure, and exported for that reason: the interesting
  * case is the gap between the two timestamps - a process serving files that were edited after it
  * started - and that case deserves a test rather than a comment.
+ *
+ * The two stamps are rendered in **local** time. `/state` keeps them as ISO UTC, which is what a
+ * program wants, but this line is read by a person looking at a clock: slicing the ISO string (as
+ * the first version did) prints a time 8 hours off on a UTC+8 machine, and a timestamp that looks
+ * wrong is worse than no timestamp.
  */
 export function buildLineText({ version = "", builtAt = "", loadedAt = "" } = {}) {
-  const when = (iso) => (iso ? iso.replace("T", " ").slice(0, 16) : "未知");
+  const when = (iso) => {
+    if (!iso) return "未知";
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return "未知";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  };
   const stale = Boolean(builtAt && loadedAt && builtAt > loadedAt);
   return `版本：${version || "未知"} · 构建 ${when(builtAt)} · 加载 ${when(loadedAt)}` +
     (stale ? "（磁盘上的文件比本进程新，重启后才生效）" : "");

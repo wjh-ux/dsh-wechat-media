@@ -374,8 +374,17 @@ await test("the build line names both times, and warns when the files are newer"
   assert.equal(typeof mod.buildLineText, "function", "the formatter is exported, so it can be tested");
   const current = mod.buildLineText({ version: "1.2.3", builtAt: "2026-10-16T10:00:00.000Z", loadedAt: "2026-10-16T11:00:00.000Z" });
   assert.match(current, /版本：1\.2\.3/);
-  assert.match(current, /构建 2026-10-16 10:00/);
-  assert.match(current, /加载 2026-10-16 11:00/);
+  assert.match(current, /构建 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/, "the build time is a readable stamp");
+  // Local time, not a slice of the ISO string: on a UTC+8 machine the naive version printed a time
+  // eight hours off the reader's own clock. CI runs in UTC, where the two agree - so the expected
+  // value is recomputed from the same instant here instead of being written as a literal.
+  const localStamp = (iso) => {
+    const at = new Date(iso);
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  };
+  assert.ok(current.includes(`构建 ${localStamp("2026-10-16T10:00:00.000Z")}`), "the build time is rendered in local time");
+  assert.ok(current.includes(`加载 ${localStamp("2026-10-16T11:00:00.000Z")}`), "and so is the load time");
   assert.doesNotMatch(current, /重启/, "a process that is up to date says nothing about restarting");
   const stale = mod.buildLineText({ version: "1.2.3", builtAt: "2026-10-16T12:00:00.000Z", loadedAt: "2026-10-16T11:00:00.000Z" });
   assert.match(stale, /重启后才生效/, "files newer than the process are called out");
