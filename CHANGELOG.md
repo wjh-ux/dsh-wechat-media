@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.23.25
+## 0.23.26
+
+- **The launch test no longer needs a browser to be installed.** It asked the machine for Chrome, which passed here and
+  failed on the CI runner, where `browserLaunch` correctly refuses to start nothing. The executable is now injectable
+  (`browserLaunch({ executable })`), the test injects one, and a second test covers the refusal with a profile
+  directory that cannot be created on any machine - so neither depends on what the runner happens to have.
+- 26 suites / 439 cases.
 
 - **The browser suite no longer assumes it can write to the root of `C:`.** One test passed a hard-coded `C:\tmp\...`
   as the browser profile, which this machine's user can create and the CI runner's user cannot - so `Run every suite`

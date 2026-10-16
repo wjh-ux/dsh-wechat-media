@@ -45,13 +45,14 @@ await test("launching waits for the port and reports where the browser is", asyn
   const spawnImpl = (file, args, options) => { spawned.push({ file, args, options }); return { pid: 4242, unref() {} }; };
   let attempts = 0;
   const fetchImpl = async () => { attempts += 1; if (attempts < 2) throw new Error("ECONNREFUSED"); return { ok: true, status: 200, json: async () => ({ Browser: "Chrome/155" }) }; };
-  // The profile goes under the system temp directory. A hard-coded `C:\tmp\...` passed on a machine whose user can
-  // write to the root of C: and failed on the CI runner, whose user cannot - so the test was asserting the
-  // environment rather than the code. Falsifiable: point it back at a directory that cannot be created and this fails.
+  // The executable is injected. Asking the machine for one made this test depend on Chrome being installed: it passed
+  // here and failed on the CI runner, where browserLaunch correctly refused to start nothing.
+  const executable = joinPath(process.env.TEMP || "/tmp", "fake-chrome.exe");
   const profileDir = joinPath(process.env.TEMP || process.env.TMPDIR || "/tmp", "dsh-browser-test-profile");
-  const launched = await browserLaunch({ channel: "chrome", port: 9333, headless: true, profileDir, spawnImpl, fetchImpl });
+  const launched = await browserLaunch({ channel: "chrome", executable, port: 9333, headless: true, profileDir, spawnImpl, fetchImpl });
   assert.equal(launched.pid, 4242);
   assert.equal(launched.port, 9333);
+  assert.equal(launched.executable, executable, "it reports which executable it used");
   assert.ok(attempts >= 2, "it retried until the port answered");
   const args = spawned[0].args.join(" ");
   assert.match(args, /--remote-debugging-port=9333/, "the port is passed");
@@ -61,8 +62,22 @@ await test("launching waits for the port and reports where the browser is", asyn
   assert.ok(args.endsWith("about:blank"), "it opens a blank page to have a target");
 
   // A browser that never answers must fail with the reason, not hang.
-  await assert.rejects(() => browserLaunch({ channel: "chrome", port: 9334, profileDir: joinPath(profileDir, "second"), spawnImpl, fetchImpl: async () => { throw new Error("ECONNREFUSED"); }, waitMs: 600 }), /never answered within 600ms/);
+  await assert.rejects(() => browserLaunch({ channel: "chrome", executable, port: 9334, profileDir: joinPath(profileDir, "second"), spawnImpl, fetchImpl: async () => { throw new Error("ECONNREFUSED"); }, waitMs: 600 }), /never answered within 600ms/);
   assert.ok(spawned.length >= 2);
+});
+
+await test("an unusable profile directory is reported, with the directory named", async () => {
+  // Deterministic on every machine, which the first version of this test was not: it asserted that Edge was missing,
+  // and this machine has Edge installed, so the premise - not the code - was wrong. A NUL byte cannot be a path
+  // anywhere, so the refusal is guaranteed and the message must name what it could not create.
+  await assert.rejects(
+    () => browserLaunch({ channel: "chrome", executable: "C:\\fake\\chrome.exe", profileDir: "bad\u0000path", spawnImpl: () => { throw new Error("must not be called"); } }),
+    (error) => {
+      assert.match(String(error?.message), /could not create the browser profile directory/, "the failure is named");
+      assert.match(String(error?.message), /bad/, "and the directory is quoted");
+      return true;
+    },
+  );
 });
 
 await test("a target must be a usable page, and its absence is named", async () => {

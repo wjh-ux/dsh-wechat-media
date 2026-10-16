@@ -93,9 +93,12 @@ export async function browserLaunch({
   spawnImpl = spawn,
   fetchImpl = fetch,
   waitMs = 15000,
+  executable = "",
 } = {}) {
-  const executable = browserExecutable(channel);
-  if (!executable) throw new Error(`no ${channel} executable found in ${BROWSER_CHANNELS[channel] ? BROWSER_CHANNELS[channel].join(" or ") : "the known locations"}`);
+  // Injectable, so a unit test need not depend on this machine having a browser: asking the machine made the launch
+  // test pass here and fail on the CI runner, where "no browser installed" is the honest answer.
+  const resolved = String(executable ?? "").trim() || browserExecutable(channel);
+  if (!resolved) throw new Error(`no ${channel} executable found in ${BROWSER_CHANNELS[channel] ? BROWSER_CHANNELS[channel].join(" or ") : "the known locations"}`);
   const profile = String(profileDir ?? "").trim() || join(tmpdir(), "dsh-browser-profile");
   try { mkdirSync(profile, { recursive: true }); } catch (error) { throw new Error(`could not create the browser profile directory ${profile}: ${String(error?.message ?? error)}`); }
   const args = [
@@ -109,7 +112,7 @@ export async function browserLaunch({
   ];
   let child;
   try {
-    child = spawnImpl(executable, args, { detached: true, stdio: "ignore" });
+    child = spawnImpl(resolved, args, { detached: true, stdio: "ignore" });
   } catch (error) {
     throw new Error(`could not start ${channel}: ${String(error?.message ?? error)}`);
   }
