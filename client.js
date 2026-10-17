@@ -165,6 +165,7 @@ window.__ModuleLoader__.load({
           nextRun: "next",
           lastRun: "last",
           paused: "paused",
+          finished: "done",
           pause: "Pause",
           resume: "Resume",
           remove: "Delete",
@@ -285,6 +286,7 @@ window.__ModuleLoader__.load({
           nextRun: "下次",
           lastRun: "上次",
           paused: "已暂停",
+          finished: "已跑完",
           pause: "暂停",
           resume: "恢复",
           remove: "删除",
@@ -872,9 +874,13 @@ window.__ModuleLoader__.load({
                 h("span", { key: "id", className: "dswxName" }, task.id),
                 h("span", { key: "w", className: "dswxMeta" },
                   `${task.when} · ${task.action} · ${task.transport}` +
-                  (task.enabled === false ? ` · ⏸ ${t("paused", "已暂停")}` : task.nextLocal ? ` · ${t("nextRun", "next")} ${task.nextLocal}` : "") +
+                  (task.finished ? ` · ✅ ${t("finished", "已跑完")}`
+                    : task.enabled === false ? ` · ⏸ ${t("paused", "已暂停")}`
+                      : task.nextLocal ? ` · ${t("nextRun", "next")} ${task.nextLocal}` : "") +
                   (task.lastLocal ? ` · ${t("lastRun", "上次")} ${task.lastLocal} ${task.lastResult === "ok" ? "✅" : `❌ ${task.lastResult ?? ""}`}` : "")),
-                h("button", {
+                // No toggle for a finished one-off: `dueTasks` ignores a `once` task that has already run,
+                // so "resume" would flip a flag and change nothing - a button that lies is worse than no button.
+                task.finished ? null : h("button", {
                   key: "t",
                   type: "button",
                   className: "dswxBtn",

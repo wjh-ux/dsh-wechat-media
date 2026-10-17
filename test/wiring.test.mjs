@@ -498,6 +498,10 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(clientSource, /action: "remove", id/, "for delete");
   assert.match(clientSource, /snapshot\?\.tasks\?\.items/, "and it renders the rows");
   assert.match(clientSource, /tasksEmpty/, "with an empty state that says how to create one");
+  // A finished one-off cannot be resumed - `dueTasks` ignores a `once` task that has run - so the card must not
+  // offer the button. Found by clicking it: it flipped a flag and changed nothing.
+  assert.match(host, /finished: task\.schedule\?\.kind === "once" && Boolean\(task\.lastRunAt\)/, "the host marks finished one-offs");
+  assert.match(clientSource, /task\.finished \? null : h\("button"/, "and the card hides the toggle for them");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

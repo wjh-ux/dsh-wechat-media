@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.28.1
+
+- **Fixed: a finished one-off looked paused, and offered a Resume button that did nothing.** A `once` task that has run
+  is stored `enabled: false`, exactly like a paused task - but `dueTasks` ignores a `once` task that carries a
+  `lastRunAt`, so toggling it back on flipped a flag and changed nothing. The card now distinguishes the two states:
+  `✅ 已跑完` versus `⏸ 已暂停`, and a finished one-off gets no toggle at all - only Delete.
+- `/state.tasks.items` gained `finished`, so a script sees the same distinction the card shows.
+- Guard: the host must mark finished one-offs and the card must hide the toggle for them.
+- 28 suites / 491 cases.
+
 ## 0.28.0
 
 - **The tasks card can create a task.** A schedule line, an action (`message` / `prompt` / `command`), the payload and

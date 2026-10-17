@@ -2792,6 +2792,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           when: tasks.describeSchedule(task.schedule),
           action: task.action,
           enabled: task.enabled !== false,
+          // A one-off that has already run is not "paused" - it is finished, and no toggle can bring it
+          // back: `dueTasks` ignores a `once` task that has a `lastRunAt`. The card needs to tell those
+          // two states apart, or it offers a button that does nothing.
+          finished: task.schedule?.kind === "once" && Boolean(task.lastRunAt),
           transport: task.transport,
           nextAt: next ? new Date(next).toISOString() : null,
           nextLocal: next ? tasks.formatWhen(next) : "",
