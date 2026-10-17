@@ -249,6 +249,21 @@ export function describeTask(task, now = Date.now()) {
 }
 
 /**
+ * Which transport an account id belongs to.
+ *
+ * The plugin namespaces account ids with a prefix, but it has **two spellings**: `wecom:` as the id is
+ * built, and `wecom-` as `normalizeAccountId` stores it. v0.26.2 matched only the colon form, so every
+ * WeCom task was labelled WeChat and sent down the personal-WeChat path - failing with "account is gone",
+ * which is the least helpful possible symptom. Both spellings; the default stays WeChat.
+ */
+export function transportOf(accountId) {
+  const id = String(accountId ?? "").toLowerCase();
+  if (id.startsWith("wecom:") || id.startsWith("wecom-")) return "wecom";
+  if (id.startsWith("feishu:") || id.startsWith("feishu-")) return "feishu";
+  return "wechat";
+}
+
+/**
  * The most recently used chat in a `routes.json` map, or undefined when there is none.
  *
  * `routes.json` is written on every inbound message and survives restarts, while `lastInbound` is memory

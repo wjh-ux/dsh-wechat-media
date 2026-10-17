@@ -19,6 +19,7 @@ import {
   newestRouteTarget,
   nextRunAt,
   nextRunFor,
+  transportOf,
   parseInterval,
   parseMoment,
   parseSchedule,
@@ -203,6 +204,18 @@ test("the most recent route survives a restart, so a task can still name its tar
   // a task at all, which is the failure this fallback exists for.
   assert.equal(newestRouteTarget({ a: { b: {} } }).chatId, "b", "a timestamp-less route is a last-resort candidate");
   assert.equal(newestRouteTarget({ a: { b: {} } }).at, 0, "and sorts last");
+});
+
+test("transport is read from both prefix spellings, not just the colon one", () => {
+  // v0.26.2 matched `wecom:` only, but `normalizeAccountId` stores account ids with a hyphen - so every
+  // WeCom task was labelled WeChat, sent down the personal-WeChat path, and failed with "account is gone".
+  assert.equal(transportOf("wecom:aibo3S7u"), "wecom", "the built form");
+  assert.equal(transportOf("wecom-aibo3S7uP619HxNeS5X1hXSt3zztf6z9gCD"), "wecom", "the stored form");
+  assert.equal(transportOf("feishu:cli_a93c"), "feishu", "the built form");
+  assert.equal(transportOf("feishu-cli_a93c8f6a6f389bb5"), "feishu", "the stored form");
+  assert.equal(transportOf("b775a478733a-im-bot"), "wechat", "a WeChat account carries no prefix");
+  assert.equal(transportOf(""), "wechat", "an empty id falls back to WeChat");
+  assert.equal(transportOf(undefined), "wechat", "and so does a missing one");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

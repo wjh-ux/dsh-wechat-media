@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.3
+
+- **Fixed: every WeCom task was labelled WeChat and tried to send through the personal-WeChat path.** Account ids are
+  built as `wecom:<id>` but stored normalised as `wecom-<id>`, and `transportOf` matched only the colon form - so a
+  task created for a WeCom chat counted as a WeChat target and failed at delivery with
+  `账号 wecom-… 不在了（可能被解绑）`, which points at the wrong thing entirely.
+- Both spellings are now recognised (the same for `feishu:` / `feishu-`), the helper moved into `tasks.js` where it
+  can be unit-tested, and the suite covers all six shapes: both prefixes in both spellings, an unprefixed WeChat id,
+  an empty one and a missing one.
+- The wiring suite's cross-check caught its own comment again: it reads `tasks.name(...)` calls in the host, and the
+  phrase `tasks.js (` in an explanatory comment parsed as a call to a helper called `js`. Reworded, not weakened.
+- Found live: the scheduler fired on time, recorded `runs: 1`, self-disabled the one-off and stored the delivery
+  failure - the scheduling half was correct throughout, only the transport label was wrong.
+- 28 suites / 491 cases.
+
 ## 0.26.2
 
 - **A task can name its target after a restart again.** Only `lastInbound` was consulted, and that map lives in

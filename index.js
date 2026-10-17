@@ -4003,15 +4003,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // `prompt` runs one ordinary turn and delivers the answer, `command` runs a local command and sends
   // its output - which is why that one needs its own switch, `/task command on`.
 
-  /** Which transport an account id belongs to; the prefix is how the plugin already namespaces them. */
-  function transportOf(accountId) {
-    const id = String(accountId ?? "");
-    if (id.startsWith("wecom:")) return "wecom";
-    if (id.startsWith("feishu:")) return "feishu";
-    return "wechat";
-  }
+  // Transport naming lives in the tasks module, as `tasks.transportOf`: it has to know both prefix
+  // spellings, and that is exactly the sort of detail worth a unit test rather than a comment here.
+  const transportOf = tasks.transportOf;
 
-  /** The chat to attach a new task to: the most recent inbound, which is the one that asked. */
+  /** The chat to attach a new task to: the most recent inbound, else the most recent known route. */
   async function defaultTaskTarget() {
     const recent = [...lastInbound.values()].sort((a, b) => b.at - a.at)[0];
     if (recent) {
