@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.2
+
+- **Resuming a finished one-off is now refused, not silently accepted.** v0.28.1 hid the button on the card, but the
+  `/tasks?action=toggle&enabled=true` route still answered `ok: true` and flipped the flag - a flag that can never do
+  anything, since `dueTasks` ignores a `once` task with a `lastRunAt`. Both the route and `/task on` now answer with
+  the reason instead ("这是一个已经跑完的一次性任务，无法恢复——要再跑一次请新建一个"), because a hidden button is not
+  the only door.
+- Guard: the route and the chat command must both carry the refusal, next to the assertion that the card hides the
+  toggle - three doors, one rule.
+- 28 suites / 491 cases.
+
 ## 0.28.1
 
 - **Fixed: a finished one-off looked paused, and offered a Resume button that did nothing.** A `once` task that has run

@@ -502,6 +502,10 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   // offer the button. Found by clicking it: it flipped a flag and changed nothing.
   assert.match(host, /finished: task\.schedule\?\.kind === "once" && Boolean\(task\.lastRunAt\)/, "the host marks finished one-offs");
   assert.match(clientSource, /task\.finished \? null : h\("button"/, "and the card hides the toggle for them");
+  // Hiding the button is not enough: the route and the chat command are other doors onto the same operation, and
+  // both must refuse rather than report success for something that can never happen.
+  assert.match(host, /wanted === true && found\.schedule\?\.kind === "once" && found\.lastRunAt/, "the route refuses to resume a finished one-off");
+  assert.match(host, /sub === "on" && found\.schedule\?\.kind === "once" && found\.lastRunAt/, "and so does the chat command");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

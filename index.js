@@ -1670,6 +1670,12 @@ export function apply(ctx, config = {}) {
           await reply(`没有 id 为 ${JSON.stringify(id)} 的任务（发 /task 看列表）`);
           return true;
         }
+        // Same rule as the card's route: a finished one-off cannot be resumed, because `dueTasks` ignores a
+        // `once` task that has already run. Say so instead of "已恢复" for something that will never fire.
+        if (sub === "on" && found.schedule?.kind === "once" && found.lastRunAt) {
+          await reply(`任务 ${id} 是已经跑完的一次性任务，无法恢复——要再跑一次请新建一个。`);
+          return true;
+        }
         const next = sub === "rm"
           ? list.filter((task) => task.id !== id)
           : list.map((task) => (task.id === id ? { ...task, enabled: sub === "on" } : task));
@@ -5666,15 +5672,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const id = String(body.id ?? "").trim();
           if (!id) return json(res, 400, { error: "id is required" });
           const list = await state.loadTasks();
-          if (!list.some((task) => task.id === id)) return json(res, 404, { error: `没有 id 为 ${id} 的任务` });
+          const found = list.find((task) => task.id === id);
+          if (!found) return json(res, 404, { error: `没有 id 为 ${id} 的任务` });
           if (action === "remove") {
             await state.saveTasks(list.filter((task) => task.id !== id));
           } else if (action === "toggle") {
             const wanted = asBool(body.enabled);
             if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });
+            // A finished one-off cannot be brought back - `dueTasks` ignores a `once` task that has run - so
+            // accepting "enable" would report success for something that can never happen. The card already
+            // hides the button; the route refuses it, because a button is not the only door.
+            if (wanted === true && found.schedule?.kind === "once" && found.lastRunAt) {
+              return json(res, 400, { ok: false, error: "这是一个已经跑完的一次性任务，无法恢复——要再跑一次请新建一个" });
+            }
             await state.saveTasks(list.map((task) => (task.id === id ? { ...task, enabled: wanted } : task)));
           } else {
-            return json(res, 400, { error: `未知 action：${action}（list / toggle / remove / command）` });
+            return json(res, 400, { error: `未知 action：${action}（list / add / toggle / remove / command）` });
           }
           noteRoute("/task", { action, id, via: "card" });
           json(res, 200, { ok: true, tasks: await taskSummary() });
