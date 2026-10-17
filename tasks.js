@@ -247,3 +247,25 @@ export function describeTask(task, now = Date.now()) {
   const runs = task.runs ? ` · 已运行 ${task.runs} 次` : "";
   return `${task.id} · ${when} · ${task.action} · ${state}${runs}${last} · ${task.payload.slice(0, 40)}`;
 }
+
+/**
+ * The most recently used chat in a `routes.json` map, or undefined when there is none.
+ *
+ * `routes.json` is written on every inbound message and survives restarts, while `lastInbound` is memory
+ * only. So this is what lets a task name its target right after a restart, without waiting for somebody
+ * to send a message first - which is precisely the step a scheduled task cannot depend on.
+ */
+export function newestRouteTarget(routes) {
+  const rows = [];
+  for (const [accountId, chats] of Object.entries(routes && typeof routes === "object" ? routes : {})) {
+    for (const [chatId, route] of Object.entries(chats && typeof chats === "object" ? chats : {})) {
+      rows.push({
+        accountId,
+        chatId,
+        peerName: String(route?.peerName ?? ""),
+        at: Date.parse(route?.updatedAt ?? "") || 0,
+      });
+    }
+  }
+  return rows.sort((a, b) => b.at - a.at)[0];
+}

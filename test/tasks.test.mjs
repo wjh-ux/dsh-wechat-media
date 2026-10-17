@@ -16,6 +16,7 @@ import {
   describeTask,
   dueTasks,
   formatWhen,
+  newestRouteTarget,
   nextRunAt,
   nextRunFor,
   parseInterval,
@@ -176,6 +177,32 @@ test("describeTask says why a task failed last time", () => {
   assert.match(line, /p · 每天 09:00 · prompt/);
   assert.match(line, /已运行 3 次/);
   assert.match(line, /上次 2026-10-16 10:00 失败：agent 超时/);
+});
+
+test("the most recent route survives a restart, so a task can still name its target", () => {
+  // routes.json is written on every inbound; lastInbound is memory only. v0.26.1 refused to create a task
+  // after a restart until somebody sent a message first - a step a scheduled task cannot depend on.
+  const routes = {
+    "b775a478733a-im-bot": {
+      "o9cq804@im.wechat": { sessionId: "s1", peerName: "wc", updatedAt: "2026-10-16T09:18:47.102Z" },
+    },
+    "wecom-aibo3S7u": {
+      "woIHRN": { sessionId: "s2", peerName: "企业微信 woIHRN", updatedAt: "2026-10-17T11:51:51.149Z" },
+    },
+    "feishu-cli_x": {
+      "oc_99aa": { sessionId: "s3", peerName: "飞书", updatedAt: "2026-10-16T12:17:31.969Z" },
+    },
+  };
+  const newest = newestRouteTarget(routes);
+  assert.equal(newest.accountId, "wecom-aibo3S7u", "the newest updatedAt wins");
+  assert.equal(newest.chatId, "woIHRN");
+  assert.equal(newest.peerName, "企业微信 woIHRN");
+  assert.equal(newestRouteTarget({}), undefined, "an empty map answers undefined rather than throwing");
+  assert.equal(newestRouteTarget(null), undefined, "and so does a missing file");
+  // A hand-edited route without a timestamp still names a chat: any known target beats refusing to create
+  // a task at all, which is the failure this fallback exists for.
+  assert.equal(newestRouteTarget({ a: { b: {} } }).chatId, "b", "a timestamp-less route is a last-resort candidate");
+  assert.equal(newestRouteTarget({ a: { b: {} } }).at, 0, "and sorts last");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

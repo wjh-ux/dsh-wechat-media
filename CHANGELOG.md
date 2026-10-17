@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.2
+
+- **A task can name its target after a restart again.** Only `lastInbound` was consulted, and that map lives in
+  memory - so after every restart `task_add` refused with "还没有收到过任何消息" until somebody sent a message first,
+  which is precisely the step a scheduled task must not depend on. It now falls back to the newest entry in
+  `routes.json`, which is written on every inbound and survives restarts (`tasks.newestRouteTarget`, pure and tested
+  against an empty map, a missing file and a route with no timestamp).
+- The fallback is a fallback: the in-memory last inbound still wins, because it is the chat that just asked.
+- 28 suites / 490 cases.
+
 ## 0.26.1
 
 - **Fixed: `task_add` threw a TypeError on the very first task anyone created.** Two target shapes reach it -

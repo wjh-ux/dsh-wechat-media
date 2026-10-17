@@ -4014,12 +4014,25 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   /** The chat to attach a new task to: the most recent inbound, which is the one that asked. */
   async function defaultTaskTarget() {
     const recent = [...lastInbound.values()].sort((a, b) => b.at - a.at)[0];
-    if (!recent) throw new Error("还没有收到过任何消息——先在微信/企业微信/飞书里发一条，或者显式指定 to");
+    if (recent) {
+      return {
+        transport: transportOf(recent.accountId),
+        accountId: recent.accountId,
+        chatId: recent.chatId,
+        peerName: recent.peerName ?? "",
+      };
+    }
+    // Nothing has arrived since this process started, but the plugin remembers every chat it has talked
+    // to: routes.json is written on each inbound and survives restarts. Without this fallback a task
+    // could not be created after a restart until somebody sent a message - a step a scheduled task is
+    // not allowed to depend on.
+    const known = tasks.newestRouteTarget(await state.loadRoutes());
+    if (!known) throw new Error("还没有收到过任何消息——先在微信/企业微信/飞书里发一条，或者用 to 显式指定会话");
     return {
-      transport: transportOf(recent.accountId),
-      accountId: recent.accountId,
-      chatId: recent.chatId,
-      peerName: recent.peerName ?? "",
+      transport: transportOf(known.accountId),
+      accountId: known.accountId,
+      chatId: known.chatId,
+      peerName: known.peerName,
     };
   }
 
