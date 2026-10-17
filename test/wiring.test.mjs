@@ -513,9 +513,12 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   // "Run again" and its switch exist on both sides, or the button is decorative.
   assert.match(host, /action === "rearm"/, "the route can re-arm a one-off");
   assert.match(host, /action === "auto"/, "and set its re-arm switch");
-  assert.match(clientSource, /const rearmTask = \(id\) => taskAction\(\{ action: "rearm", id \}\)/, "the card calls it");
+  assert.match(clientSource, /const rearmTask = \(id, step = "day"\) => taskAction\(\{ action: "rearm", id, step \}\)/, "the card calls it, with a step");
   assert.match(clientSource, /setTaskAutoRearm\(task\.id, event\.target\.checked\)/, "and the switch writes through");
-  assert.match(clientSource, /task\.finished \? h\("button"/, "the finished row offers run-again");
+  assert.match(clientSource, /taskSteps\[task\.id\] \?\? "day"/, "each row remembers its own step");
+  assert.match(host, /tasks\.rearmOnce\(found\.schedule, Date\.now\(\), step\)/, "the route passes the step to the pure helper");
+  assert.match(clientSource, /task\.finished \? h\("select"/, "the finished row offers a step select");
+  assert.match(clientSource, /key: "again"/, "next to the run-again button");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

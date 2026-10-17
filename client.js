@@ -168,6 +168,9 @@ window.__ModuleLoader__.load({
           finished: "done",
           finishedHint: "a one-off cannot be paused",
           runAgain: "Run again",
+          stepDay: "+1 day",
+          stepWeek: "+1 week",
+          stepMonth: "+1 month",
           autoRearm: "re-arm after each run",
           pause: "Pause",
           resume: "Resume",
@@ -292,6 +295,9 @@ window.__ModuleLoader__.load({
           finished: "已跑完",
           finishedHint: "一次性任务，不能暂停",
           runAgain: "再次运行",
+          stepDay: "+1 天",
+          stepWeek: "+1 周",
+          stepMonth: "+1 月",
           autoRearm: "完成后再排一次",
           pause: "暂停",
           resume: "恢复",
@@ -392,6 +398,9 @@ window.__ModuleLoader__.load({
         // normal path; this is for "I am already looking at the list".
         const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
         const [taskNotice, setTaskNotice] = react.useState(undefined);
+        // Which step each "run again" button will take: a day, a week or a month. Kept per row so
+        // changing one task's step does not change another's.
+        const [taskSteps, setTaskSteps] = react.useState({});
       const [browserNotice, setBrowserNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
@@ -726,7 +735,7 @@ window.__ModuleLoader__.load({
         const toggleTask = (id, enabled) => taskAction({ action: "toggle", id, enabled: enabled ? "true" : "false" });
         const setTaskCommand = (enabled) => taskAction({ action: "command", enabled: enabled ? "true" : "false" });
         /** "Run again": the same clock time, pushed a day forward by the host, re-enabled. */
-        const rearmTask = (id) => taskAction({ action: "rearm", id });
+        const rearmTask = (id, step = "day") => taskAction({ action: "rearm", id, step });
         /** The switch behind it: keep re-arming this one-off after each run. */
         const setTaskAutoRearm = (id, enabled) => taskAction({ action: "auto", id, enabled: enabled ? "true" : "false" });
 
@@ -890,12 +899,23 @@ window.__ModuleLoader__.load({
                   (task.lastLocal ? ` · ${t("lastRun", "上次")} ${task.lastLocal} ${task.lastResult === "ok" ? "✅" : `❌ ${task.lastResult ?? ""}`}` : "")),
                 // A finished one-off gets "run again" instead of pause: the host pushes the same clock time a day
                 // forward and re-enables it, which is the only thing "resume" could sensibly mean here.
+                task.finished ? h("select", {
+                  key: "step",
+                  className: "dswxInput",
+                  value: taskSteps[task.id] ?? "day",
+                  disabled: busy,
+                  onChange: (event) => setTaskSteps({ ...taskSteps, [task.id]: event.target.value }),
+                }, [
+                  h("option", { key: "d", value: "day" }, t("stepDay", "+1 天")),
+                  h("option", { key: "w", value: "week" }, t("stepWeek", "+1 周")),
+                  h("option", { key: "m", value: "month" }, t("stepMonth", "+1 月")),
+                ]) : null,
                 task.finished ? h("button", {
                   key: "again",
                   type: "button",
                   className: "dswxBtn",
                   disabled: busy,
-                  onClick: () => rearmTask(task.id),
+                  onClick: () => rearmTask(task.id, taskSteps[task.id] ?? "day"),
                 }, t("runAgain", "再次运行")) : null,
                 // The switch behind that button: re-arm automatically after every run.
                 task.once ? h("label", { key: "auto", className: "dswxMeta" }, [

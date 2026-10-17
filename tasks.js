@@ -106,6 +106,14 @@ export function parseSchedule(text) {
   match = /^(?:weekly|每周)\s*([a-z一-龥0-9]+)\s+(.+)$/i.exec(raw);
   if (match) return { kind: "weekly", weekday: parseWeekday(match[1]), ...parseTimeOfDay(match[2]) };
 
+  // monthly / 每月 N 日  (checked before the generic `每` branch, which would otherwise swallow it)
+  match = /^(?:monthly|每月)\s*(\d{1,2})\s*[日号]?\s+(.+)$/i.exec(raw);
+  if (match) {
+    const day = Number(match[1]);
+    if (day < 1 || day > 31) throw new Error(`每月几号要在 1-31 之间，收到 ${day}`);
+    return { kind: "monthly", day, ...parseTimeOfDay(match[2]) };
+  }
+
   // every / 每 N 分钟
   match = /^(?:every|每)\s*(.+)$/i.exec(raw);
   if (match) return { kind: "every", everyMs: parseInterval(match[1]) };
@@ -131,6 +139,7 @@ export function describeSchedule(schedule) {
   const time = `${String(schedule.hours ?? 0).padStart(2, "0")}:${String(schedule.minutes ?? 0).padStart(2, "0")}`;
   if (schedule.kind === "daily") return `每天 ${time}`;
   if (schedule.kind === "weekly") return `每周${["一", "二", "三", "四", "五", "六", "日"][schedule.weekday - 1]} ${time}`;
+  if (schedule.kind === "monthly") return `每月 ${schedule.day} 日 ${time}`;
   if (schedule.kind === "every") {
     const minutes = schedule.everyMs / 60_000;
     return minutes % 60 === 0 && minutes >= 60 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
@@ -156,6 +165,25 @@ export function nextRunAt(schedule, fromMs) {
   if (schedule.kind === "daily") {
     if (at.getTime() <= from) at.setDate(at.getDate() + 1);
     return at.getTime();
+  }
+  if (schedule.kind === "monthly") {
+    // The asked-for day may not exist in the month (31 in February), so the candidate is clamped to the
+    // month's last day - a "31 号" reminder has to fire in February too, on the 28th/29th.
+    const candidate = (year, month) => {
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      const at2 = new Date(year, month, Math.min(schedule.day, lastDay), schedule.hours, schedule.minutes, 0, 0);
+      return at2.getTime();
+    };
+    let year = after.getFullYear();
+    let month = after.getMonth();
+    if (candidate(year, month) <= from) {
+      month += 1;
+      if (month > 11) {
+        month = 0;
+        year += 1;
+      }
+    }
+    return candidate(year, month);
   }
   if (schedule.kind === "weekly") {
     // JS 0 = Sunday, our 1 = Monday; both directions of the shift are explicit here.
@@ -203,15 +231,37 @@ export function dueTasks(tasks, now) {
  * A day at a time rather than "+24h from now", because a re-armed "下周一 9 点" should still be 9:00 - the
  * person picked a time of day, and drifting to "whenever I happened to click" would throw that away.
  */
-export function rearmOnce(schedule, now = Date.now()) {
+/**
+ * The steps "run again" can take. A day keeps the clock time; a week keeps the weekday; a month keeps the day
+ * of the month, clamped when the target month is shorter (31 号 in February becomes the 28th).
+ */
+export const REARM_STEPS = Object.freeze({
+  day: { advance: (at) => at.setDate(at.getDate() + 1), label: "天" },
+  week: { advance: (at) => at.setDate(at.getDate() + 7), label: "周" },
+  // Not `setMonth(+1)`: on 31 January that rolls into 3 March, and a "31 号" reminder would silently move
+  // months. The day is clamped to the target month's last day instead, exactly like the monthly trigger.
+  month: {
+    advance: (at) => {
+      const day = at.getDate();
+      at.setDate(1);
+      at.setMonth(at.getMonth() + 1);
+      at.setDate(Math.min(day, new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate()));
+    },
+    label: "个月",
+  },
+});
+
+export function rearmOnce(schedule, now = Date.now(), step = "day") {
   if (!schedule || schedule.kind !== "once") throw new Error("只有一次性任务可以重排");
   const at = new Date(Number(schedule.atMs));
   if (Number.isNaN(at.getTime())) throw new Error("这个一次性任务没有可用的时间");
-  let days = 0;
+  const unit = REARM_STEPS[step];
+  if (!unit) throw new Error(`重排步长只能是 ${Object.keys(REARM_STEPS).join(" / ")}，收到 ${JSON.stringify(step)}`);
+  let rounds = 0;
   while (at.getTime() <= Number(now)) {
-    at.setDate(at.getDate() + 1);
-    days += 1;
-    if (days > 3650) throw new Error("重排超过十年，时间可能有误"); // a runaway guard, not a rule
+    unit.advance(at);
+    rounds += 1;
+    if (rounds > 4000) throw new Error("重排次数过多，时间可能有误"); // a runaway guard, not a rule
   }
   return { kind: "once", atMs: at.getTime() };
 }

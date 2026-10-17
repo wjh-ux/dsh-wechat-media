@@ -25,6 +25,7 @@ import {
   parseMoment,
   parseSchedule,
   parseTimeOfDay,
+  REARM_STEPS,
 } from "../tasks.js";
 
 let passed = 0;
@@ -245,6 +246,47 @@ test("transport is read from both prefix spellings, not just the colon one", () 
   assert.equal(transportOf("b775a478733a-im-bot"), "wechat", "a WeChat account carries no prefix");
   assert.equal(transportOf(""), "wechat", "an empty id falls back to WeChat");
   assert.equal(transportOf(undefined), "wechat", "and so does a missing one");
+});
+
+test("monthly fires on the asked-for day, clamping to short months", () => {
+  const monthly = parseSchedule("monthly 15 09:00");
+  assert.deepEqual(monthly, { kind: "monthly", day: 15, hours: 9, minutes: 0 });
+  assert.deepEqual(parseSchedule("每月 1 日 09:00"), { kind: "monthly", day: 1, hours: 9, minutes: 0 });
+  assert.deepEqual(parseSchedule("每月15号 08:30"), { kind: "monthly", day: 15, hours: 8, minutes: 30 });
+  assert.throws(() => parseSchedule("monthly 32 09:00"), /1-31/);
+  assert.equal(describeSchedule(monthly), "每月 15 日 09:00");
+
+  // From Friday 2026-10-16 10:00, the 15th has passed, so the next one is November.
+  assert.equal(nextRunAt(monthly, FRI), new Date(2026, 10, 15, 9, 0).getTime());
+  // The 20th is still ahead in October.
+  assert.equal(nextRunAt(parseSchedule("monthly 20 09:00"), FRI), new Date(2026, 9, 20, 9, 0).getTime());
+  // 31 号 in a 30-day month: October 31 exists, November 30 does not - it clamps.
+  const last = parseSchedule("monthly 31 09:00");
+  const fromNov = new Date(2026, 10, 1, 10, 0).getTime();
+  assert.equal(nextRunAt(last, fromNov), new Date(2026, 10, 30, 9, 0).getTime(), "November clamps to the 30th");
+  // February 2027 has 28 days.
+  const fromFeb = new Date(2027, 1, 1, 10, 0).getTime();
+  assert.equal(nextRunAt(last, fromFeb), new Date(2027, 1, 28, 9, 0).getTime(), "February clamps to the 28th");
+});
+
+test("re-arm steps: a day keeps the time, a week the weekday, a month the day", () => {
+  const at = new Date(2026, 9, 16, 9, 0).getTime(); // Friday
+  const later = new Date(2026, 9, 16, 10, 0).getTime();
+  const day = rearmOnce({ kind: "once", atMs: at }, later, "day");
+  assert.equal(day.atMs, new Date(2026, 9, 17, 9, 0).getTime());
+  assert.equal(new Date(day.atMs).getDay(), 6, "a day later is Saturday");
+
+  const week = rearmOnce({ kind: "once", atMs: at }, later, "week");
+  assert.equal(week.atMs, new Date(2026, 9, 23, 9, 0).getTime());
+  assert.equal(new Date(week.atMs).getDay(), 5, "a week later is still Friday");
+
+  const month = rearmOnce({ kind: "once", atMs: at }, later, "month");
+  assert.equal(month.atMs, new Date(2026, 10, 16, 9, 0).getTime(), "same day next month");
+  const rounded = rearmOnce({ kind: "once", atMs: new Date(2026, 0, 31, 9, 0).getTime() }, new Date(2026, 1, 1).getTime(), "month");
+  assert.equal(new Date(rounded.atMs).getMonth(), 1, "31 Jan + 1 month stays in February");
+  assert.equal(new Date(rounded.atMs).getDate(), 28, "and clamps to the 28th rather than rolling into March");
+  assert.equal(Object.keys(REARM_STEPS).join(","), "day,week,month");
+  assert.throws(() => rearmOnce({ kind: "once", atMs: at }, later, "year"), /重排步长只能是/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

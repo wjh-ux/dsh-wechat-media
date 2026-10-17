@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.30.0
+
+- **`monthly` trigger**: `monthly 15 09:00` / `每月15日 09:00` / `每月 1 日 08:00`. The day is clamped to the month
+  it lands in, so a "31 号" reminder fires on 30 November and 28 February instead of skipping those months - a
+  reminder that silently misses a month is worse than one that arrives a day early.
+- **`[再次运行]` takes a step**: `+1 天 / +1 周 / +1 月`, remembered per row. A day keeps the clock time, a week keeps
+  the weekday, a month keeps the day of the month - and the month step clamps as well, because `setMonth(+1)` on
+  31 January rolls into 3 March.
+- Both were pure-logic changes with tests that name the awkward case: 31 in February, a weekly re-arm landing on the
+  same weekday, a month step over a 28-day February.
+- 28 suites / 495 cases.
+
 ## 0.29.0
 
 - **A finished one-off can be run again, and can re-arm itself.** `[再次运行]` pushes the task's *own clock time* a

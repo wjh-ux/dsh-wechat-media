@@ -291,7 +291,7 @@ one switch for the dangerous action:
 | `command` | runs a local command and sends its output (needs `/task command on`) |
 
 Triggers accept English and Chinese interchangeably: `daily 08:30` / `每天 08:30`, `weekly mon 09:00` / `每周一 09:00`,
-`every 30m` / `每 30 分钟`, `once 2026-10-20 09:00`. Tasks live in `tasks.json` under `$DSH_HOME/dsh-wechat-media/`,
+`every 30m` / `每 30 分钟`, `monthly 15 09:00` / `每月15日 09:00` (clamped to short months), `once 2026-10-20 09:00`. Tasks live in `tasks.json` under `$DSH_HOME/dsh-wechat-media/`,
 separate from prefs; a task that has run once never fires again for the same window, and a `once` task switches
 itself off afterwards.
 

@@ -2807,6 +2807,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             && Number(task.lastRunAt) >= Number(task.schedule?.atMs),
           autoRearm: task.autoRearm === true,
           once: task.schedule?.kind === "once",
+          monthly: task.schedule?.kind === "monthly",
+          day: task.schedule?.day ?? null,
           transport: task.transport,
           nextAt: next ? new Date(next).toISOString() : null,
           nextLocal: next ? tasks.formatWhen(next) : "",
@@ -5710,7 +5712,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               return json(res, 400, { ok: false, error: "只有一次性任务需要「再次运行」；循环任务自己会再触发" });
             }
             try {
-              const schedule = tasks.rearmOnce(found.schedule, Date.now());
+              const step = String(body.step ?? "day");
+              const schedule = tasks.rearmOnce(found.schedule, Date.now(), step);
               await state.saveTasks(list.map((task) => (task.id === id ? { ...task, schedule, enabled: true } : task)));
               noteRoute("/task", { action: "rearm", id, via: "card", at: schedule.atMs });
             } catch (error) {
