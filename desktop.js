@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Desktop control: the mouse, the keyboard, screenshots and windows.
  *
  * This is the one capability in this plugin that can click something on the user's own screen, so the
@@ -59,6 +59,12 @@ const C = {
  * best-effort: an older Windows that lacks the call still works at 100%.
  */
 const DPI = [
+  // stdout is UTF-8 or nothing. `powershell.exe -Command` writes with the console's ANSI codepage
+  // (CP936 here), and Node decodes the pipe as UTF-8 - so every Chinese window title came back as
+  // mojibake, and a title nobody can read is a title nobody can click. This has to be set before the
+  // first write, which is why it leads the prelude every script shares.
+  "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+  "$OutputEncoding = [Text.Encoding]::UTF8",
   "try {",
   '  Add-Type -TypeDefinition @"',
   "using System.Runtime.InteropServices;",

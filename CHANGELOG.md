@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.3
+
+- **Fixed: Chinese window titles came back as mojibake.** powershell.exe -Command writes stdout in the console's
+  ANSI codepage (CP936 here) and Node decodes the pipe as UTF-8, so every title in desktop_windows arrived as
+  ????.... A title nobody can read is a title nobody can click, so the shared prelude now sets
+  [Console]::OutputEncoding and $OutputEncoding to UTF-8 before anything is written. Found by running the tool
+  for real, not by reading it.
+- The guard asserts it for **every** script that can produce text, and that the encoding is set before the first
+  write. Falsified by deleting the two lines: the suite goes red, then the file is restored byte-identical.
+- 27 suites / 471 cases.
+
 ## 0.25.2
 
 - **Fixed: a tool definition with an unsupported parameter type took the whole plugin down.** v0.25.0's

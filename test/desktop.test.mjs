@@ -65,6 +65,16 @@ await test("every script makes the process DPI aware before measuring anything",
   }
 });
 
+await test("every script writes UTF-8, or Chinese titles come back as mojibake", async () => {
+  // Live: `powershell.exe -Command` wrote stdout in the console's ANSI codepage (CP936) and Node decoded
+  // the pipe as UTF-8, so every Chinese window title arrived as `????` - and a title nobody can read is a
+  // title nobody can click. The encoding must be set before the first write, so it leads the prelude.
+  for (const script of [screenScript(), windowsScript(), focusScript({ title: "x" }), screenshotScript({ path: "x.png" }), mouseScript({ action: "move", x: 1, y: 2 }), typeScript({ text: "x" }), keyScript({ keys: "enter" })]) {
+    assert.match(script, /\[Console\]::OutputEncoding = \[Text\.Encoding\]::UTF8/, "stdout must be UTF-8");
+    assert.ok(script.indexOf("OutputEncoding") < script.indexOf("Add-Type"), "and set before anything is written");
+  }
+});
+
 await test("the INPUT struct layout is the size SendInput validates", async () => {
   // A wrong layout makes SendInput return 0 without an error, which looks like "nothing happened".
   assert.equal(INPUT_SIZE.x64, 40);
