@@ -5027,14 +5027,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         timeoutMs: 20000,
         async execute(args) {
           try {
-            const target = args?.to
-              ? { transport: "wechat", ...(await resolvePeer(args.to)) }
-              : await defaultTaskTarget();
+            // The two target shapes differ: `defaultTaskTarget` answers `{ transport, accountId }` and
+            // `resolvePeer` answers `{ account: { accountId } }`. Reaching for the nested form first threw a
+            // TypeError on the shape that has no `account` at all - found live, on the first task anyone made.
+            const target = args?.to ? await resolvePeer(args.to) : await defaultTaskTarget();
+            const accountId = target.accountId ?? target.account?.accountId;
+            if (!accountId) throw new Error("无法确定这个会话属于哪个账号");
+            const transport = target.transport ?? transportOf(accountId);
             const task = tasks.createTask({
-              transport: target.transport,
-              accountId: target.account.accountId ?? target.accountId,
+              transport,
+              accountId,
               chatId: target.chatId,
-              peerName: target.peerName ?? target.peerName,
+              peerName: target.peerName ?? "",
               action: args?.action,
               payload: args?.text,
               schedule: args?.when,
@@ -5043,7 +5047,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             list.push(task);
             await state.saveTasks(list);
             noteRoute("/task", { action: "add", id: task.id, kind: task.schedule.kind });
-            return `已创建任务 ${task.id}：${tasks.describeSchedule(task.schedule)} · ${task.action} · 发往 ${target.transport} 的 ${task.chatId}\n内容：${task.payload.slice(0, 60)}`;
+            return `已创建任务 ${task.id}：${tasks.describeSchedule(task.schedule)} · ${task.action} · 发往 ${transport} 的 ${task.chatId}\n内容：${task.payload.slice(0, 60)}`;
           } catch (error) {
             noteRoute("/task", { action: "add", ok: false, error: String(error?.message ?? error) });
             return taskToolError(error);

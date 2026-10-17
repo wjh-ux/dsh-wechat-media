@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.26.1
+
+- **Fixed: `task_add` threw a TypeError on the very first task anyone created.** Two target shapes reach it -
+  `{ transport, accountId }` from the default target (the chat that just asked) and `{ account: { accountId } }`
+  from an explicit `to` - and it read the nested form first, so the first shape threw
+  `Cannot read properties of undefined (reading 'accountId')`. One optional chain (`target.accountId ??
+  target.account?.accountId`), plus an explicit refusal when neither yields an account. Found live, not by reading
+  the code, which is the third time in this feature that running it beat reading it.
+- Guard: the wiring suite now requires that optional chain and forbids dereferencing the shape that may not exist.
+- Still open, deliberately not smuggled into a bug-fix release: an explicit `to` resolves against WeChat accounts
+  only, so a WeCom or Feishu chat can be targeted only as "the chat that just asked". Persistent last-inbound and an
+  explicit transport on `task_add` are the follow-up.
+- 28 suites / 489 cases.
+
 ## 0.26.0
 
 - **Scheduled tasks, with three actions and four triggers.** `task_add` / `task_list` / `task_remove` plus a `/task`

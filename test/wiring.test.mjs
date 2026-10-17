@@ -473,6 +473,11 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(host, /name: "task_list"/, "task_list exists");
   assert.match(host, /name: "task_remove"/, "task_remove exists");
   assert.match(host, /taskAddTool, taskListTool, taskRemoveTool\]/, "and all three are registered");
+  // Two target shapes reach task_add: `{ accountId }` from the default target, and `{ account: { accountId } }`
+  // from an explicit `to`. v0.26.0 read `.account.accountId` first, which is a TypeError on the shape with no
+  // `account` - found live, on the first task anyone created. The optional chain is the fix; this keeps it.
+  assert.match(host, /target\.accountId \?\? target\.account\?\.accountId/, "the account id is read from either shape");
+  assert.doesNotMatch(host, /target\.account\.accountId/, "never by dereferencing the shape that may not exist");
   assert.match(commandsSource, /name: "task"/, "the /task command exists");
   assert.match(host, /command\.name === "task"/, "the host handles it");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
