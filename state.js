@@ -28,6 +28,30 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { accumulate, due, reset, setWindow } from "./tokens.js";
+import { CIPHER_PREFIX, SECRET_PATHS, dpapi, isEncrypted, plaintextSecrets } from "./secrets.js";
+import { execFile } from "node:child_process";
+
+/**
+ * The secret protector, built once.
+ *
+ * DPAPI is a PowerShell call, so it is a process per operation: prefs are revealed on first read and cached,
+ * and encrypted on write. Off Windows `available` is false and the file keeps plaintext - which /state then
+ * reports as `secrets.atRest: "plaintext"` rather than implying protection that does not exist.
+ */
+let protector;
+function secretProtector() {
+  if (!protector) {
+    protector = dpapi({
+      exec: (file, args, options) => new Promise((resolve, reject) => {
+        execFile(file, args, { timeout: options?.timeoutMs ?? 15000, windowsHide: true, maxBuffer: 1 << 20 }, (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        });
+      }),
+    });
+  }
+  return protector;
+}
 
 /** Directory name under $DSH_HOME. */
 const STATE_DIR_NAME = "dsh-wechat-media";
@@ -245,7 +269,7 @@ export class WechatState {
   // ── preferences ───────────────────────────────────────────────────────────
 
   async loadPrefs() {
-    const file = await readJson(join(this.root, "prefs.json"), {});
+    const file = await this.readPrefsRevealed();
     return {
       autoReply: true,
       requireAllowlist: false,
@@ -285,8 +309,67 @@ export class WechatState {
   async savePrefs(patch) {
     const merged = { ...(await this.loadPrefs()), ...patch };
     await this.init();
-    await writeJson(join(this.root, "prefs.json"), merged);
+    // Written sealed: on disk the secret is DPAPI ciphertext bound to this Windows account, so a copy of the
+    // file is worthless elsewhere. `encryptSecrets` leaves already-sealed values alone, so saving twice is safe.
+    const seal = secretProtector();
+    let sealed = merged;
+    this.secretError = undefined;
+    if (seal.available) {
+      // Built field by field rather than through `encryptSecrets`: DPAPI is async and that helper is not,
+      // so its callback would have to guess which field it is sealing - which is how the first version
+      // silently fell back to plaintext.
+      sealed = { ...merged };
+      for (const [section, field] of SECRET_PATHS) {
+        const value = merged?.[section]?.[field];
+        if (typeof value !== "string" || !value || isEncrypted(value)) continue;
+        try {
+          sealed[section] = { ...sealed[section], [field]: `${CIPHER_PREFIX}${await seal.protect(value)}` };
+        } catch (error) {
+          // Never fail a save because the seal failed - but record it, so /state can say the file is not
+          // protected instead of implying it is.
+          this.secretError = `无法加密 ${section}.${field}：${String(error?.message ?? error)}`;
+        }
+      }
+    }
+    await writeJson(join(this.root, "prefs.json"), sealed);
+    this._prefsRevealed = undefined;
     return merged;
+  }
+
+  /** Prefs as stored, with the secrets revealed once and cached. */
+  async readPrefsRevealed() {
+    if (this._prefsRevealed) return this._prefsRevealed;
+    const raw = await readJson(join(this.root, "prefs.json"), {});
+    const out = { ...raw };
+    const seal = secretProtector();
+    if (seal.available) {
+      for (const [section, field] of SECRET_PATHS) {
+        const value = out?.[section]?.[field];
+        if (!isEncrypted(value)) continue;
+        try {
+          out[section] = { ...out[section], [field]: await seal.reveal(value.slice("dpapi:".length)) };
+        } catch (error) {
+          // A sealed value from another account or machine cannot be opened. Keep the ciphertext so the
+          // status can say "unreadable" rather than pretending the credential is absent.
+          this.secretError = `无法解开 ${section}.${field}：${String(error?.message ?? error)}`;
+          out[section] = { ...out[section], [field]: "" };
+        }
+      }
+    }
+    this._prefsRevealed = out;
+    return out;
+  }
+
+  /** What /state may say about secrets at rest: how they are stored, and what is still in the clear. */
+  async secretsStatus() {
+    const raw = await readJson(join(this.root, "prefs.json"), {});
+    const seal = secretProtector();
+    return {
+      atRest: seal.available ? "dpapi" : "plaintext",
+      platform: seal.platform,
+      exposed: plaintextSecrets(raw),
+      error: this.secretError ?? null,
+    };
   }
 
   // ── token ledger ──────────────────────────────────────────────────────────

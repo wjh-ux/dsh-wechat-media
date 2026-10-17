@@ -2779,6 +2779,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
    */
   async function taskSummary() {
     const list = await state.loadTasks();
+    const prefs = await state.loadPrefs();
+    const gracePref = Number(prefs.taskGraceMinutes);
     const soonest = list
       .map((task) => ({ id: task.id, next: tasks.nextRunFor(task) }))
       .filter((entry) => entry.next)
@@ -2788,9 +2790,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       enabled: list.filter((task) => task.enabled !== false).length,
       nextAt: soonest?.next ? new Date(soonest.next).toISOString() : null,
       nextId: soonest?.id ?? null,
-      commandEnabled: (await state.loadPrefs()).taskCommand === true,
+      commandEnabled: prefs.taskCommand === true,
       ran: counters.tasksRun ?? 0,
       failed: counters.tasksFailed ?? 0,
+      // Skipped is its own number: "it did not run" and "it failed" are different answers, and a slept
+      // machine is the commonest reason for the first.
+      skipped: counters.tasksSkipped ?? 0,
+      graceMinutes: Number.isFinite(gracePref) ? gracePref : tasks.DEFAULT_GRACE_MS / 60_000,
       items: list.map((task) => {
         const next = tasks.nextRunFor(task);
         return {
@@ -4047,6 +4053,40 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // spellings, and that is exactly the sort of detail worth a unit test rather than a comment here.
   const transportOf = tasks.transportOf;
 
+  /**
+   * Resolve an explicit `transport` + `to` pair into a task target.
+   *
+   * Without this, a WeCom or Feishu chat could only be targeted as "the chat that just asked", because
+   * `resolvePeer` searches WeChat accounts. Account ids are built the same way the inbound paths build them
+   * (`wecom:<botId>` / `feishu:<appId>`, then normalised), so a task created this way is indistinguishable
+   * from one created by a message.
+   */
+  async function targetByTransport(transport, to) {
+    const name = String(transport ?? "").trim().toLowerCase();
+    const chatId = String(to ?? "").trim();
+    if (!chatId) throw new Error("指定 transport 时必须同时给 to（会话 id）");
+    if (name === "wecom") {
+      const botId = String(wecomConfig().botId ?? "").trim();
+      if (!botId) throw new Error("企业微信还没配置（botId 为空）");
+      return { transport: "wecom", accountId: normalizeAccountId(`wecom:${botId}`), chatId, peerName: "" };
+    }
+    if (name === "feishu") {
+      const appId = String(feishuConfig().appId ?? "").trim();
+      if (!appId) throw new Error("飞书还没配置（appId 为空）");
+      return { transport: "feishu", accountId: normalizeAccountId(`feishu:${appId}`), chatId, peerName: "" };
+    }
+    if (name === "wechat") {
+      const peer = await resolvePeer(chatId);
+      return {
+        transport: "wechat",
+        accountId: peer.account?.accountId ?? peer.accountId,
+        chatId: peer.chatId ?? chatId,
+        peerName: peer.peerName ?? "",
+      };
+    }
+    throw new Error(`transport 只能是 wechat / wecom / feishu，收到 ${JSON.stringify(transport)}`);
+  }
+
   /** The chat to attach a new task to: the most recent inbound, else the most recent known route. */
   async function defaultTaskTarget() {
     const recent = [...lastInbound.values()].sort((a, b) => b.at - a.at)[0];
@@ -4145,8 +4185,29 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     try {
       const list = await state.loadTasks();
       const due = tasks.dueTasks(list, Date.now());
+      // How late a task may be and still run. 0 means "always run, however late" for people who want every
+      // occurrence; unset means DEFAULT_GRACE_MS.
+      const prefMinutes = Number((await state.loadPrefs()).taskGraceMinutes);
+      const graceMs = Number.isFinite(prefMinutes) && prefMinutes >= 0 ? prefMinutes * 60_000 : tasks.DEFAULT_GRACE_MS;
       for (const task of due) {
         const startedAt = Date.now();
+        // A machine that slept is not a task that failed: an occurrence older than the window is recorded and
+        // skipped, and the schedule moves on. Otherwise waking from a night's sleep fires every missed task at
+        // once - several agent turns and several messages about yesterday, in the same second.
+        const verdict = tasks.classifyOccurrence(task, startedAt, graceMs);
+        if (verdict.verdict === "missed") {
+          const late = Math.round(Number(verdict.lateBy ?? 0) / 60_000);
+          const skipped = {
+            ...task,
+            lastRunAt: startedAt,
+            lastResult: `错过（晚 ${late} 分钟，超过宽限窗口）`,
+            enabled: task.schedule?.kind === "once" ? false : task.enabled !== false,
+          };
+          await state.saveTasks((await state.loadTasks()).map((item) => (item.id === skipped.id ? skipped : item)));
+          counters.tasksSkipped = Number(counters.tasksSkipped ?? 0) + 1;
+          ctx.logger?.warn?.("[dsh-wechat-media] task %s missed by %s min, skipped", task.id, late);
+          continue;
+        }
         const result = await runTask(task);
         const updated = {
           ...task,
@@ -5082,6 +5143,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           action: { type: "string", required: true, description: "message | prompt | command" },
           text: { type: "string", required: true, description: "要发的内容 / 给 agent 的提示词 / 要执行的命令" },
           to: { type: "string", description: "可选：目标 chatId（默认最近一条消息所在的会话）" },
+          transport: { type: "string", description: "可选：wechat | wecom | feishu，配合 to 指定任意平台的会话" },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 20000,
@@ -5090,7 +5152,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // The two target shapes differ: `defaultTaskTarget` answers `{ transport, accountId }` and
             // `resolvePeer` answers `{ account: { accountId } }`. Reaching for the nested form first threw a
             // TypeError on the shape that has no `account` at all - found live, on the first task anyone made.
-            const target = args?.to ? await resolvePeer(args.to) : await defaultTaskTarget();
+            const target = args?.transport
+              ? await targetByTransport(args.transport, args.to)
+              : args?.to ? await resolvePeer(args.to) : await defaultTaskTarget();
             const accountId = target.accountId ?? target.account?.accountId;
             if (!accountId) throw new Error("无法确定这个会话属于哪个账号");
             const transport = target.transport ?? transportOf(accountId);
@@ -5193,6 +5257,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // `schedulerTick` so a slow `prompt` task cannot fire twice. Tasks are the only thing in this plugin
   // that runs without a message arriving, which is exactly why every outcome is logged and both sides
   // (ran / failed) are counted.
+  // Migrate the prefs file in place: any secret still stored as plaintext is sealed once, at startup, so a
+  // file written before this version stops being readable by anyone who can read it.
+  ctx.effect(() => {
+    void (async () => {
+      try {
+        const status = await state.secretsStatus();
+        if (status.atRest === "dpapi" && status.exposed.length) {
+          await state.savePrefs({});
+          ctx.logger?.info?.("[dsh-wechat-media] sealed %d secret(s) with DPAPI", status.exposed.length);
+        }
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] could not seal secrets: %s", error?.message ?? error);
+      }
+    })();
+  });
+
   ctx.effect(() => {
     const timer = setInterval(() => { void schedulerTick(); }, 20_000);
     timer.unref?.();
@@ -5504,6 +5584,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             tavily: tavilyState(),
             browser: browserState(),
             desktop: desktopState(prefs),
+            // How secrets are stored on disk, and anything still in the clear. A file that says
+            // "plaintext" is honest; a file that said "encrypted" while storing plaintext would not be.
+            secrets: await state.secretsStatus(),
             tasks: await taskSummary(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
@@ -5658,7 +5741,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (action === "list") return json(res, 200, { ok: true, tasks: await taskSummary() });
           if (action === "add") {
             try {
-              const target = body.to ? await resolvePeer(String(body.to)) : await defaultTaskTarget();
+              const target = body.transport
+                ? await targetByTransport(String(body.transport), String(body.to ?? ""))
+                : body.to ? await resolvePeer(String(body.to)) : await defaultTaskTarget();
               const accountId = target.accountId ?? target.account?.accountId;
               const transport = target.transport ?? transportOf(accountId);
               const task = tasks.createTask({

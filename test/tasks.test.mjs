@@ -20,6 +20,9 @@ import {
   nextRunAt,
   nextRunFor,
   rearmOnce,
+  classifyOccurrence,
+  occurrenceAt,
+  DEFAULT_GRACE_MS,
   transportOf,
   parseInterval,
   parseMoment,
@@ -295,6 +298,31 @@ test("re-arm steps: a day keeps the time, a week the weekday, a month the day", 
   // And a task that is far in the past still lands in the future, not one step past the starting point.
   const ancient2 = rearmOnce({ kind: "once", atMs: new Date(2026, 5, 1, 9, 0).getTime() }, later, "month");
   assert.ok(ancient2.atMs > later, "still ends up in the future");
+});
+
+test("a slept machine skips stale occurrences instead of dumping them", () => {
+  const nine = new Date(2026, 9, 16, 9, 0).getTime();
+  const daily = { id: "d", enabled: true, action: "prompt", payload: "x", schedule: { kind: "daily", hours: 9, minutes: 0 }, createdAt: nine - 86_400_000, lastRunAt: nine - 86_400_000 };
+  assert.equal(occurrenceAt(daily, nine + 5 * 60_000), nine, "the occurrence is today at 09:00");
+  // Five minutes late: ordinary tick jitter, run it.
+  assert.deepEqual(classifyOccurrence(daily, nine + 5 * 60_000), { verdict: "run", at: nine, lateBy: 5 * 60_000 });
+  // Eight hours late: the machine slept through it. Say so and move on.
+  const stale = classifyOccurrence(daily, nine + 8 * 3600_000);
+  assert.equal(stale.verdict, "missed");
+  assert.equal(stale.lateBy, 8 * 3600_000);
+  // Exactly at the window edge is still inside it (a window is a limit, not a suggestion).
+  assert.equal(classifyOccurrence(daily, nine + DEFAULT_GRACE_MS).verdict, "run");
+  assert.equal(classifyOccurrence(daily, nine + DEFAULT_GRACE_MS + 1).verdict, "missed");
+  // 0 disables the window: "run every occurrence, however late".
+  assert.equal(classifyOccurrence(daily, nine + 30 * 3600_000, 0).verdict, "run");
+  // Before the occurrence there is nothing to do - and nothing to report either.
+  assert.equal(classifyOccurrence(daily, nine - 60_000).verdict, "idle");
+  // A one-off three days late is stale too, and reports when it was due.
+  const once = { id: "o", enabled: true, schedule: { kind: "once", atMs: nine }, lastRunAt: null, action: "message", payload: "x" };
+  assert.equal(classifyOccurrence(once, nine + 3 * 86_400_000).verdict, "missed");
+  assert.equal(occurrenceAt(once), nine);
+  // An unreadable schedule is idle, never a crash in the tick.
+  assert.equal(classifyOccurrence({ id: "x", enabled: true, schedule: { kind: "nope" } }).verdict, "idle");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

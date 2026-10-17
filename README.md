@@ -329,6 +329,15 @@ The Web UI card is the management half; creation works both there and in a chat.
 A finished one-off shows `✅ 已跑完（一次性任务，不能暂停）` rather than a pause button that would do nothing: `dueTasks`
 compares the last run against **that occurrence's** `atMs`, so re-arming is meaningful and a plain resume is not.
 
+Two more behaviours worth knowing:
+
+- **Missed runs are skipped, not replayed.** A task more than 60 minutes late (a laptop that slept, a bridge that was
+  stopped) is recorded as missed and the schedule moves on - the alternative is every missed `prompt` task firing in
+  the same second when the machine wakes. `taskGraceMinutes` in prefs tunes it; `0` means "always run, however late".
+  `/state` shows `tasks.skipped` next to `ran` and `failed`.
+- **Any chat can be targeted.** `task_add` takes `transport` (`wechat` / `wecom` / `feishu`) with `to`, so a task can
+  be created for a group you have not just spoken to; without it, the default is still "the chat that asked".
+
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 
 Seven tools can drive this machine's own mouse and keyboard, read the screen and manage windows. They are

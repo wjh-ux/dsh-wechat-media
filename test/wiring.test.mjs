@@ -525,6 +525,27 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(clientSource, /key: "again"/, "next to the run-again button");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
+await test("secrets are sealed at rest, and the state says how", () => {
+  // The hard part is not encryption, it is honesty: a file that stores plaintext while the product implies
+  // otherwise is worse than one that admits it. So the wiring has to reach all four places.
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  const secretsSource = readFileSync(join(root, "secrets.js"), "utf8");
+  assert.match(stateSource, /from "\.\/secrets\.js"/, "state.js imports the module");
+  assert.match(stateSource, /CIPHER_PREFIX/, "and knows the marker");
+  assert.match(stateSource, /await seal\.protect\(value\)/, "savePrefs seals each secret");
+  assert.match(stateSource, /await seal\.reveal\(/, "loadPrefs reveals them");
+  assert.match(stateSource, /async secretsStatus\(\)/, "and reports how they are stored");
+  // The DPAPI call must ask for the user's own key, and never turn into a shell.
+  assert.match(secretsSource, /'CurrentUser'\)/, "DPAPI is scoped to the current user");
+  assert.match(secretsSource, /export function dpapi\(\{ platform = process\.platform, exec \}/, "the protector takes an injectable exec, so no test has to spawn a process");
+  assert.match(stateSource, /execFile\(file, args,/, "and state.js spawns without a shell, so a secret never becomes part of a command line");
+  // /state reports it, and a plaintext file is sealed at startup without waiting for someone to press Save.
+  assert.match(host, /secrets: await state\.secretsStatus\(\)/, "/state reports the at-rest status");
+  assert.match(host, /sealed %d secret\(s\) with DPAPI/, "startup seals what is still plaintext");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.ok(pkg.files.includes("secrets.js"), "the module ships");
+});
+
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.

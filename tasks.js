@@ -269,6 +269,43 @@ export function rearmOnce(schedule, now = Date.now(), step = "day") {
   return { kind: "once", atMs: at.getTime() };
 }
 
+/**
+ * How late a task may be and still run. A laptop that slept through the night would otherwise fire every
+ * missed occurrence on the first tick after waking - five `prompt` tasks means five agent turns and five
+ * messages about yesterday, at the same second. Past the window the occurrence is reported as missed and
+ * the schedule moves on: a reminder that is hours stale is worse than one that did not arrive.
+ */
+export const DEFAULT_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * When this task should have fired, i.e. the occurrence a tick at `now` is looking at.
+ *
+ * Separate from `dueTasks` so the scheduler can tell "due" from "late": the interesting question is never
+ * only *whether* something is due, but by how much.
+ */
+export function occurrenceAt(task, now = Date.now()) {
+  if (!task?.schedule) return undefined;
+  if (task.schedule.kind === "once") return Number(task.schedule.atMs);
+  try {
+    return nextRunAt(task.schedule, Number(task.lastRunAt ?? task.createdAt ?? now));
+  } catch {
+    return undefined; // unreadable schedule: the caller treats "no occurrence" as nothing to do
+  }
+}
+
+/**
+ * Classify one task for a tick: `run` (due and inside the window), `missed` (due but stale), or `idle`.
+ * `lateBy` answers "how late" for the log line, even when the answer is "too late".
+ */
+export function classifyOccurrence(task, now = Date.now(), graceMs = DEFAULT_GRACE_MS) {
+  const at = occurrenceAt(task, now);
+  if (at === undefined) return { verdict: "idle" };
+  const lateBy = Number(now) - at;
+  if (lateBy < 0) return { verdict: "idle" };
+  if (Number(graceMs) > 0 && lateBy > Number(graceMs)) return { verdict: "missed", at, lateBy };
+  return { verdict: "run", at, lateBy };
+}
+
 /** The next fire time for a task, or undefined for a finished one-off or an unreadable schedule. */
 export function nextRunFor(task, now = Date.now()) {
   if (!task?.schedule) return undefined;

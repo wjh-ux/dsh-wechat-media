@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.32.0
+
+- **Secrets are encrypted at rest.** `prefs.json` held the Feishu app secret and the Tavily key in plain text - a file
+  anyone who can read it could take the credentials out of. Both are now sealed with **DPAPI** (`CurrentUser` scope):
+  the key belongs to the logged-on Windows account and is held by the OS, so a copy of the file is worthless on
+  another machine or under another account, and there is no passphrase to lose. Sealing happens on every save, and a
+  startup migration seals a file written by an earlier version.
+- **It never pretends.** Off Windows there is no equivalent in the box, so the values stay plain *and*
+  `/state.secrets` says `atRest: "plaintext"` with the list of what is exposed - the one thing that must not happen is
+  a file that claims to be protected while it is not. A sealed value that cannot be opened (copied from another
+  account) degrades to "empty and reported", not to a crash.
+- `secrets.js` is dependency-free: the pure parts (which fields are secret, wrap/unwrap, never double-wrap, never
+  invent a block) are tested with fakes, and the DPAPI call is verified live - round trip, tamper rejection, and two
+  encryptions of the same plaintext producing different ciphertext.
+- 29 suites / 505 cases.
+
+## 0.31.0
+
+- **Missed runs have a policy now: a grace window (default 60 minutes).** A machine that slept through the night used
+  to fire every missed occurrence on the first tick after waking - five `prompt` tasks meant five agent turns and five
+  messages, all at the same second, all about yesterday. An occurrence older than the window is recorded as
+  `错过（晚 N 分钟，超过宽限窗口）`, counted in `tasks.skipped` (separate from `failed`, because "did not run" and
+  "failed" are different answers), and the schedule moves on. `taskGraceMinutes` in prefs changes or disables it;
+  `0` means "run every occurrence, however late".
+- **`task_add` can target a WeCom or Feishu chat explicitly.** It took `to` (a chat id) but resolved it against WeChat
+  accounts only, so the other two transports could be addressed solely as "the chat that just asked". A `transport`
+  parameter (`wechat` / `wecom` / `feishu`) now resolves the account the way the inbound paths build it, so a task
+  created for a Feishu group is indistinguishable from one created by a message in that group. The card's add route
+  accepts the same pair.
+- Pure logic in `tasks.js` (`occurrenceAt`, `classifyOccurrence`, `DEFAULT_GRACE_MS`) with tests that name the awkward
+  cases: exactly at the window edge (inside), one millisecond past (missed), a window of 0 (never skip), and an
+  unreadable schedule (idle, never a crash in the tick).
+- 28 suites / 496 cases.
+
 ## 0.30.2
 
 - **README: what people actually schedule**, six real examples (weather line, group digest, weekly report, monthly
