@@ -166,6 +166,7 @@ window.__ModuleLoader__.load({
           lastRun: "last",
           paused: "paused",
           finished: "done",
+          finishedHint: "a one-off cannot be paused",
           pause: "Pause",
           resume: "Resume",
           remove: "Delete",
@@ -287,6 +288,7 @@ window.__ModuleLoader__.load({
           lastRun: "上次",
           paused: "已暂停",
           finished: "已跑完",
+          finishedHint: "一次性任务，不能暂停",
           pause: "暂停",
           resume: "恢复",
           remove: "删除",
@@ -874,7 +876,7 @@ window.__ModuleLoader__.load({
                 h("span", { key: "id", className: "dswxName" }, task.id),
                 h("span", { key: "w", className: "dswxMeta" },
                   `${task.when} · ${task.action} · ${task.transport}` +
-                  (task.finished ? ` · ✅ ${t("finished", "已跑完")}`
+                  (task.finished ? ` · ✅ ${t("finished", "已跑完")}（${t("finishedHint", "一次性任务，不能暂停")}）`
                     : task.enabled === false ? ` · ⏸ ${t("paused", "已暂停")}`
                       : task.nextLocal ? ` · ${t("nextRun", "next")} ${task.nextLocal}` : "") +
                   (task.lastLocal ? ` · ${t("lastRun", "上次")} ${task.lastLocal} ${task.lastResult === "ok" ? "✅" : `❌ ${task.lastResult ?? ""}`}` : "")),

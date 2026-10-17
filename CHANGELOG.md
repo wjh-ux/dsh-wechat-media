@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.3
+
+- **A finished one-off says why it has no pause button**: the row now reads
+  `✅ 已跑完（一次性任务，不能暂停）` instead of leaving the missing control unexplained. The question "where is pause?"
+  was a fair one to ask about a row that showed neither a next run nor a toggle.
+- 28 suites / 491 cases.
+
 ## 0.28.2
 
 - **Resuming a finished one-off is now refused, not silently accepted.** v0.28.1 hid the button on the card, but the
