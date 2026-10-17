@@ -2764,7 +2764,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     };
   }
 
-  /** What `/state` may say about scheduled tasks: how many, when the next one fires, and the switch. */
+  /**
+   * What `/state` and the card say about scheduled tasks: the summary, and the rows.
+   *
+   * The rows carry a **local** `nextAt`/`lastRunAt` string as well as the ISO form, because the card is read
+   * by a person: `2026-10-18 08:00` is meant to be understood at a glance, and the ISO pair is what a script
+   * compares. Both, from one place, so the two can never disagree.
+   */
   async function taskSummary() {
     const list = await state.loadTasks();
     const soonest = list
@@ -2779,6 +2785,23 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       commandEnabled: (await state.loadPrefs()).taskCommand === true,
       ran: counters.tasksRun ?? 0,
       failed: counters.tasksFailed ?? 0,
+      items: list.map((task) => {
+        const next = tasks.nextRunFor(task);
+        return {
+          id: task.id,
+          when: tasks.describeSchedule(task.schedule),
+          action: task.action,
+          enabled: task.enabled !== false,
+          transport: task.transport,
+          nextAt: next ? new Date(next).toISOString() : null,
+          nextLocal: next ? tasks.formatWhen(next) : "",
+          lastAt: task.lastRunAt ? new Date(task.lastRunAt).toISOString() : null,
+          lastLocal: task.lastRunAt ? tasks.formatWhen(task.lastRunAt) : "",
+          lastResult: task.lastResult ?? null,
+          runs: Number(task.runs ?? 0),
+          payload: String(task.payload ?? "").slice(0, 120),
+        };
+      }),
     };
   }
 
@@ -5591,6 +5614,41 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const allowed = asBool(body.allowed);
           const peer = await state.setPeer(accountId, chatId, { allowed });
           json(res, 200, { ok: true, peer, peers: await state.loadPeers() });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/tasks",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "list");
+          // The card's buttons and the chat command are two doors onto the same operations, so both go
+          // through the same three shapes: list, toggle (pause/resume) and remove - plus the command switch.
+          if (action === "list") return json(res, 200, { ok: true, tasks: await taskSummary() });
+          if (action === "command") {
+            const wanted = asBool(body.enabled);
+            if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });
+            await state.savePrefs({ taskCommand: wanted });
+            noteRoute("/task", { action: "command", value: wanted, via: "card" });
+            return json(res, 200, { ok: true, tasks: await taskSummary() });
+          }
+          const id = String(body.id ?? "").trim();
+          if (!id) return json(res, 400, { error: "id is required" });
+          const list = await state.loadTasks();
+          if (!list.some((task) => task.id === id)) return json(res, 404, { error: `没有 id 为 ${id} 的任务` });
+          if (action === "remove") {
+            await state.saveTasks(list.filter((task) => task.id !== id));
+          } else if (action === "toggle") {
+            const wanted = asBool(body.enabled);
+            if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });
+            await state.saveTasks(list.map((task) => (task.id === id ? { ...task, enabled: wanted } : task)));
+          } else {
+            return json(res, 400, { error: `未知 action：${action}（list / toggle / remove / command）` });
+          }
+          noteRoute("/task", { action, id, via: "card" });
+          json(res, 200, { ok: true, tasks: await taskSummary() });
         },
       },
       {

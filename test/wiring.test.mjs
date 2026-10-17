@@ -480,6 +480,19 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.doesNotMatch(host, /target\.account\.accountId/, "never by dereferencing the shape that may not exist");
   assert.match(commandsSource, /name: "task"/, "the /task command exists");
   assert.match(host, /command\.name === "task"/, "the host handles it");
+  // The card's buttons and the chat command must be two doors onto the same operations, not two
+  // implementations - so the route reuses `taskSummary` and the client calls that route.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(host, /path: "\/dsh-wechat-media\/tasks"/, "the /tasks route exists");
+  assert.match(host, /action === "toggle"/, "pause/resume goes through it");
+  assert.match(host, /action === "remove"/, "so does delete");
+  assert.match(host, /action === "command"/, "and the command switch");
+  assert.match(host, /tasks: await taskSummary\(\)/, "the route answers with the same summary /state gives");
+  assert.match(clientSource, /async function taskAction\(/, "the card can call the route");
+  assert.match(clientSource, /action: "toggle", id/, "for pause/resume");
+  assert.match(clientSource, /action: "remove", id/, "for delete");
+  assert.match(clientSource, /snapshot\?\.tasks\?\.items/, "and it renders the rows");
+  assert.match(clientSource, /tasksEmpty/, "with an empty state that says how to create one");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

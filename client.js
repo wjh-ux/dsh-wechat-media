@@ -154,6 +154,17 @@ window.__ModuleLoader__.load({
   retry: "Retry once when a turn fails in the transport",
           desktop: "Let the agent drive this machine's mouse, keyboard and screen",
           desktopUnsupported: "not available on this platform",
+          tasks: "Scheduled tasks",
+          tasksUnit: "",
+          tasksEmpty: "No scheduled tasks yet. Say \u201cevery day at 8:00 remind me\u201d in a chat and one is created.",
+          taskCommand: "Let command tasks run local commands",
+          nextRun: "next",
+          lastRun: "last",
+          paused: "paused",
+          pause: "Pause",
+          resume: "Resume",
+          remove: "Delete",
+          failed: "failed",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
           formatLabel: "Text",
@@ -259,6 +270,17 @@ window.__ModuleLoader__.load({
   retry: "失败自动重试（传输类错误重试一次）",
           desktop: "允许操作本机鼠标 / 键盘 / 屏幕",
           desktopUnsupported: "本机不支持（仅 Windows）",
+          tasks: "定时任务",
+          tasksUnit: "",
+          tasksEmpty: "还没有定时任务。在聊天里说「每天 8 点提醒我喝水」就会建一个。",
+          taskCommand: "允许 command 任务执行本机命令",
+          nextRun: "下次",
+          lastRun: "上次",
+          paused: "已暂停",
+          pause: "暂停",
+          resume: "恢复",
+          remove: "删除",
+          failed: "失败",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
           formatLabel: "文本处理",
@@ -641,6 +663,27 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * Scheduled tasks: pause, resume, delete - and the one switch that lets a task run a local command.
+         *
+         * All of it goes through `/tasks`, which is the same three operations the `/task` command exposes;
+         * creation stays in the chat, because a schedule is a sentence ("每天 8 点"), not a form.
+         */
+        async function taskAction(params) {
+          setBusy(true);
+          try {
+            await api(`/tasks?${new URLSearchParams(params).toString()}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+        const removeTask = (id) => taskAction({ action: "remove", id });
+        const toggleTask = (id, enabled) => taskAction({ action: "toggle", id, enabled: enabled ? "true" : "false" });
+        const setTaskCommand = (enabled) => taskAction({ action: "command", enabled: enabled ? "true" : "false" });
+
+        /**
          * Token ledger controls. The window length (1..30 days) and a manual reset live in
          * the host's ledger file, which `/tokens` also drives - one source of truth.
          */
@@ -736,6 +779,51 @@ window.__ModuleLoader__.load({
               h("button", { type: "button", className: "dswxBtn", disabled: busy, onClick: () => unpair(account.accountId) }, t("logout", "Unpair")),
             ]),
           ])),
+
+          // Scheduled tasks. Creation stays in the chat (a schedule is a sentence, not a form); this is the
+          // list, the pause/resume/delete buttons and the one switch that lets a task run a local command.
+          h("div", { key: "tasks", className: "dswxCard" }, [
+            h("div", { key: "head", className: "dswxRow" }, [
+              h("strong", { key: "t" }, t("tasks", "Scheduled tasks")),
+              h("span", { key: "m", className: "dswxMeta" },
+                `${snapshot?.tasks?.count ?? 0} ${t("tasksUnit", "")}` +
+                (snapshot?.tasks?.nextAt ? ` · ${t("nextRun", "next")} ${new Date(snapshot.tasks.nextAt).toLocaleString()}` : "") +
+                (snapshot?.tasks?.failed ? ` · ⚠️ ${snapshot.tasks.failed} ${t("failed", "failed")}` : "")),
+              h("label", { key: "c", className: "dswxMeta" }, [
+                h("input", {
+                  key: "chk",
+                  type: "checkbox",
+                  checked: Boolean(snapshot?.tasks?.commandEnabled),
+                  disabled: busy,
+                  onChange: (event) => setTaskCommand(event.target.checked),
+                }),
+                " " + t("taskCommand", "允许 command 任务执行本机命令"),
+              ]),
+            ]),
+            (snapshot?.tasks?.items ?? []).length === 0
+              ? h("div", { key: "empty", className: "dswxMeta" }, t("tasksEmpty", "还没有定时任务。在聊天里说「每天 8 点提醒我喝水」就会建一个。"))
+              : h("div", { key: "rows" }, (snapshot?.tasks?.items ?? []).map((task) => h("div", { key: task.id, className: "dswxRow" }, [
+                h("span", { key: "id", className: "dswxName" }, task.id),
+                h("span", { key: "w", className: "dswxMeta" },
+                  `${task.when} · ${task.action} · ${task.transport}` +
+                  (task.enabled === false ? ` · ⏸ ${t("paused", "已暂停")}` : task.nextLocal ? ` · ${t("nextRun", "next")} ${task.nextLocal}` : "") +
+                  (task.lastLocal ? ` · ${t("lastRun", "上次")} ${task.lastLocal} ${task.lastResult === "ok" ? "✅" : `❌ ${task.lastResult ?? ""}`}` : "")),
+                h("button", {
+                  key: "t",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => toggleTask(task.id, task.enabled === false),
+                }, task.enabled === false ? t("resume", "恢复") : t("pause", "暂停")),
+                h("button", {
+                  key: "d",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => removeTask(task.id),
+                }, t("remove", "删除")),
+              ]))),
+          ]),
 
           h("div", { key: "contacts", className: "dswxCard" }, [
             h("div", { key: "head", className: "dswxRow" }, [

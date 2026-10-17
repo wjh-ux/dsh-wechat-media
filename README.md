@@ -296,7 +296,8 @@ separate from prefs; a task that has run once never fires again for the same win
 itself off afterwards.
 
 Ask for one in a chat - "每天 8 点提醒我喝水" - and the agent creates it with `task_add`, targeting the chat that
-asked. `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed }`.
+asked. The Web UI card lists them with Pause / Resume / Delete
+buttons and the `command` switch; creation stays in the chat, because a schedule is a sentence rather than a form. `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed }`.
 
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 

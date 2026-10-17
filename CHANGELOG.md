@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.27.0
+
+- **The Web UI card has a scheduled-tasks section.** One row per task - id, schedule, action, transport, next run,
+  last run with its result - plus Pause / Resume and Delete buttons and the `command` switch. Creation stays in the
+  chat, because a schedule is a sentence ("每天 8 点"), not a form.
+- One route (`/dsh-wechat-media/tasks`) serves list / toggle / remove / command, and it answers with the same
+  `taskSummary()` `/state` uses, so the card, the chat command and `/state` cannot disagree about what exists.
+- `/state.tasks` gained the rows themselves (`items`) with both a local stamp and the ISO one: the card is read by a
+  person, a script compares ISO, and both come from one place.
+- Guard: the card's `taskAction` must call that route, for toggle and for remove, and the route must reuse
+  `taskSummary` - the v0.20.0 lesson (a checkbox wired to nothing) applied to a button.
+- 28 suites / 491 cases.
+
 ## 0.26.3
 
 - **Fixed: every WeCom task was labelled WeChat and tried to send through the personal-WeChat path.** Account ids are
