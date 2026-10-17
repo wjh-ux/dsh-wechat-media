@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.30.2
+
+- **README: what people actually schedule**, six real examples (weather line, group digest, weekly report, monthly
+  reminder, a one-off re-armed by a week, a folder watch), and the card's controls in a table with *when each one
+  appears* - because "where is pause?" was a fair question about a row that only shows it for recurring tasks.
+- No code changes. 28 suites / 495 cases.
+
 ## 0.30.1
 
 - **Re-arming a task that was already scheduled is no longer a silent no-op.** `rearmOnce` used a

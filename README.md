@@ -296,8 +296,38 @@ separate from prefs; a task that has run once never fires again for the same win
 itself off afterwards.
 
 Ask for one in a chat - "每天 8 点提醒我喝水" - and the agent creates it with `task_add`, targeting the chat that
-asked. The Web UI card lists them with Pause / Resume / Delete
-buttons and the `command` switch; creation stays in the chat, because a schedule is a sentence rather than a form. `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed }`.
+asked; `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed, items }`.
+
+### What people actually schedule / 实际用法
+
+| You want | The schedule | Action |
+| --- | --- | --- |
+| A weather line before work | `每天 07:30` | `prompt`: "用一句话说今天厦门天气，再给一句提醒" |
+| A digest of a group at noon | `daily 12:00` | `prompt`: "总结今天群里值得看的消息，五条以内" |
+| A weekly report on Monday | `每周一 09:00` | `prompt`: "汇总上周完成的事，写成三条" |
+| A monthly reminder | `每月1日 10:00` | `message`: "该交房租了" |
+| A one-off, then again next week | `once 2026-10-20 09:00` + `[+1周] [再次运行]` | any |
+| Watch a folder every half hour | `every 30m` | `command` (needs `/task command on`) |
+
+`prompt` is the interesting one: it runs a **normal agent turn**, so every tool the agent has is available to it -
+web search, files, Feishu. A scheduled prompt is therefore "ask me this every morning and do the work", not a
+canned message.
+
+### The card / 面板
+
+The Web UI card is the management half; creation works both there and in a chat.
+
+| Control | When it appears | What it does |
+| --- | --- | --- |
+| time + action + text + `添加` | always | create a task targeting the chat that last wrote |
+| `[暂停]` / `[恢复]` | recurring tasks | stop and restart the schedule |
+| `[+1 天 ▾] [再次运行]` | finished one-offs | move it forward one day / week / month and re-enable |
+| `☐ 完成后再排一次` | one-offs | re-arm automatically after each run (same clock time, next day) |
+| `[删除]` | always | remove it |
+| `☐ 允许 command 任务执行本机命令` | always | the switch behind `command` tasks (default off) |
+
+A finished one-off shows `✅ 已跑完（一次性任务，不能暂停）` rather than a pause button that would do nothing: `dueTasks`
+compares the last run against **that occurrence's** `atMs`, so re-arming is meaningful and a plain resume is not.
 
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 
