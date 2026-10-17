@@ -4758,14 +4758,25 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         "Take a PNG screenshot of the whole screen (or a region of it), save it into the shared inbox and return its path. Send it to the chat afterwards with the matching send tool.",
         {
           fileName: { type: "string", description: "Optional file name; a timestamped one is used otherwise." },
-          region: { type: "object", description: "Optional { x, y, width, height } in the pixels desktop_screen reports." },
+          // Four numbers rather than one nested object: `defineTool` only knows the scalar parameter
+          // types, and a nested object parameter threw while the tool was being defined - which took the
+          // whole tools section down with it, routes included. See the guard in test/wiring.test.mjs.
+          regionX: { type: "number", description: "Optional region: left edge in screen pixels (all four required together)." },
+          regionY: { type: "number", description: "Region: top edge." },
+          regionWidth: { type: "number", description: "Region: width." },
+          regionHeight: { type: "number", description: "Region: height." },
         },
         async (args) => {
           const dir = join(await resolvedInbox(), "desktop");
           await mkdir(dir, { recursive: true });
           const name = String(args.fileName ?? "").trim() || `desktop-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
           const target = join(dir, name.endsWith(".png") ? name : `${name}.png`);
-          const shot = await desktop.desktopScreenshot({ path: target, region: args.region });
+          const given = [args.regionX, args.regionY, args.regionWidth, args.regionHeight].filter((value) => value !== undefined);
+          if (given.length > 0 && given.length < 4) throw new Error("区域要四个一起给：regionX / regionY / regionWidth / regionHeight");
+          const region = given.length === 4
+            ? { x: args.regionX, y: args.regionY, width: args.regionWidth, height: args.regionHeight }
+            : undefined;
+          const shot = await desktop.desktopScreenshot({ path: target, region });
           return `截图已保存：${shot.path}（${shot.width}x${shot.height}，${shot.bytes} 字节，PNG）✓ 用 wechat_send_file / wecom_send_file / feishu_send_file 就能发到聊天里 ✓`;
         },
       );
@@ -4833,7 +4844,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
         }
       }, "dsh-wechat-media: tools");
-    })();
+    })().catch((error) => {
+      // v0.25.0 threw here - `defineTool` rejected a parameter type it does not know - and because the
+      // tools section and the HTTP routes share this async block, the throw took the routes down too:
+      // every `/dsh-wechat-media/*` endpoint answered 404 and the card looked uninstalled. A tools
+      // failure must never cost the bridge its HTTP surface, so the rejection is caught and logged.
+      ctx.logger?.warn?.("[dsh-wechat-media] tools section failed: %s", error?.message ?? error);
+    });
   });
 
   // ── HTTP surface for the browser card ─────────────────────────────────────

@@ -422,6 +422,20 @@ await test("every desktop tool goes through the one wrapper that checks the swit
   assert.match(host, /asBool\(body\.desktopControl\)/, "the /prefs route can arm it");
   assert.match(host, /desktop: desktopState\(prefs\)/, "and /state reports whether it is armed");
 });
+await test("no tool parameter asks defineTool for a type it does not know", () => {
+  // v0.25.0 shipped `region: { type: "object" }` for the screenshot tool. The real `defineTool` threw
+  // while *defining* it, the tools section rejected as a whole, and because that section shares an async
+  // block with the HTTP routes, every `/dsh-wechat-media/*` endpoint answered 404 - the plugin looked
+  // uninstalled. All 27 local suites stayed green, because without the harness the plugin falls back to
+  // `(definition) => definition`, which accepts anything. The accepted set is what every shipped tool
+  // already uses; these assertions are exactly what the fallback cannot tell us.
+  assert.doesNotMatch(host, /type:\s*"object"/, "object parameters are not supported; use scalar fields");
+  assert.doesNotMatch(host, /type:\s*"array"/, "and neither are array parameters; use a comma-separated string");
+  assert.match(host, /regionX: \{ type: "number"/, "the screenshot region is four numbers");
+  // The blast radius is bounded too: a failure inside the tools section may not cost the plugin its routes.
+  assert.match(host, /\}\)\(\)\.catch\(/, "the tools section catches its own rejection");
+  assert.match(host, /tools section failed/, "and says so in the log");
+});
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.

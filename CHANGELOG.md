@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.25.2
+
+- **Fixed: a tool definition with an unsupported parameter type took the whole plugin down.** v0.25.0's
+  `desktop_screenshot` declared a nested object parameter (`region`). The real `defineTool` throws while
+  *defining* such a tool, the tools section's async block rejected, and because the HTTP routes are registered later
+  in that same block they never ran - every `/dsh-wechat-media/*` endpoint answered **404** and the card looked
+  uninstalled. The region is now four number fields (`regionX` / `regionY` / `regionWidth` / `regionHeight`), which
+  is the kind of parameter the registry actually knows.
+- **The blast radius is bounded.** That block now has a `.catch` that logs `tools section failed: …`, so a future
+  tools failure costs the tools and nothing else - the routes and the reply relay survive.
+- **Why 27 green suites did not catch it.** Without the harness the plugin falls back to
+  `(definition) => definition`, which accepts any schema at all, so the local suites exercised a `defineTool` that
+  never validated anything. The wiring suite now asserts the thin part directly: no tool parameter uses an object or
+  array type, the screenshot region is four numbers, and the tools section catches its own rejection.
+- 27 suites / 470 cases.
+
 ## 0.25.1
 
 - **The desktop suite now passes on a machine that is not Windows.** Two of its tests drive the whole tool path
