@@ -180,6 +180,21 @@ export class WechatState {
     return file && typeof file === "object" ? file : {};
   }
 
+  /**
+   * Scheduled tasks, in `tasks.json`.
+   *
+   * A file of their own on purpose: the scheduler rewrites this on every run, and folding it into prefs
+   * would mean a task firing rewrites the settings file somebody may be editing at the same moment.
+   */
+  async loadTasks() {
+    const file = await readJson(join(this.root, "tasks.json"), []);
+    return Array.isArray(file) ? file.filter((task) => task && typeof task === "object" && task.id) : [];
+  }
+
+  async saveTasks(tasks) {
+    await writeJson(join(this.root, "tasks.json"), Array.isArray(tasks) ? tasks : []);
+  }
+
   /** The session serving one chat, or undefined when it has never been seen. */
   async getRoute(accountId, chatId) {
     const routes = await this.loadRoutes();
@@ -253,6 +268,9 @@ export class WechatState {
       // default and deliberately so - every other tool in this plugin acts on the bridge or on a
       // document, while this one can click anything the pointer can reach. `/desktop on` arms it.
       desktopControl: false,
+      // Scheduled `command` tasks run a local shell command on a timer. Off by default for the obvious
+      // reason: everything else in this plugin sends text, this one executes code. `/task command on`.
+      taskCommand: false,
       // What a chat sees: "plain" strips the markdown WeChat and WeCom cannot render, "raw" sends the
       // model's text untouched. Plain is the default because markdown arrives as literal punctuation.
       format: "plain",

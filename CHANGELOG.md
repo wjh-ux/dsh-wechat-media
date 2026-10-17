@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.26.0
+
+- **Scheduled tasks, with three actions and four triggers.** `task_add` / `task_list` / `task_remove` plus a `/task`
+  command manage tasks that run on their own: `message` sends fixed text (no model, no tokens), `prompt` runs one
+  ordinary turn in that chat and delivers the answer, `command` runs a local command and sends its output. Triggers:
+  `daily 08:30`, `weekly mon 09:00` (also `每周一 09:00`), `every 30m`, `once 2026-10-20 09:00`. Everything is stored
+  in `tasks.json`, separate from prefs so a firing task never rewrites settings someone is editing.
+- **A task's due-ness is derived, never stored.** It comes from `lastRunAt` (or `createdAt`) and the schedule, so a
+  machine that slept, or a hand-edited file, cannot make a task fire twice or never again; a 20-second tick cannot
+  re-run the same minute. A one-off disables itself after it runs.
+- **The scheduler cannot overlap itself.** One tick at a time, results written back per task, every outcome logged and
+  both sides counted (`tasksRun` / `tasksFailed` in `/state.tasks`), so "it stopped running" is answerable from state
+  rather than from a log hunt.
+- **`command` tasks are behind their own switch** - `/task command on`, default off - because it is the only thing in
+  this plugin that executes code. Off, the task still runs but reports `命令任务没开启` instead of silently skipping.
+- Pure schedule logic lives in `tasks.js` (parse → next-run → due) with 14 tests that pass their own `now`, so "next
+  Monday at 09:00" is a fact rather than a wait.
+- 28 suites / 489 cases.
+
 ## 0.25.4
 
 - **The desktop switch is on the panel now.** A checkbox next to the retry and interjection toggles, reading the same

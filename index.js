@@ -89,6 +89,7 @@ import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
+import * as tasks from "./tasks.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -1650,6 +1651,47 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
+    if (command.name === "task") {
+      // Creating a task is a tool call (the model can do it from a sentence); this command is for
+      // looking at them and switching them off, which is what people do from a chat.
+      const [sub = "list", arg = ""] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      const list = await state.loadTasks();
+      if (sub === "list" || sub === "") {
+        await reply(list.length
+          ? `${list.length} 个定时任务（本地时间）：\n${list.map((task) => `  ${tasks.describeTask(task)}`).join("\n")}\n\n删除：/task rm <id> · 暂停：/task off <id> · 恢复：/task on <id>`
+          : "还没有定时任务。在聊天里说一句「每天 8 点提醒我喝水」，我会用 task_add 建；也可以直接说清楚时间、做什么。");
+        noteRoute("/command", { command: "task", action: "list", count: list.length });
+        return true;
+      }
+      if (sub === "rm" || sub === "off" || sub === "on") {
+        const id = arg.trim();
+        const found = list.find((task) => task.id === id);
+        if (!found) {
+          await reply(`没有 id 为 ${JSON.stringify(id)} 的任务（发 /task 看列表）`);
+          return true;
+        }
+        const next = sub === "rm"
+          ? list.filter((task) => task.id !== id)
+          : list.map((task) => (task.id === id ? { ...task, enabled: sub === "on" } : task));
+        await state.saveTasks(next);
+        await reply(sub === "rm" ? `已删除任务 ${id}` : sub === "on" ? `已恢复任务 ${id}` : `已暂停任务 ${id}`);
+        noteRoute("/command", { command: "task", action: sub, id });
+        return true;
+      }
+      if (sub === "command") {
+        const wanted = parseSwitch(arg);
+        const current = (await state.loadPrefs()).taskCommand === true;
+        const next = wanted ?? !current;
+        await state.savePrefs({ taskCommand: next });
+        await reply(next
+          ? "🖥️ 命令任务 → **开**。定时任务现在可以执行本机命令并把输出发回会话。**这等于让定时任务能运行任意命令**，只在你信任所有任务时才开；关掉发 /task command off。"
+          : "🖥️ 命令任务 → **关**。已有的命令任务下次运行会跳过并记下原因。");
+        noteRoute("/command", { command: "task", action: "command", value: next });
+        return true;
+      }
+      await reply("用法：/task · /task rm <id> · /task off <id> · /task on <id> · /task command [on|off]");
+      return true;
+    }
     if (command.name === "desktop") {
       // The one switch that arms tools that can click on the user's own screen, so it says what it
       // just enabled rather than only flipping a boolean.
@@ -2719,6 +2761,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       enabled: prefs?.desktopControl === true,
       supported: support.ok,
       reason: support.ok ? "" : support.reason,
+    };
+  }
+
+  /** What `/state` may say about scheduled tasks: how many, when the next one fires, and the switch. */
+  async function taskSummary() {
+    const list = await state.loadTasks();
+    const soonest = list
+      .map((task) => ({ id: task.id, next: tasks.nextRunFor(task) }))
+      .filter((entry) => entry.next)
+      .sort((a, b) => a.next - b.next)[0];
+    return {
+      count: list.length,
+      enabled: list.filter((task) => task.enabled !== false).length,
+      nextAt: soonest?.next ? new Date(soonest.next).toISOString() : null,
+      nextId: soonest?.id ?? null,
+      commandEnabled: (await state.loadPrefs()).taskCommand === true,
+      ran: counters.tasksRun ?? 0,
+      failed: counters.tasksFailed ?? 0,
     };
   }
 
@@ -3935,6 +3995,133 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
   // ── outbound tools ────────────────────────────────────────────────────────
 
+  // ── Scheduled tasks ─────────────────────────────────────────────────────────
+  //
+  // A task is a sentence someone wrote in a chat ("每天 8 点提醒我喝水") plus the chat it belongs to.
+  // The scheduler is a 20-second tick that reads `tasks.json`, asks tasks.js what is due, and runs it.
+  // Three actions, and the difference matters: `message` sends fixed text (no model, no tokens),
+  // `prompt` runs one ordinary turn and delivers the answer, `command` runs a local command and sends
+  // its output - which is why that one needs its own switch, `/task command on`.
+
+  /** Which transport an account id belongs to; the prefix is how the plugin already namespaces them. */
+  function transportOf(accountId) {
+    const id = String(accountId ?? "");
+    if (id.startsWith("wecom:")) return "wecom";
+    if (id.startsWith("feishu:")) return "feishu";
+    return "wechat";
+  }
+
+  /** The chat to attach a new task to: the most recent inbound, which is the one that asked. */
+  async function defaultTaskTarget() {
+    const recent = [...lastInbound.values()].sort((a, b) => b.at - a.at)[0];
+    if (!recent) throw new Error("还没有收到过任何消息——先在微信/企业微信/飞书里发一条，或者显式指定 to");
+    return {
+      transport: transportOf(recent.accountId),
+      accountId: recent.accountId,
+      chatId: recent.chatId,
+      peerName: recent.peerName ?? "",
+    };
+  }
+
+  /** Send text to the chat a task belongs to, over that chat's own transport. */
+  async function deliverTo(task, text) {
+    for (const chunk of chunkText(String(text ?? ""))) {
+      if (task.transport === "wecom") {
+        if (wecomBot.sendMessage(task.chatId, markdownBody(chunk)) === false) throw new Error("企业微信长连接没有连上");
+      } else if (task.transport === "feishu") {
+        await feishuSendText({ text: chunk, to: task.chatId, toType: "chat_id" });
+      } else {
+        const account = await state.loadAccount(task.accountId);
+        if (!account) throw new Error(`账号 ${task.accountId} 不在了（可能被解绑）`);
+        await sendText(account, task.chatId, chunk);
+      }
+    }
+  }
+
+  /** Run a local command for a `command` task. Windows-first, with an honest refusal elsewhere. */
+  function runTaskCommand(command) {
+    const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
+    const args = process.platform === "win32"
+      ? ["-NoProfile", "-NonInteractive", "-Command", `[Console]::OutputEncoding = [Text.Encoding]::UTF8; ${command}`]
+      : ["-c", command];
+    return new Promise((resolve, reject) => {
+      execFile(shell, args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+        if (error) {
+          const detail = String(stderr ?? "").trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] ?? "";
+          reject(new Error(detail || String(error.message).split("\n")[0]));
+          return;
+        }
+        resolve(String(stdout ?? "").trim());
+      });
+    });
+  }
+
+  /** Run one due task; returns "ok" or the reason it failed. Never throws. */
+  async function runTask(task) {
+    try {
+      if (task.action === "message") {
+        await deliverTo(task, task.payload);
+        return "ok";
+      }
+      if (task.action === "command") {
+        if ((await state.loadPrefs()).taskCommand !== true) return "命令任务没开启（在聊天里发 /task command on）";
+        const output = await runTaskCommand(task.payload);
+        await deliverTo(task, output || "（命令没有输出）");
+        return "ok";
+      }
+      const { agent, sessionId } = await ensureAgent(task.accountId, task.chatId, task.peerName || task.chatId);
+      const message = await userMessage(task.payload);
+      const waiting = collectors.wait(sessionId, message?.id);
+      agent.followup(message);
+      const outcome = await waiting;
+      if (outcome?.error) return `agent 出错：${outcome.error}`;
+      await deliverTo(task, String(outcome?.text ?? "").trim() || "（模型没有回答）");
+      return "ok";
+    } catch (error) {
+      return String(error?.message ?? error);
+    }
+  }
+
+  let schedulerBusy = false;
+  /**
+   * One scheduler tick.
+   *
+   * Serial by construction: a tick that started while the previous one is still running is skipped, so a
+   * slow `prompt` task cannot make the same task fire twice. Results are written back per task, so a
+   * crash mid-tick leaves the others due rather than silently lost.
+   */
+  async function schedulerTick() {
+    if (schedulerBusy) return;
+    schedulerBusy = true;
+    try {
+      const list = await state.loadTasks();
+      const due = tasks.dueTasks(list, Date.now());
+      for (const task of due) {
+        const startedAt = Date.now();
+        const result = await runTask(task);
+        const updated = {
+          ...task,
+          lastRunAt: startedAt,
+          lastResult: result,
+          runs: Number(task.runs ?? 0) + 1,
+          // A one-off that has run is done; keeping it enabled would fire it every tick.
+          enabled: task.schedule?.kind === "once" ? false : task.enabled !== false,
+        };
+        const next = (await state.loadTasks()).map((item) => (item.id === updated.id ? updated : item));
+        await state.saveTasks(next);
+        if (result === "ok") counters.tasksRun = Number(counters.tasksRun ?? 0) + 1;
+        else {
+          counters.tasksFailed = Number(counters.tasksFailed ?? 0) + 1;
+          ctx.logger?.warn?.("[dsh-wechat-media] task %s failed: %s", task.id, result);
+        }
+      }
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] scheduler tick failed: %s", error?.message ?? error);
+    } finally {
+      schedulerBusy = false;
+    }
+  }
+
   /** Resolve the peer a tool should send to: explicit `to`, else the last inbound. */
   async function resolvePeer(explicit) {
     if (explicit) {
@@ -4825,7 +5012,90 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool]) {
+      // ── Scheduled tasks ──────────────────────────────────────────────────────
+      const taskToolError = (error) => `task_ 失败：${String(error?.message ?? error)}`;
+      const taskAddTool = define({
+        name: "task_add",
+        description: "Schedule something for a chat and return its id. Three actions: message (send fixed text, no model), prompt (run one agent turn and send the answer), command (run a local command and send its output - needs /task command on). Triggers: daily 08:30 / weekly mon 09:00 / every 30m / once 2026-10-20 09:00. Defaults to the chat that just asked.",
+        parameters: {
+          when: { type: "string", required: true, description: "daily 08:30 | weekly mon 09:00 | every 30m | once 2026-10-20 09:00" },
+          action: { type: "string", required: true, description: "message | prompt | command" },
+          text: { type: "string", required: true, description: "要发的内容 / 给 agent 的提示词 / 要执行的命令" },
+          to: { type: "string", description: "可选：目标 chatId（默认最近一条消息所在的会话）" },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 20000,
+        async execute(args) {
+          try {
+            const target = args?.to
+              ? { transport: "wechat", ...(await resolvePeer(args.to)) }
+              : await defaultTaskTarget();
+            const task = tasks.createTask({
+              transport: target.transport,
+              accountId: target.account.accountId ?? target.accountId,
+              chatId: target.chatId,
+              peerName: target.peerName ?? target.peerName,
+              action: args?.action,
+              payload: args?.text,
+              schedule: args?.when,
+            });
+            const list = await state.loadTasks();
+            list.push(task);
+            await state.saveTasks(list);
+            noteRoute("/task", { action: "add", id: task.id, kind: task.schedule.kind });
+            return `已创建任务 ${task.id}：${tasks.describeSchedule(task.schedule)} · ${task.action} · 发往 ${target.transport} 的 ${task.chatId}\n内容：${task.payload.slice(0, 60)}`;
+          } catch (error) {
+            noteRoute("/task", { action: "add", ok: false, error: String(error?.message ?? error) });
+            return taskToolError(error);
+          }
+        },
+      });
+
+      const taskListTool = define({
+        name: "task_list",
+        description: "List scheduled tasks with their next run time, last result and id.",
+        parameters: {},
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 10000,
+        async execute() {
+          try {
+            const list = await state.loadTasks();
+            if (!list.length) return "还没有定时任务。想加就在聊天里说「每天 8 点提醒我喝水」，或直接调用 task_add。";
+            return `${list.length} 个定时任务（本地时间）：\n${list.map((task) => `  ${tasks.describeTask(task)}`).join("\n")}`;
+          } catch (error) {
+            return taskToolError(error);
+          }
+        },
+      });
+
+      const taskRemoveTool = define({
+        name: "task_remove",
+        description: "Delete a scheduled task by id (see task_list), or pause it with enabled=false.",
+        parameters: {
+          id: { type: "string", required: true, description: "The task id from task_list." },
+          disableOnly: { type: "boolean", description: "Pause instead of deleting." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 10000,
+        async execute(args) {
+          try {
+            const id = String(args?.id ?? "").trim();
+            const list = await state.loadTasks();
+            const found = list.find((task) => task.id === id);
+            if (!found) return `没有 id 为 ${JSON.stringify(id)} 的任务（用 task_list 看看）`;
+            const next = args?.disableOnly
+              ? list.map((task) => (task.id === id ? { ...task, enabled: false } : task))
+              : list.filter((task) => task.id !== id);
+            await state.saveTasks(next);
+            noteRoute("/task", { action: args?.disableOnly ? "pause" : "remove", id });
+            return args?.disableOnly ? `已暂停任务 ${id}` : `已删除任务 ${id}（${tasks.describeSchedule(found.schedule)}）`;
+          } catch (error) {
+            return taskToolError(error);
+          }
+        },
+      });
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -4852,6 +5122,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       ctx.logger?.warn?.("[dsh-wechat-media] tools section failed: %s", error?.message ?? error);
     });
   });
+
+  // ── The scheduler ───────────────────────────────────────────────────────────
+  //
+  // A 20-second tick. Unref'd so it can never be the reason the process stays alive, and serial inside
+  // `schedulerTick` so a slow `prompt` task cannot fire twice. Tasks are the only thing in this plugin
+  // that runs without a message arriving, which is exactly why every outcome is logged and both sides
+  // (ran / failed) are counted.
+  ctx.effect(() => {
+    const timer = setInterval(() => { void schedulerTick(); }, 20_000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, "dsh-wechat-media: scheduled tasks");
 
   // ── HTTP surface for the browser card ─────────────────────────────────────
 
@@ -5158,6 +5440,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             tavily: tavilyState(),
             browser: browserState(),
             desktop: desktopState(prefs),
+            tasks: await taskSummary(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),

@@ -66,6 +66,12 @@ export const COMMANDS = [
     summary: "失败自动重试：回合因传输类错误（超时/连接重置/限流/5xx）失败时自动重试一次；不带参数则切换",
   },
   {
+    name: "task",
+    aliases: ["定时", "任务"],
+    usage: "/task [list|rm <id>|off <id>|on <id>|command [on|off]]",
+    summary: "定时任务：列表、删除、暂停/恢复；command on 才允许定时执行本机命令",
+  },
+  {
     name: "desktop",
     aliases: ["桌面"],
     usage: "/desktop [on|off|status]",

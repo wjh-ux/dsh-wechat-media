@@ -412,7 +412,7 @@ await test("every desktop tool goes through the one wrapper that checks the swit
   assert.doesNotMatch(host, /define\(\{\s*name: "desktop_/, "no desktop tool may bypass the wrapper");
   assert.match(host, /desktopControl === true\) return;/, "the wrapper reads the switch");
   assert.match(host, /桌面控制未开启/, "and says how to arm it when it refuses");
-  assert.match(host, /desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool\]/, "all seven are registered");
+  assert.match(host, /desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool,/, "all seven are registered");
   // The switch itself has to be reachable from all three surfaces, or it is not a switch.
   const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
   const stateSource = readFileSync(join(root, "state.js"), "utf8");
@@ -449,6 +449,33 @@ await test("the desktop switch is reachable from the chat, the panel and the hos
   assert.match(clientSource, /checked: Boolean\(snapshot\?\.prefs\?\.desktopControl\)/, "and shows the stored value");
   assert.match(clientSource, /snapshot\?\.desktop\?\.supported === false/, "while refusing to pretend it works where it cannot");
   assert.match(host, /desktop: desktopState\(prefs\)/, "which is the same answer /state gives");
+});
+await test("scheduled tasks are wired from the timer through to the switch", () => {
+  // A scheduled task runs with no message arriving, so the wiring has to be complete or the failure is
+  // silent by construction: no tick, no task, no error anybody sees.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(host, /import \* as tasks from "\.\/tasks\.js"/, "the pure module is imported");
+  assert.match(host, /setInterval\(\(\) => \{ void schedulerTick\(\); \}, 20_000\)/, "there is a 20-second tick");
+  assert.match(host, /timer\.unref\?\.\(\)/, "which cannot hold the process open");
+  assert.match(host, /clearInterval\(timer\)/, "and is cleared on dispose");
+  assert.match(host, /schedulerBusy/, "a tick cannot overlap itself");
+  assert.match(host, /if \(task\.schedule\?\.kind === "once"\) task\.enabled = false|kind === "once" \? false/, "a one-off disables itself after running");
+  // Three actions, each routed to a different capability - and the dangerous one behind its own switch.
+  assert.match(host, /task\.action === "message"/, "message tasks send fixed text");
+  assert.match(host, /task\.action === "command"/, "command tasks run locally");
+  assert.match(host, /taskCommand !== true\) return "命令任务没开启/, "and refuse until /task command on");
+  assert.match(stateSource, /taskCommand: false/, "the command switch defaults off");
+  assert.match(stateSource, /async loadTasks\(\)/, "tasks are stored");
+  assert.match(stateSource, /async saveTasks\(tasks\)/, "and written back");
+  // The surface: three tools and a /task command.
+  assert.match(host, /name: "task_add"/, "task_add exists");
+  assert.match(host, /name: "task_list"/, "task_list exists");
+  assert.match(host, /name: "task_remove"/, "task_remove exists");
+  assert.match(host, /taskAddTool, taskListTool, taskRemoveTool\]/, "and all three are registered");
+  assert.match(commandsSource, /name: "task"/, "the /task command exists");
+  assert.match(host, /command\.name === "task"/, "the host handles it");
+  assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the

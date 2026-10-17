@@ -1,0 +1,249 @@
+/**
+ * Scheduled tasks: a schedule parser, the next-run maths, and the decision of what is due.
+ *
+ * Everything here is pure - no timers, no clock, no files - so the whole feature can be tested by
+ * passing a `now`. The host owns the interval, the storage and the delivery; this module owns the two
+ * things that are actually easy to get wrong: parsing "每天 8:30" and deciding when it next happens.
+ *
+ * Four triggers, one shape each:
+ *
+ *   daily 08:30           每天 08:30
+ *   weekly mon 09:00      每周一 09:00       (mon/周一/1 … sun/周日/7)
+ *   every 30m             每 30 分钟          (every 2h / 每2小时 / 每 90 秒 不支持：最小 1 分钟)
+ *   once 2026-10-20 09:00 一次性
+ *
+ * Times are **local**: the person who wrote "早上 8 点" meant their own clock, and this plugin already
+ * renders timestamps in local time for the same reason.
+ */
+
+/** Weekday names, English and Chinese, 1 = Monday … 7 = Sunday (ISO). */
+export const WEEKDAYS = Object.freeze({
+  mon: 1, monday: 1, "周一": 1, "星期一": 1, "1": 1,
+  tue: 2, tuesday: 2, "周二": 2, "星期二": 2, "2": 2,
+  wed: 3, wednesday: 3, "周三": 3, "星期三": 3, "3": 3,
+  thu: 4, thursday: 4, "周四": 4, "星期四": 4, "4": 4,
+  fri: 5, friday: 5, "周五": 5, "星期五": 5, "5": 5,
+  sat: 6, saturday: 6, "周六": 6, "星期六": 6, "6": 6,
+  sun: 7, sunday: 7, "周日": 7, "周天": 7, "星期日": 7, "星期天": 7, "7": 7,
+});
+
+/** The smallest interval a task may ask for; below a minute it would just burn tokens. */
+export const MIN_EVERY_MS = 60_000;
+
+const HHMM = /^(\d{1,2})\s*[:：]\s*(\d{2})$/;
+
+/** "8:30" → { hours: 8, minutes: 30 }, refusing anything that is not a real time of day. */
+export function parseTimeOfDay(text) {
+  const match = HHMM.exec(String(text ?? "").trim());
+  if (!match) throw new Error(`时间要写成 HH:MM，收到 ${JSON.stringify(text)}`);
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23) throw new Error(`小时超出范围：${hours}（0-23）`);
+  if (minutes > 59) throw new Error(`分钟超出范围：${minutes}（0-59）`);
+  return { hours, minutes };
+}
+
+/** "30m" / "2h" / "90 分钟" → milliseconds. */
+export function parseInterval(text) {
+  const raw = String(text ?? "").trim().toLowerCase().replace(/\s+/g, "");
+  const match = /^(\d+(?:\.\d+)?)(s|sec|秒|m|min|分钟|分|h|hr|小时|时)$/.exec(raw);
+  if (!match) throw new Error(`间隔要写成 30m / 2h / 每 30 分钟，收到 ${JSON.stringify(text)}`);
+  const value = Number(match[1]);
+  const unit = match[2];
+  const ms = /^(s|sec|秒)$/.test(unit) ? value * 1000
+    : /^(m|min|分钟|分)$/.test(unit) ? value * 60_000
+      : value * 3_600_000;
+  if (!Number.isFinite(ms) || ms <= 0) throw new Error(`间隔必须大于 0，收到 ${JSON.stringify(text)}`);
+  if (ms < MIN_EVERY_MS) throw new Error(`间隔最小 1 分钟（收到 ${Math.round(ms / 1000)} 秒）`);
+  return Math.round(ms);
+}
+
+/** One `YYYY-MM-DD HH:MM` (local), or a full ISO string. */
+export function parseMoment(text) {
+  const raw = String(text ?? "").trim();
+  const dateTime = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2})\s*[:：]\s*(\d{2})$/.exec(raw);
+  if (dateTime) {
+    const [, y, mo, d, h, mi] = dateTime;
+    const at = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), 0, 0);
+    if (Number.isNaN(at.getTime())) throw new Error(`日期时间不合法：${JSON.stringify(text)}`);
+    if (at.getMonth() !== Number(mo) - 1 || at.getDate() !== Number(d)) throw new Error(`这一天不存在：${JSON.stringify(text)}`);
+    return at.getTime();
+  }
+  const iso = Date.parse(raw);
+  if (!Number.isNaN(iso)) return iso;
+  throw new Error(`时间要写成 2026-10-20 09:00，收到 ${JSON.stringify(text)}`);
+}
+
+/** A weekday token in any of the accepted forms: mon / 周一 / 星期一 / 一 / 1. */
+export function parseWeekday(text) {
+  const token = String(text ?? "").trim().toLowerCase();
+  for (const candidate of [token, `周${token}`, `星期${token}`]) {
+    if (Object.hasOwn(WEEKDAYS, candidate)) return WEEKDAYS[candidate];
+  }
+  throw new Error(`不认识星期几：${JSON.stringify(text)}（可写 mon / 周一 / 一 / 1 … sun / 周日 / 7）`);
+}
+
+/**
+ * Parse a schedule line into one of the four shapes.
+ *
+ * Accepts the English and Chinese forms interchangeably, because the chat is bilingual: `daily 08:30`
+ * and `每天 08:30` must mean the same thing, and a person should not have to remember which one works.
+ */
+export function parseSchedule(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) throw new Error("需要一个时间：daily 08:30 / weekly mon 09:00 / every 30m / once 2026-10-20 09:00");
+
+  // "每天" / "每周一" without a time is a nearly-complete thought, not an interval - say that, rather
+  // than letting it fall through to the `每` interval branch and complain about units.
+  if (/^(daily|每天)$/i.test(raw)) throw new Error("需要一个时间：每天 08:30");
+  if (/^(weekly|每周)[a-z一-龥0-9]*$/i.test(raw)) throw new Error("需要一个时间：每周一 09:00");
+
+  // daily / 每天
+  let match = /^(?:daily|每天)\s+(.+)$/i.exec(raw);
+  if (match) return { kind: "daily", ...parseTimeOfDay(match[1]) };
+
+  // weekly / 每周X
+  match = /^(?:weekly|每周)\s*([a-z一-龥0-9]+)\s+(.+)$/i.exec(raw);
+  if (match) return { kind: "weekly", weekday: parseWeekday(match[1]), ...parseTimeOfDay(match[2]) };
+
+  // every / 每 N 分钟
+  match = /^(?:every|每)\s*(.+)$/i.exec(raw);
+  if (match) return { kind: "every", everyMs: parseInterval(match[1]) };
+
+  // once / 一次
+  match = /^(?:once|一次)\s+(.+)$/i.exec(raw);
+  if (match) return { kind: "once", atMs: parseMoment(match[1]) };
+
+  throw new Error(`看不懂这个时间：${JSON.stringify(raw)}（可用 daily 08:30 / weekly mon 09:00 / every 30m / once 2026-10-20 09:00）`);
+}
+
+/** A local `YYYY-MM-DD HH:MM` stamp - the form every human-facing line in this plugin uses. */
+export function formatWhen(ms) {
+  const at = new Date(ms);
+  if (Number.isNaN(at.getTime())) return "未知";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/** What the person wrote, in their words. */
+export function describeSchedule(schedule) {
+  if (!schedule) return "未知";
+  const time = `${String(schedule.hours ?? 0).padStart(2, "0")}:${String(schedule.minutes ?? 0).padStart(2, "0")}`;
+  if (schedule.kind === "daily") return `每天 ${time}`;
+  if (schedule.kind === "weekly") return `每周${["一", "二", "三", "四", "五", "六", "日"][schedule.weekday - 1]} ${time}`;
+  if (schedule.kind === "every") {
+    const minutes = schedule.everyMs / 60_000;
+    return minutes % 60 === 0 && minutes >= 60 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
+  }
+  return `${formatWhen(schedule.atMs)} 一次`;
+}
+
+/**
+ * When this schedule next fires, strictly after `fromMs`.
+ *
+ * Strictly after, not at-or-after: a task that already ran this minute must not run again on the next
+ * tick of a 20-second timer. `every` is the exception in shape only - it is just `from + interval`.
+ */
+export function nextRunAt(schedule, fromMs) {
+  const from = Number(fromMs);
+  if (!schedule) throw new Error("没有 schedule");
+  if (schedule.kind === "every") return from + schedule.everyMs;
+  if (schedule.kind === "once") return schedule.atMs;
+
+  const after = new Date(from);
+  const at = new Date(after.getTime());
+  at.setHours(schedule.hours, schedule.minutes, 0, 0);
+  if (schedule.kind === "daily") {
+    if (at.getTime() <= from) at.setDate(at.getDate() + 1);
+    return at.getTime();
+  }
+  if (schedule.kind === "weekly") {
+    // JS 0 = Sunday, our 1 = Monday; both directions of the shift are explicit here.
+    const current = after.getDay() === 0 ? 7 : after.getDay();
+    let delta = schedule.weekday - current;
+    if (delta < 0) delta += 7;
+    if (delta === 0 && at.getTime() <= from) delta = 7;
+    at.setDate(at.getDate() + delta);
+    return at.getTime();
+  }
+  throw new Error(`未知的 schedule.kind：${String(schedule.kind)}`);
+}
+
+/**
+ * The tasks that are due right now.
+ *
+ * Due is derived from the task's own clock (`lastRunAt`, or `createdAt` when it has never run) rather
+ * than from a stored `nextRunAt` - a stored one goes stale the moment the machine sleeps or the file is
+ * edited by hand, and then a task either fires twice or never again.
+ */
+export function dueTasks(tasks, now) {
+  const at = Number(now);
+  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
+    if (!task || task.enabled === false || !task.schedule) return false;
+    if (task.schedule.kind === "once") {
+      if (task.lastRunAt) return false; // a once-off that has run is done
+      return task.schedule.atMs <= at;
+    }
+    const from = Number(task.lastRunAt ?? task.createdAt ?? 0);
+    try {
+      return nextRunAt(task.schedule, from) <= at;
+    } catch {
+      return false; // an unreadable schedule must not take the scheduler down
+    }
+  });
+}
+
+/** The next fire time for a task, or undefined for a finished one-off or an unreadable schedule. */
+export function nextRunFor(task, now = Date.now()) {
+  if (!task?.schedule) return undefined;
+  if (task.schedule.kind === "once") return task.lastRunAt ? undefined : task.schedule.atMs;
+  if (task.enabled === false) return undefined;
+  try {
+    return nextRunAt(task.schedule, Number(task.lastRunAt ?? task.createdAt ?? now));
+  } catch {
+    return undefined; // a hand-edited file must not break the listing
+  }
+}
+
+export const TASK_ACTIONS = Object.freeze(["prompt", "message", "command"]);
+
+/**
+ * Build a task record, refusing anything a scheduler could not honour.
+ *
+ * `id` is short and human-quotable (`t3k9m2`) because the only way to remove a task is to name it in a
+ * chat - a UUID would be a copy-paste exercise.
+ */
+export function createTask({ transport, accountId, chatId, peerName = "", action, payload, schedule, now = Date.now(), id } = {}) {
+  const kind = String(action ?? "").trim();
+  if (!TASK_ACTIONS.includes(kind)) throw new Error(`action 只能是 ${TASK_ACTIONS.join(" / ")} 之一，收到 ${JSON.stringify(action)}`);
+  const body = String(payload ?? "").trim();
+  if (!body) throw new Error(kind === "prompt" ? "prompt 任务需要一句话（到点要跑的内容）" : kind === "message" ? "message 任务需要要发的内容" : "command 任务需要要执行的命令");
+  if (kind !== "command" && body.length > 4000) throw new Error(`内容太长（${body.length} 字符，上限 4000）`);
+  if (!transport || !accountId || !chatId) throw new Error("任务必须指定会话（transport / accountId / chatId）");
+  const parsed = typeof schedule === "string" ? parseSchedule(schedule) : schedule;
+  return {
+    id: String(id ?? `t${Math.random().toString(36).slice(2, 8)}`),
+    transport: String(transport),
+    accountId: String(accountId),
+    chatId: String(chatId),
+    peerName: String(peerName ?? ""),
+    action: kind,
+    payload: body,
+    schedule: parsed,
+    enabled: true,
+    createdAt: Number(now),
+    lastRunAt: null,
+    lastResult: null,
+    runs: 0,
+  };
+}
+
+/** One line per task, for a chat listing or a tool answer. */
+export function describeTask(task, now = Date.now()) {
+  const when = describeSchedule(task.schedule);
+  const next = nextRunFor(task, now);
+  const state = task.enabled === false ? "⏸ 已暂停" : next ? `下次 ${formatWhen(next)}` : "✅ 已跑完";
+  const last = task.lastRunAt ? ` · 上次 ${formatWhen(task.lastRunAt)} ${task.lastResult === "ok" ? "成功" : `失败：${task.lastResult ?? "?"}`}` : "";
+  const runs = task.runs ? ` · 已运行 ${task.runs} 次` : "";
+  return `${task.id} · ${when} · ${task.action} · ${state}${runs}${last} · ${task.payload.slice(0, 40)}`;
+}

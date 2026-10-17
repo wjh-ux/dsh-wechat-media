@@ -272,6 +272,32 @@ intervals are in **seconds**), the frames are protobuf in the `pbbp2` namespace 
 `feishuEvents` / `feishuAnswered` / `feishuIgnored` / `feishuErrors`), and `/feishu` shows the same in a chat, including
 *why* the long connection is not up when it is not.
 
+## Scheduled tasks / 定时任务
+
+A task is a sentence plus a chat: it fires on its own and sends its result there. Three actions, four triggers, and
+one switch for the dangerous action:
+
+```text
+/task                                   # list, with next run time and last result
+/task rm t3k9m2                         # delete
+/task off t3k9m2                        # pause     (/task on ... resumes)
+/task command on                        # allow `command` tasks to run locally (default off)
+```
+
+| Action | What happens at the fire time |
+| --- | --- |
+| `message` | sends fixed text - no model call, no tokens |
+| `prompt` | runs one ordinary agent turn in that chat and delivers the answer |
+| `command` | runs a local command and sends its output (needs `/task command on`) |
+
+Triggers accept English and Chinese interchangeably: `daily 08:30` / `每天 08:30`, `weekly mon 09:00` / `每周一 09:00`,
+`every 30m` / `每 30 分钟`, `once 2026-10-20 09:00`. Tasks live in `tasks.json` under `$DSH_HOME/dsh-wechat-media/`,
+separate from prefs; a task that has run once never fires again for the same window, and a `once` task switches
+itself off afterwards.
+
+Ask for one in a chat - "每天 8 点提醒我喝水" - and the agent creates it with `task_add`, targeting the chat that
+asked. `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed }`.
+
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 
 Seven tools can drive this machine's own mouse and keyboard, read the screen and manage windows. They are
