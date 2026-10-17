@@ -272,6 +272,41 @@ intervals are in **seconds**), the frames are protobuf in the `pbbp2` namespace 
 `feishuEvents` / `feishuAnswered` / `feishuIgnored` / `feishuErrors`), and `/feishu` shows the same in a chat, including
 *why* the long connection is not up when it is not.
 
+## Desktop control (mouse, keyboard, screen) / 桌面控制
+
+Seven tools can drive this machine's own mouse and keyboard, read the screen and manage windows. They are
+**off by default** and every one of them refuses until you arm the switch, because they are the only tools here
+that act on your screen instead of on the bridge:
+
+```text
+/desktop on        # arm  (also: POST /dsh-wechat-media/prefs?desktopControl=true)
+/desktop off       # disarm
+/desktop           # toggle
+```
+
+| Tool | What it does |
+| --- | --- |
+| `desktop_screen` | virtual screen origin/size in physical pixels, monitor count, pointer position - call it first so coordinates are real pixels |
+| `desktop_windows` | visible top-level windows: title, pid, rectangle, minimised |
+| `desktop_focus` | bring the first window whose title contains a string to the front, restoring it if minimised |
+| `desktop_screenshot` | PNG of the whole screen or a region into the shared inbox, path returned so it can be sent to the chat |
+| `desktop_mouse` | `move` / `click` / `double_click` / `right_click` / `middle_click` / `drag` / `scroll` at physical pixels |
+| `desktop_type` | type literal text (Unicode scan codes, so Chinese arrives as typed) |
+| `desktop_key` | press a chord such as `ctrl+s`, `alt+tab`, `up` |
+
+Three things are deliberate:
+
+- **Off unless armed.** The switch is checked in one wrapper (`desktopTool`) that is the only way to define one
+  of these tools, so a new desktop tool cannot forget it. `/state` reports
+  `desktop: { enabled, supported, reason }`.
+- **Nothing is interpolated into PowerShell.** Coordinates are integers; text and window titles travel as
+  base64 and are decoded by PowerShell, so a window title containing `'; Remove-Item …` is data, not code.
+- **Windows only, for now.** The scripts use `user32.dll`, `System.Windows.Forms` and `System.Drawing`;
+  on any other platform the tools refuse and say which platform they found.
+
+`desktop_screen` also reports the size of the `INPUT` struct the C# compiled, so a wrong layout (which makes
+`SendInput` silently do nothing) is visible rather than guessed at.
+
 ## Chat commands / 聊天里的命令
 
 A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and

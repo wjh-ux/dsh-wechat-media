@@ -400,6 +400,28 @@ await test("the build line names both times, and warns when the files are newer"
   assert.match(unknown, /版本：未知 · 构建 未知 · 加载 未知/);
   assert.doesNotMatch(unknown, /重启/, "and no warning is invented from nothing");
 });
+await test("every desktop tool goes through the one wrapper that checks the switch", () => {
+  // This is the only capability that can click on the user's own screen, so the gate must be impossible
+  // to forget: `desktopTool` is the sole definition helper, and it refuses unless the preference is on.
+  const names = [...host.matchAll(/const (desktop\w+Tool) = desktopTool\(\s*"(desktop_\w+)"/g)].map((m) => m[2]);
+  assert.deepEqual(
+    names.sort(),
+    ["desktop_focus", "desktop_key", "desktop_mouse", "desktop_screen", "desktop_screenshot", "desktop_type", "desktop_windows"],
+    "all seven tools are defined through the wrapper",
+  );
+  assert.doesNotMatch(host, /define\(\{\s*name: "desktop_/, "no desktop tool may bypass the wrapper");
+  assert.match(host, /desktopControl === true\) return;/, "the wrapper reads the switch");
+  assert.match(host, /桌面控制未开启/, "and says how to arm it when it refuses");
+  assert.match(host, /desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool\]/, "all seven are registered");
+  // The switch itself has to be reachable from all three surfaces, or it is not a switch.
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(commandsSource, /name: "desktop"/, "the /desktop command exists");
+  assert.match(host, /command\.name === "desktop"/, "and the host handles it");
+  assert.match(stateSource, /desktopControl: false/, "the default is off");
+  assert.match(host, /asBool\(body\.desktopControl\)/, "the /prefs route can arm it");
+  assert.match(host, /desktop: desktopState\(prefs\)/, "and /state reports whether it is armed");
+});
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.

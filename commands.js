@@ -66,6 +66,12 @@ export const COMMANDS = [
     summary: "失败自动重试：回合因传输类错误（超时/连接重置/限流/5xx）失败时自动重试一次；不带参数则切换",
   },
   {
+    name: "desktop",
+    aliases: ["桌面"],
+    usage: "/desktop [on|off|status]",
+    summary: "桌面控制开关：开/关鼠标、键盘、截图、窗口聚焦工具（默认关；这是唯一能操作你屏幕的功能）",
+  },
+  {
     name: "feishu",
     aliases: ["飞书", "lark"],
     usage: "/feishu [test [to]]",

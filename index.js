@@ -88,6 +88,7 @@ import { describeForModel, prepareOutbound, resolveInboxDir, saveInboundMedia, i
 import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
+import * as desktop from "./desktop.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -1649,6 +1650,24 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
+    if (command.name === "desktop") {
+      // The one switch that arms tools that can click on the user's own screen, so it says what it
+      // just enabled rather than only flipping a boolean.
+      const wanted = parseSwitch(command.args);
+      const current = (await state.loadPrefs()).desktopControl === true;
+      const next = wanted ?? !current;
+      const support = desktop.desktopSupport();
+      await state.savePrefs({ desktopControl: next });
+      if (next && !support.ok) {
+        await reply(`⚠️ 桌面控制已打开，但这台机器做不到：${support.reason}`);
+      } else if (next) {
+        await reply("🖱️ 桌面控制 → **开**。可用：desktop_screen（屏幕尺寸与指针位置）、desktop_windows（窗口列表）、desktop_focus（聚焦窗口）、desktop_screenshot（截图存入收件箱）、desktop_mouse（移动/点击/双击/右键/拖拽/滚动）、desktop_type（输入文字）、desktop_key（组合键）。\n注意：这些工具会真的操作你的鼠标键盘；关掉发 /desktop off。");
+      } else {
+        await reply("🖱️ 桌面控制 → **关**。桌面工具现在一律拒绝执行，直到 /desktop on。");
+      }
+      noteRoute("/command", { command: "desktop", value: next, chatId });
+      return true;
+    }
     if (command.name === "feishu") {
       const argsText = String(command.args ?? "").trim();
       if (/^test\b/i.test(argsText)) {
@@ -2689,6 +2708,20 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return { patch, changed };
   }
 
+  /**
+   * What `/state` and the panel may know about desktop control: whether it is armed, and whether this
+   * machine can do it at all. Two questions, one answer, so the chat command and the route cannot
+   * disagree about why a tool refused.
+   */
+  function desktopState(prefs) {
+    const support = desktop.desktopSupport();
+    return {
+      enabled: prefs?.desktopControl === true,
+      supported: support.ok,
+      reason: support.ok ? "" : support.reason,
+    };
+  }
+
   /** What a reader may know about the browser settings. */
   function browserState() {
     const settings = browserConfig();
@@ -2915,6 +2948,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     let newest = 0;
     if (Array.isArray(manifest.files) && manifest.files.length > 0) {
       for (const file of manifest.files) newest = Math.max(newest, await stamp(join(PLUGIN_ROOT, file)));
+      // `files[]` is npm's whitelist and does not list the manifest itself, which is always shipped -
+      // and whose mtime is the one that changes when the version does. Count it or `builtAt` can
+      // predate the very version it is reporting.
+      newest = Math.max(newest, await stamp(join(PLUGIN_ROOT, "package.json")));
     } else {
       const walk = async (dir) => {
         for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -4651,7 +4688,133 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool]) {
+      // ── Desktop control (mouse, keyboard, screenshot, windows) ──────────────
+      //
+      // Every other tool here acts on the bridge or on a document; these act on the user's own
+      // screen. So the switch is checked in exactly one place - `desktopTool` - which is also why a
+      // new desktop tool cannot forget it: the wrapper is the only way to define one.
+      const desktopGate = async () => {
+        if ((await state.loadPrefs()).desktopControl === true) return;
+        const support = desktop.desktopSupport();
+        throw new Error(
+          `桌面控制未开启${support.ok ? "" : `（${support.reason}）`}——在聊天里发 /desktop on 开启（默认关：这个功能会真的操作你的鼠标、键盘和屏幕）`,
+        );
+      };
+      const desktopTool = (name, description, parameters, run, timeoutMs = 120000) => define({
+        name,
+        description,
+        parameters,
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs,
+        async execute(args) {
+          try {
+            await desktopGate();
+            const answer = await run(args ?? {});
+            noteRoute("/desktop", { action: name, ok: true });
+            return answer;
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/desktop", { action: name, ok: false, error: reason });
+            return `${name} 失败：${reason}`;
+          }
+        },
+      });
+
+      const desktopScreenTool = desktopTool(
+        "desktop_screen",
+        "Report this machine's screen geometry: the virtual screen's origin and size in physical pixels, how many monitors, the primary resolution, and where the pointer is. Call it before clicking so coordinates are real pixels rather than guesses.",
+        {},
+        async () => {
+          const screen = await desktop.desktopScreen();
+          return `屏幕：虚拟桌面 ${screen.width}x${screen.height}（原点 ${screen.virtualX},${screen.virtualY}）· 显示器 ${screen.monitors} 台 · 主屏 ${screen.primaryWidth}x${screen.primaryHeight}\n指针现在在 (${screen.pointerX}, ${screen.pointerY})`;
+        },
+      );
+
+      const desktopWindowsTool = desktopTool(
+        "desktop_windows",
+        "List visible top-level windows with their title, process id, rectangle and whether they are minimised. Use it to see what is actually on screen before clicking, or to confirm that a window opened.",
+        { limit: { type: "number", description: "How many windows to list (default 40, max 200)." } },
+        async (args) => {
+          const list = await desktop.desktopWindows({ limit: args.limit });
+          if (!list.count) return "当前没有可见的顶层窗口";
+          return `${list.count} 个可见窗口（坐标与 desktop_screen 同一套像素）：\n${list.windows
+            .map((win) => `  hwnd ${win.hwnd} · pid ${win.pid} · ${win.w}x${win.h} @(${win.x},${win.y})${win.minimized ? "（已最小化）" : ""} · ${win.title}`)
+            .join("\n")}`;
+        },
+      );
+
+      const desktopFocusTool = desktopTool(
+        "desktop_focus",
+        "Bring the first visible window whose title contains this text to the front, restoring it first if it is minimised.",
+        { title: { type: "string", required: true, description: "Part of the window title; case-insensitive." } },
+        async (args) => {
+          const hit = await desktop.desktopFocus({ title: args.title });
+          return hit.found ? `已聚焦窗口：${hit.focused}` : `没找到标题包含“${hit.requested}”的可见窗口（先 desktop_windows 看看有哪些）`;
+        },
+      );
+
+      const desktopScreenshotTool = desktopTool(
+        "desktop_screenshot",
+        "Take a PNG screenshot of the whole screen (or a region of it), save it into the shared inbox and return its path. Send it to the chat afterwards with the matching send tool.",
+        {
+          fileName: { type: "string", description: "Optional file name; a timestamped one is used otherwise." },
+          region: { type: "object", description: "Optional { x, y, width, height } in the pixels desktop_screen reports." },
+        },
+        async (args) => {
+          const dir = join(await resolvedInbox(), "desktop");
+          await mkdir(dir, { recursive: true });
+          const name = String(args.fileName ?? "").trim() || `desktop-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+          const target = join(dir, name.endsWith(".png") ? name : `${name}.png`);
+          const shot = await desktop.desktopScreenshot({ path: target, region: args.region });
+          return `截图已保存：${shot.path}（${shot.width}x${shot.height}，${shot.bytes} 字节，PNG）✓ 用 wechat_send_file / wecom_send_file / feishu_send_file 就能发到聊天里 ✓`;
+        },
+      );
+
+      const desktopMouseTool = desktopTool(
+        "desktop_mouse",
+        "Move, click, double-click, right-click, middle-click, drag or scroll the real mouse. Coordinates are physical pixels, the same ones desktop_screen reports. Check desktop_windows/desktop_screenshot first so nothing is clicked blind.",
+        {
+          action: { type: "string", required: true, description: "move / click / double_click / right_click / middle_click / drag / scroll" },
+          x: { type: "number", description: "Target x (omit only for a scroll at the current position)." },
+          y: { type: "number", description: "Target y." },
+          toX: { type: "number", description: "drag: end x." },
+          toY: { type: "number", description: "drag: end y." },
+          amount: { type: "number", description: "scroll: notches, positive scrolls up." },
+        },
+        async (args) => {
+          const done = await desktop.desktopMouse({
+            action: args.action, x: args.x, y: args.y, toX: args.toX, toY: args.toY, amount: args.amount,
+          });
+          const where = done.action === "scroll"
+            ? `滚动 ${done.amount > 0 ? "上" : "下"} ${Math.abs(done.amount)} 格`
+            : done.action === "drag"
+              ? `拖拽 (${done.x},${done.y}) → (${done.toX},${done.toY})`
+              : `${done.action} 于 (${done.x},${done.y})`;
+          return `已执行：${where}；指针现在在 (${done.pointerX}, ${done.pointerY})`;
+        },
+      );
+
+      const desktopTypeTool = desktopTool(
+        "desktop_type",
+        "Type literal text at the focused window, using Unicode scan codes so Chinese and punctuation arrive as typed. Nothing is sent to the network.",
+        { text: { type: "string", required: true, description: "What to type (up to 2000 characters)." } },
+        async (args) => {
+          const typed = await desktop.desktopType({ text: args.text });
+          return `已输入 ${typed.chars} 个字符（${typed.events} 个键盘事件）`;
+        },
+      );
+
+      const desktopKeyTool = desktopTool(
+        "desktop_key",
+        "Press a key chord such as ctrl+s, alt+tab or win. Modifiers are pressed in order and released in reverse.",
+        { keys: { type: "string", required: true, description: "Chord, e.g. ctrl+shift+s, alt+tab, enter." } },
+        async (args) => {
+          const pressed = await desktop.desktopKey({ keys: args.keys });
+          return `已按下 ${pressed.keys}（虚拟键码 ${pressed.codes.join("+")}）`;
+        },
+      );
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -4977,6 +5140,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
             tavily: tavilyState(),
             browser: browserState(),
+            desktop: desktopState(prefs),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,
             wecom: await wecomState(),
@@ -5132,6 +5296,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
           if (asBool(body.interject) !== null) patch.interject = asBool(body.interject);
           if (asBool(body.retry) !== null) patch.retry = asBool(body.retry);
+          // The desktop switch goes through the same route as everything else: the Web UI panel and a
+          // plain GET link both write here, and only an explicit boolean arms it.
+          if (asBool(body.desktopControl) !== null) patch.desktopControl = asBool(body.desktopControl);
           // The Feishu block of the Web UI panel writes here. It is handled before the reply because a
           // changed app id/secret has to reconnect the long connection, and the response then carries
           // the fresh state so the panel can show "connected" or the reason it is not.

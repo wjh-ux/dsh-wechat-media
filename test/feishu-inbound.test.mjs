@@ -656,12 +656,16 @@ await test("/state says which build is answering, and where it was loaded from",
     for (const key of ["builtAt", "loadedAt"]) {
       assert.ok(!Number.isNaN(Date.parse(state[key])), `${key} is an ISO timestamp, got ${JSON.stringify(state[key])}`);
     }
-    // builtAt is the *newest mtime among the shipped files*, so it is recomputed here from the
-    // manifest and compared exactly: reporting loadedAt, or only the manifest's own mtime, or a
-    // constant, all fail this. Both sides go through the same ISO form, so the millisecond
-    // precision the ISO string can carry is not an issue.
+    // builtAt is the *newest mtime among the shipped files plus the manifest*, so it is recomputed
+    // here and compared exactly: reporting loadedAt, or only the manifest's own mtime, or a constant,
+    // all fail this. `package.json` is counted because npm always ships it and its mtime is what moves
+    // when the version does. Both sides go through the same ISO form, so the millisecond precision the
+    // ISO string can carry is not an issue.
     const shipped = manifest.files ?? [];
-    const newest = Math.max(...shipped.map((file) => statSync(join(pluginRoot, file)).mtimeMs));
+    const newest = Math.max(
+      ...shipped.map((file) => statSync(join(pluginRoot, file)).mtimeMs),
+      statSync(join(pluginRoot, "package.json")).mtimeMs,
+    );
     assert.equal(state.builtAt, new Date(newest).toISOString(), "builtAt is the newest shipped mtime");
     assert.ok(Date.parse(state.builtAt) >= Math.floor(manifestMtime), "which covers package.json itself");
   } finally {

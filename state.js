@@ -249,6 +249,10 @@ export class WechatState {
       // it is written. Only WeCom can do that (its `stream` message is incremental); personal
       // WeChat has no way to edit a message that was already sent.
       delivery: "whole",
+      // Desktop control: the mouse, the keyboard and screenshots of the user's own screen. Off by
+      // default and deliberately so - every other tool in this plugin acts on the bridge or on a
+      // document, while this one can click anything the pointer can reach. `/desktop on` arms it.
+      desktopControl: false,
       // What a chat sees: "plain" strips the markdown WeChat and WeCom cannot render, "raw" sends the
       // model's text untouched. Plain is the default because markdown arrives as literal punctuation.
       format: "plain",

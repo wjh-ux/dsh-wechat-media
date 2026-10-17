@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.25.0
+
+- **Desktop control: the mouse, the keyboard, the screen and the windows.** Seven tools - `desktop_screen`,
+  `desktop_windows`, `desktop_focus`, `desktop_screenshot`, `desktop_mouse` (move / click / double / right / middle /
+  drag / scroll), `desktop_type` (Unicode scan codes, so Chinese arrives as typed) and `desktop_key` (chords such as
+  `ctrl+s`) - drive this machine over `user32.dll` through a C# blob compiled per call with `Add-Type`. No
+  dependency, no helper binary, and the same pattern the folder picker already used.
+- **Off by default, armed with `/desktop on`.** These are the only tools here that act on the user's own screen
+  rather than on the bridge, so the gate lives in one `desktopTool` wrapper that is the only way to define one - a
+  new desktop tool cannot forget it. `/state` reports `desktop: { enabled, supported, reason }`, and `/prefs` accepts
+  `desktopControl`, so the panel and a plain link can arm it too.
+- **No argument is ever interpolated into PowerShell.** Coordinates are integers; typed text and window titles travel
+  as base64 and are decoded by PowerShell, so a window title containing `'; Remove-Item …` is data, not code.
+- **The struct layout is verified rather than assumed.** A wrong `INPUT` layout makes `SendInput` return zero with no
+  error, which looks exactly like "nothing happened" - so `desktop_screen` reports `Marshal.SizeOf`, and the live run
+  on this machine reports 40, the value x64 Windows validates. DPI awareness is claimed before anything is measured,
+  so a pixel taken from a screenshot means the same thing to a click.
+- Guards, all falsifiable: the suite builds every script and asserts the exact PowerShell (one button-down and one
+  button-up per click; the press held across the whole drag with the release after the last move; wheel notches as
+  `amount × 120`; modifiers released in reverse); it parses the hostile-title and hostile-text cases and asserts the
+  raw text never reaches the command line; it drives the whole tool path through an injected `exec`, so no test moves
+  a real mouse; and the wiring suite asserts that all seven tools go through the wrapper, that the default is off,
+  and that `/desktop`, `/prefs` and `/state` all agree about the switch.
+- One real bug the suite caught while adding this: `builtAt` measured only `files[]`, which npm's whitelist does not
+  include `package.json` in - so the field could report a build time *older* than the version it was reporting. The
+  manifest is now counted with the rest.
+- 27 suites / 469 cases.
+
 ## 0.24.2
 
 - **`builtAt` is computed when it is asked for, not remembered from the first request.** v0.24.0 memoised the
