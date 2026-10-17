@@ -152,6 +152,8 @@ window.__ModuleLoader__.load({
           groupsSkipped: "skipped",
           interject: "Let a new message interject while it is still answering",
   retry: "Retry once when a turn fails in the transport",
+          desktop: "Let the agent drive this machine's mouse, keyboard and screen",
+          desktopUnsupported: "not available on this platform",
           interjectOn: "Interjection is on: a message sent while the agent is working joins that turn",
           interjected: "interjected",
           formatLabel: "Text",
@@ -255,6 +257,8 @@ window.__ModuleLoader__.load({
           groupsSkipped: "已跳过",
           interject: "允许插话（正在回复时新消息加入当前回合）",
   retry: "失败自动重试（传输类错误重试一次）",
+          desktop: "允许操作本机鼠标 / 键盘 / 屏幕",
+          desktopUnsupported: "本机不支持（仅 Windows）",
           interjectOn: "插话已开启：agent 还在回复时发来的消息会加入当前回合",
           interjected: "已插话",
           formatLabel: "文本处理",
@@ -620,6 +624,23 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * The desktop control switch: the one preference that arms tools able to click on the user's own
+         * screen. Same preference as `/desktop on`, and off unless the host actually stored `true` - the
+         * checkbox is a convenience over that switch, never a second source of truth.
+         */
+        async function setDesktop(desktopControl) {
+          setBusy(true);
+          try {
+            await api(`/prefs?desktopControl=${desktopControl ? "true" : "false"}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
          * Token ledger controls. The window length (1..30 days) and a manual reset live in
          * the host's ledger file, which `/tokens` also drives - one source of truth.
          */
@@ -768,6 +789,22 @@ window.__ModuleLoader__.load({
                 onChange: (event) => setRetry(event.target.checked),
               }),
               " " + t("retry", "Retry once when a turn fails in the transport"),
+            ]),
+            // The one switch that arms tools which can click on this machine. It mirrors `/desktop on`
+            // and reads the stored preference, never its own copy; on a platform that cannot do it the
+            // box is disabled and says why, rather than looking like it failed.
+            h("label", { key: "dt", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: Boolean(snapshot?.prefs?.desktopControl),
+                disabled: busy || snapshot?.desktop?.supported === false,
+                onChange: (event) => setDesktop(event.target.checked),
+              }),
+              " " + t("desktop", "Let the agent drive this machine's mouse, keyboard and screen") +
+                (snapshot?.desktop?.supported === false
+                  ? `（${t("desktopUnsupported", "not available on this platform")}：${snapshot.desktop.reason ?? ""}）`
+                  : ""),
             ]),
             ]),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the

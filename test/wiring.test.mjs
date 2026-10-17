@@ -436,6 +436,20 @@ await test("no tool parameter asks defineTool for a type it does not know", () =
   assert.match(host, /\}\)\(\)\.catch\(/, "the tools section catches its own rejection");
   assert.match(host, /tools section failed/, "and says so in the log");
 });
+await test("the desktop switch is reachable from the chat, the panel and the host", () => {
+  // v0.20.0's lesson, applied before it can bite: a switch the panel renders but /prefs does not accept is
+  // a checkbox that toggles nothing. Every end has to line up.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  assert.match(commandsSource, /name: "desktop"/, "the /desktop command exists");
+  assert.match(host, /command\.name === "desktop"/, "the host handles it");
+  assert.match(host, /asBool\(body\.desktopControl\)/, "the /prefs route accepts it");
+  assert.match(clientSource, /async function setDesktop\(/, "the panel can set it");
+  assert.match(clientSource, /desktopControl=\$\{desktopControl \? "true" : "false"\}/, "through /prefs");
+  assert.match(clientSource, /checked: Boolean\(snapshot\?\.prefs\?\.desktopControl\)/, "and shows the stored value");
+  assert.match(clientSource, /snapshot\?\.desktop\?\.supported === false/, "while refusing to pretend it works where it cannot");
+  assert.match(host, /desktop: desktopState\(prefs\)/, "which is the same answer /state gives");
+});
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.

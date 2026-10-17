@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.25.4
+
+- **The desktop switch is on the panel now.** A checkbox next to the retry and interjection toggles, reading the same
+  stored preference and writing through the same /prefs route as /desktop on - so the two can never disagree.
+- On a platform that cannot drive a mouse it is disabled and says so (仅 Windows), reading /state's
+  desktop.supported / desktop.reason rather than looking like a toggle that silently fails.
+- Guard: the /desktop command, the host handler, the /prefs route and the panel's setDesktop must all line up -
+  a checkbox wired to a route that ignores it is exactly what v0.20.0 shipped.
+- 27 suites / 472 cases.
+
 ## 0.25.3
 
 - **Fixed: Chinese window titles came back as mojibake.** powershell.exe -Command writes stdout in the console's
@@ -9,7 +19,7 @@
   for real, not by reading it.
 - The guard asserts it for **every** script that can produce text, and that the encoding is set before the first
   write. Falsified by deleting the two lines: the suite goes red, then the file is restored byte-identical.
-- 27 suites / 471 cases.
+- 27 suites / 472 cases.
 
 ## 0.25.2
 
