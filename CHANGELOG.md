@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.28.0
+
+- **The tasks card can create a task.** A schedule line, an action (`message` / `prompt` / `command`), the payload and
+  an Add button - all posting to the same `/tasks` route the other buttons use, and answered with the parser's own
+  sentence when the schedule is wrong (shown verbatim, not replaced by "failed").
+- The form refuses an empty schedule or an empty payload *before* calling the host: a round trip that can only fail is
+  a round trip not worth making.
+- The new task targets the same chat the chat-created ones do (most recent inbound, else the newest persisted route),
+  so the two creation paths differ in nothing but the input device.
+- Guard: the card's `addTask` must post `action: "add"` with `when`/`kind`/`text`, and must surface a host refusal
+  (`ok === false`) instead of reporting success.
+- 28 suites / 491 cases.
+
 ## 0.27.0
 
 - **The Web UI card has a scheduled-tasks section.** One row per task - id, schedule, action, transport, next run,

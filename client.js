@@ -158,6 +158,10 @@ window.__ModuleLoader__.load({
           tasksUnit: "",
           tasksEmpty: "No scheduled tasks yet. Say \u201cevery day at 8:00 remind me\u201d in a chat and one is created.",
           taskCommand: "Let command tasks run local commands",
+          taskAdd: "Add",
+          taskText: "text / prompt / command",
+          taskCreated: "created",
+          taskNeedBoth: "both the schedule and the content are required",
           nextRun: "next",
           lastRun: "last",
           paused: "paused",
@@ -274,6 +278,10 @@ window.__ModuleLoader__.load({
           tasksUnit: "",
           tasksEmpty: "还没有定时任务。在聊天里说「每天 8 点提醒我喝水」就会建一个。",
           taskCommand: "允许 command 任务执行本机命令",
+          taskAdd: "添加",
+          taskText: "内容 / 提示词 / 命令",
+          taskCreated: "已创建",
+          taskNeedBoth: "时间和内容都要填",
           nextRun: "下次",
           lastRun: "上次",
           paused: "已暂停",
@@ -371,7 +379,11 @@ window.__ModuleLoader__.load({
       const [tavilyDraft, setTavilyDraft] = react.useState({});
       const [tavilyNotice, setTavilyNotice] = react.useState(undefined);
       // The browser block does the same: channel/port/profile/headless are its own, not Feishu's.
-      const [browserDraft, setBrowserDraft] = react.useState({});
+        const [browserDraft, setBrowserDraft] = react.useState({});
+        // The tasks form: one schedule line, one action and one payload. Creation from a chat stays the
+        // normal path; this is for "I am already looking at the list".
+        const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
+        const [taskNotice, setTaskNotice] = react.useState(undefined);
       const [browserNotice, setBrowserNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
@@ -680,6 +692,29 @@ window.__ModuleLoader__.load({
           }
         }
         const removeTask = (id) => taskAction({ action: "remove", id });
+        /** Create a task from the card. The host parses the schedule and answers with the id it made. */
+        async function addTask() {
+          const when = String(taskDraft.when ?? "").trim();
+          const text = String(taskDraft.text ?? "").trim();
+          if (!when || !text) {
+            setTaskNotice({ ok: false, text: t("taskNeedBoth", "时间和内容都要填") });
+            return;
+          }
+          setBusy(true);
+          try {
+            const query = new URLSearchParams({ action: "add", when, kind: taskDraft.kind || "message", text });
+            const answer = await api(`/tasks?${query.toString()}`);
+            if (answer?.ok === false) throw new Error(answer.error || "create failed");
+            setTaskNotice({ ok: true, text: `${t("taskCreated", "已创建")} ${answer?.created ?? ""}` });
+            setTaskDraft({ when: "", kind: taskDraft.kind || "message", text: "" });
+            await refresh();
+          } catch (problem) {
+            // The host's message is the schedule parser's own sentence; show it rather than a generic one.
+            setTaskNotice({ ok: false, text: String(problem?.message ?? problem) });
+          } finally {
+            setBusy(false);
+          }
+        }
         const toggleTask = (id, enabled) => taskAction({ action: "toggle", id, enabled: enabled ? "true" : "false" });
         const setTaskCommand = (enabled) => taskAction({ action: "command", enabled: enabled ? "true" : "false" });
 
@@ -800,6 +835,37 @@ window.__ModuleLoader__.load({
                 " " + t("taskCommand", "允许 command 任务执行本机命令"),
               ]),
             ]),
+            h("div", { key: "add", className: "dswxRow" }, [
+              h("input", {
+                key: "w",
+                className: "dswxInput",
+                placeholder: "daily 08:30 / weekly mon 09:00 / every 30m / once 2026-10-20 09:00",
+                value: taskDraft.when ?? "",
+                disabled: busy,
+                onChange: (event) => setTaskDraft({ ...taskDraft, when: event.target.value }),
+              }),
+              h("select", {
+                key: "k",
+                className: "dswxInput",
+                value: taskDraft.kind ?? "message",
+                disabled: busy,
+                onChange: (event) => setTaskDraft({ ...taskDraft, kind: event.target.value }),
+              }, [
+                h("option", { key: "m", value: "message" }, "message"),
+                h("option", { key: "p", value: "prompt" }, "prompt"),
+                h("option", { key: "c", value: "command" }, "command"),
+              ]),
+              h("input", {
+                key: "x",
+                className: "dswxInput",
+                placeholder: t("taskText", "内容 / 提示词 / 命令"),
+                value: taskDraft.text ?? "",
+                disabled: busy,
+                onChange: (event) => setTaskDraft({ ...taskDraft, text: event.target.value }),
+              }),
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addTask }, t("taskAdd", "添加")),
+            ]),
+            taskNotice ? h("div", { key: "notice", className: "dswxMeta" }, `${taskNotice.ok ? "✅ " : "❌ "}${taskNotice.text}`) : null,
             (snapshot?.tasks?.items ?? []).length === 0
               ? h("div", { key: "empty", className: "dswxMeta" }, t("tasksEmpty", "还没有定时任务。在聊天里说「每天 8 点提醒我喝水」就会建一个。"))
               : h("div", { key: "rows" }, (snapshot?.tasks?.items ?? []).map((task) => h("div", { key: task.id, className: "dswxRow" }, [

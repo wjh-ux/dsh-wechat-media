@@ -5624,9 +5624,34 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           const body = await readArgs(req);
           const action = String(body.action ?? "list");
-          // The card's buttons and the chat command are two doors onto the same operations, so both go
-          // through the same three shapes: list, toggle (pause/resume) and remove - plus the command switch.
+          // The card's controls and the chat command are two doors onto the same operations: list, add,
+          // toggle (pause/resume) and remove - plus the command switch. Each one reuses the helper the
+          // tool path uses, so a task created here is indistinguishable from one created in a chat.
           if (action === "list") return json(res, 200, { ok: true, tasks: await taskSummary() });
+          if (action === "add") {
+            try {
+              const target = body.to ? await resolvePeer(String(body.to)) : await defaultTaskTarget();
+              const accountId = target.accountId ?? target.account?.accountId;
+              const transport = target.transport ?? transportOf(accountId);
+              const task = tasks.createTask({
+                transport,
+                accountId,
+                chatId: target.chatId,
+                peerName: target.peerName ?? "",
+                action: String(body.kind ?? "message"),
+                payload: String(body.text ?? ""),
+                schedule: String(body.when ?? ""),
+              });
+              const list = await state.loadTasks();
+              list.push(task);
+              await state.saveTasks(list);
+              noteRoute("/task", { action: "add", id: task.id, via: "card" });
+              return json(res, 200, { ok: true, created: task.id, tasks: await taskSummary() });
+            } catch (error) {
+              // A bad schedule is a 400 with the parser's own sentence - the card shows it verbatim.
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
+          }
           if (action === "command") {
             const wanted = asBool(body.enabled);
             if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });

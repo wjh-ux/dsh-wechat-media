@@ -484,9 +484,14 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   // implementations - so the route reuses `taskSummary` and the client calls that route.
   const clientSource = readFileSync(join(root, "client.js"), "utf8");
   assert.match(host, /path: "\/dsh-wechat-media\/tasks"/, "the /tasks route exists");
+  assert.match(host, /action === "add"/, "creating from the card goes through it");
   assert.match(host, /action === "toggle"/, "pause/resume goes through it");
   assert.match(host, /action === "remove"/, "so does delete");
   assert.match(host, /action === "command"/, "and the command switch");
+  // The card's form must call the same route, with the same three fields the tool takes.
+  assert.match(clientSource, /async function addTask\(/, "the card can create a task");
+  assert.match(clientSource, /action: "add", when, kind: taskDraft\.kind \|\| "message", text/, "with when/kind/text");
+  assert.match(clientSource, /answer\?\.ok === false\) throw/, "and it surfaces the host's refusal instead of reporting success");
   assert.match(host, /tasks: await taskSummary\(\)/, "the route answers with the same summary /state gives");
   assert.match(clientSource, /async function taskAction\(/, "the card can call the route");
   assert.match(clientSource, /action: "toggle", id/, "for pause/resume");
