@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.1
+
+- **Re-arming a task that was already scheduled is no longer a silent no-op.** `rearmOnce` used a
+  `while (past) { advance }` loop, so for a task whose time was already in the future it advanced zero times and still
+  answered `ok: true` - the same "reports success, changes nothing" shape this feature has now been fixed for five
+  times. It is a `do { advance } while (past)` loop: every call moves the task one step in the chosen direction.
+- A one-off far in the past still lands in the future rather than a single step past its starting point, and the
+  runaway guard stays.
+- Guard: the `do/while` shape is asserted, because the difference between the two loops is exactly the bug.
+- 28 suites / 495 cases.
+
 ## 0.30.0
 
 - **`monthly` trigger**: `monthly 15 09:00` / `每月15日 09:00` / `每月 1 日 08:00`. The day is clamped to the month

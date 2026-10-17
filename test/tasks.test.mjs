@@ -287,6 +287,14 @@ test("re-arm steps: a day keeps the time, a week the weekday, a month the day", 
   assert.equal(new Date(rounded.atMs).getDate(), 28, "and clamps to the 28th rather than rolling into March");
   assert.equal(Object.keys(REARM_STEPS).join(","), "day,week,month");
   assert.throws(() => rearmOnce({ kind: "once", atMs: at }, later, "year"), /重排步长只能是/);
+  // Already in the future: one step forward anyway, because "ok but nothing changed" is indistinguishable
+  // from a broken control.
+  const ahead = new Date(2026, 9, 20, 9, 0).getTime();
+  assert.equal(rearmOnce({ kind: "once", atMs: ahead }, later, "day").atMs, new Date(2026, 9, 21, 9, 0).getTime(), "+1 day from a future task");
+  assert.equal(rearmOnce({ kind: "once", atMs: ahead }, later, "week").atMs, new Date(2026, 9, 27, 9, 0).getTime(), "+1 week from a future task");
+  // And a task that is far in the past still lands in the future, not one step past the starting point.
+  const ancient2 = rearmOnce({ kind: "once", atMs: new Date(2026, 5, 1, 9, 0).getTime() }, later, "month");
+  assert.ok(ancient2.atMs > later, "still ends up in the future");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

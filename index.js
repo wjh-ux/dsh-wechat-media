@@ -5707,7 +5707,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             }
             await state.saveTasks(list.map((task) => (task.id === id ? { ...task, enabled: wanted } : task)));
           } else if (action === "rearm") {
-            // "Run again": the same clock time, pushed a day at a time into the future, re-enabled, history kept.
+            // "Run again": the same clock time, pushed forward by the chosen step (day / week / month), re-enabled,
+            // history kept. It always moves at least one step - a call that answered ok and changed nothing was
+            // indistinguishable from a broken button.
             if (found.schedule?.kind !== "once") {
               return json(res, 400, { ok: false, error: "只有一次性任务需要「再次运行」；循环任务自己会再触发" });
             }

@@ -257,12 +257,15 @@ export function rearmOnce(schedule, now = Date.now(), step = "day") {
   if (Number.isNaN(at.getTime())) throw new Error("这个一次性任务没有可用的时间");
   const unit = REARM_STEPS[step];
   if (!unit) throw new Error(`重排步长只能是 ${Object.keys(REARM_STEPS).join(" / ")}，收到 ${JSON.stringify(step)}`);
+  // Always advance at least once, then keep going while still in the past. "Re-arm a task that is already in
+  // the future" used to be a silent no-op that still answered ok:true - a button (or an API call) that reports
+  // success and changes nothing. Now every call moves the task one step in the chosen direction.
   let rounds = 0;
-  while (at.getTime() <= Number(now)) {
+  do {
     unit.advance(at);
     rounds += 1;
     if (rounds > 4000) throw new Error("重排次数过多，时间可能有误"); // a runaway guard, not a rule
-  }
+  } while (at.getTime() <= Number(now));
   return { kind: "once", atMs: at.getTime() };
 }
 

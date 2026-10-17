@@ -517,6 +517,10 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(clientSource, /setTaskAutoRearm\(task\.id, event\.target\.checked\)/, "and the switch writes through");
   assert.match(clientSource, /taskSteps\[task\.id\] \?\? "day"/, "each row remembers its own step");
   assert.match(host, /tasks\.rearmOnce\(found\.schedule, Date\.now\(\), step\)/, "the route passes the step to the pure helper");
+  // The helper must always move: `do { advance } while (past)` rather than `while (past) { advance }`, because the
+  // second shape answers ok without changing anything when the task is already scheduled.
+  const tasksSource = readFileSync(join(root, "tasks.js"), "utf8");
+  assert.match(tasksSource, /do \{\s*unit\.advance\(at\);/, "re-arm always advances at least one step");
   assert.match(clientSource, /task\.finished \? h\("select"/, "the finished row offers a step select");
   assert.match(clientSource, /key: "again"/, "next to the run-again button");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
