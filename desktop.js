@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Desktop control: the mouse, the keyboard, screenshots and windows.
  *
  * This is the one capability in this plugin that can click something on the user's own screen, so the
@@ -434,11 +434,14 @@ export function desktopSupport({ platform = process.platform } = {}) {
 }
 
 /**
- * Run one generated script and parse its answer. `exec` is injectable so the suites can drive the
- * whole tool path without moving a real mouse.
+ * Run one generated script and parse its answer.
+ *
+ * Both `exec` and `platform` are injectable, and for the same reason: a suite has to be able to drive
+ * the whole tool path on a machine that is not Windows, and the platform guard is the first thing that
+ * would otherwise stop it - which is exactly how this failed on the Linux runner while passing here.
  */
-export async function runDesktopScript(script, { timeoutMs = DESKTOP_TIMEOUT_MS, exec = execFile } = {}) {
-  const support = desktopSupport();
+export async function runDesktopScript(script, { timeoutMs = DESKTOP_TIMEOUT_MS, exec = execFile, platform = process.platform } = {}) {
+  const support = desktopSupport({ platform });
   if (!support.ok) throw new Error(support.reason);
   const stdout = await new Promise((resolve, reject) => {
     exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", script],

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.1
+
+- **The desktop suite now passes on a machine that is not Windows.** Two of its tests drive the whole tool path
+  through an injected `exec`, but `runDesktopScript` checked `process.platform` first - so on the Linux runner the
+  platform guard refused before the fake executor was ever called, and the suite went red while every suite passed
+  here. `platform` is now injectable next to `exec`, and the tests state `win32` explicitly for the fake runs.
+- **The refusal has a test of its own now**, and a sharper one: with `platform: "darwin"` injected, the call must
+  reject with the platform named *and* the executor must never be touched - "unsupported here" may not still spawn a
+  PowerShell that cannot exist. Falsified by dropping the injected platform: the test goes red here, which is the
+  only place it can.
+- Found by reading the failing job log rather than by guessing - the local run was green in all 27 suites, and the
+  difference was the platform, not the code under test.
+- 27 suites / 469 cases.
+
 ## 0.25.0
 
 - **Desktop control: the mouse, the keyboard, the screen and the windows.** Seven tools - `desktop_screen`,

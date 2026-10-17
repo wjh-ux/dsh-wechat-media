@@ -202,7 +202,9 @@ await test("the executor is injectable, so the whole path can be driven without 
     calls.push({ file, args, options });
     callback(null, '{"ok":true,"action":"click","x":7,"y":8,"pointerX":7,"pointerY":8}', "");
   };
-  const result = await desktopMouse({ action: "click", x: 7, y: 8, exec: fakeExec });
+  // `platform: "win32"` is injected for the same reason `exec` is: this must pass on the Linux runner too,
+  // where the real platform guard would stop the call before the fake executor ever ran.
+  const result = await desktopMouse({ action: "click", x: 7, y: 8, exec: fakeExec, platform: "win32" });
   assert.equal(result.x, 7);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].file, "powershell.exe");
@@ -217,7 +219,7 @@ await test("a failing run surfaces the reason, not the whole command line", asyn
     callback(error, "", "Add-Type : Cannot add type. The type name 'DshInput' already exists.\r\nAt line:1 char:1\r\n+ Add-Type ...\r\n");
   };
   await assert.rejects(
-    () => desktopType({ text: "hi", exec: fakeExec }),
+    () => desktopType({ text: "hi", exec: fakeExec, platform: "win32" }),
     (error) => {
       assert.match(error.message, /^Add-Type : Cannot add type/, "the message line wins, not the call stack");
       assert.ok(!error.message.includes("Command failed"), "the command itself is not echoed back");
@@ -226,14 +228,19 @@ await test("a failing run surfaces the reason, not the whole command line", asyn
   );
 });
 
-await test("a non-Windows platform refuses before any script is built", async () => {
-  const real = process.platform;
-  const fakeExec = () => assert.fail("nothing may be executed on a platform that cannot do this");
-  // desktopSupport reads process.platform directly, so this checks the message a Linux user gets.
-  const support = desktopSupport({ platform: "darwin" });
-  assert.match(support.reason, /darwin/);
-  assert.equal(typeof fakeExec, "function");
-  assert.equal(real.length > 0, true);
+await test("a platform that cannot do this refuses before any script is built", async () => {
+  // The guard has to fire *before* the executor is touched, or "unsupported here" would still spawn a
+  // PowerShell that cannot exist.
+  let touched = false;
+  const fakeExec = () => {
+    touched = true;
+    assert.fail("nothing may be executed on a platform that cannot do this");
+  };
+  await assert.rejects(
+    () => desktopMouse({ action: "move", x: 1, y: 2, exec: fakeExec, platform: "darwin" }),
+    /darwin/,
+  );
+  assert.equal(touched, false, "and the executor was never called");
 });
 
 await test("psLiteral round-trips any text, including the characters that break quoting", async () => {
