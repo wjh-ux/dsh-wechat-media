@@ -460,7 +460,11 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(host, /timer\.unref\?\.\(\)/, "which cannot hold the process open");
   assert.match(host, /clearInterval\(timer\)/, "and is cleared on dispose");
   assert.match(host, /schedulerBusy/, "a tick cannot overlap itself");
-  assert.match(host, /if \(task\.schedule\?\.kind === "once"\) task\.enabled = false|kind === "once" \? false/, "a one-off disables itself after running");
+  // A one-off ends after running unless it is set to re-arm, in which case the same clock time comes back
+  // tomorrow: both branches have to be there, or the switch silently does nothing.
+  assert.match(host, /if \(task\.autoRearm === true\)/, "a re-arming one-off keeps going");
+  assert.match(host, /tasks\.rearmOnce\(task\.schedule, startedAt\)/, "by pushing the schedule forward");
+  assert.match(host, /return \{ enabled: false \}/, "and a plain one-off still ends");
   // Three actions, each routed to a different capability - and the dangerous one behind its own switch.
   assert.match(host, /task\.action === "message"/, "message tasks send fixed text");
   assert.match(host, /task\.action === "command"/, "command tasks run locally");
@@ -504,8 +508,14 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(clientSource, /task\.finished \? null : h\("button"/, "and the card hides the toggle for them");
   // Hiding the button is not enough: the route and the chat command are other doors onto the same operation, and
   // both must refuse rather than report success for something that can never happen.
-  assert.match(host, /wanted === true && found\.schedule\?\.kind === "once" && found\.lastRunAt/, "the route refuses to resume a finished one-off");
+  assert.match(host, /wanted === true && ranThisOccurrence/, "the route refuses a plain resume of a finished one-off");
   assert.match(host, /sub === "on" && found\.schedule\?\.kind === "once" && found\.lastRunAt/, "and so does the chat command");
+  // "Run again" and its switch exist on both sides, or the button is decorative.
+  assert.match(host, /action === "rearm"/, "the route can re-arm a one-off");
+  assert.match(host, /action === "auto"/, "and set its re-arm switch");
+  assert.match(clientSource, /const rearmTask = \(id\) => taskAction\(\{ action: "rearm", id \}\)/, "the card calls it");
+  assert.match(clientSource, /setTaskAutoRearm\(task\.id, event\.target\.checked\)/, "and the switch writes through");
+  assert.match(clientSource, /task\.finished \? h\("button"/, "the finished row offers run-again");
   assert.match(host, /\/task command \[on\|off\]/, "including its own usage line");
 });
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

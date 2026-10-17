@@ -181,7 +181,10 @@ export function dueTasks(tasks, now) {
   return (Array.isArray(tasks) ? tasks : []).filter((task) => {
     if (!task || task.enabled === false || !task.schedule) return false;
     if (task.schedule.kind === "once") {
-      if (task.lastRunAt) return false; // a once-off that has run is done
+      // "Has already run" is not the same as "is finished": a re-armed one-off keeps its history and gets a new
+      // `atMs` in the future, so the guard compares the run against **this** occurrence. Checking presence alone
+      // made a re-armed task permanently dead.
+      if (task.lastRunAt && Number(task.lastRunAt) >= Number(task.schedule.atMs)) return false;
       return task.schedule.atMs <= at;
     }
     const from = Number(task.lastRunAt ?? task.createdAt ?? 0);
@@ -193,10 +196,34 @@ export function dueTasks(tasks, now) {
   });
 }
 
+/**
+ * The next occurrence of a one-off: the same clock time, pushed forward a day at a time until it is in the
+ * future. Used by "run again" and by the "re-arm after running" switch.
+ *
+ * A day at a time rather than "+24h from now", because a re-armed "下周一 9 点" should still be 9:00 - the
+ * person picked a time of day, and drifting to "whenever I happened to click" would throw that away.
+ */
+export function rearmOnce(schedule, now = Date.now()) {
+  if (!schedule || schedule.kind !== "once") throw new Error("只有一次性任务可以重排");
+  const at = new Date(Number(schedule.atMs));
+  if (Number.isNaN(at.getTime())) throw new Error("这个一次性任务没有可用的时间");
+  let days = 0;
+  while (at.getTime() <= Number(now)) {
+    at.setDate(at.getDate() + 1);
+    days += 1;
+    if (days > 3650) throw new Error("重排超过十年，时间可能有误"); // a runaway guard, not a rule
+  }
+  return { kind: "once", atMs: at.getTime() };
+}
+
 /** The next fire time for a task, or undefined for a finished one-off or an unreadable schedule. */
 export function nextRunFor(task, now = Date.now()) {
   if (!task?.schedule) return undefined;
-  if (task.schedule.kind === "once") return task.lastRunAt ? undefined : task.schedule.atMs;
+  if (task.schedule.kind === "once") {
+    // Finished only if it ran **this** occurrence; a re-armed one-off has a future `atMs` and is due again.
+    const ran = task.lastRunAt && Number(task.lastRunAt) >= Number(task.schedule.atMs);
+    return ran ? undefined : task.schedule.atMs;
+  }
   if (task.enabled === false) return undefined;
   try {
     return nextRunAt(task.schedule, Number(task.lastRunAt ?? task.createdAt ?? now));
@@ -213,7 +240,7 @@ export const TASK_ACTIONS = Object.freeze(["prompt", "message", "command"]);
  * `id` is short and human-quotable (`t3k9m2`) because the only way to remove a task is to name it in a
  * chat - a UUID would be a copy-paste exercise.
  */
-export function createTask({ transport, accountId, chatId, peerName = "", action, payload, schedule, now = Date.now(), id } = {}) {
+export function createTask({ transport, accountId, chatId, peerName = "", action, payload, schedule, now = Date.now(), id, autoRearm = false } = {}) {
   const kind = String(action ?? "").trim();
   if (!TASK_ACTIONS.includes(kind)) throw new Error(`action 只能是 ${TASK_ACTIONS.join(" / ")} 之一，收到 ${JSON.stringify(action)}`);
   const body = String(payload ?? "").trim();
@@ -231,6 +258,12 @@ export function createTask({ transport, accountId, chatId, peerName = "", action
     payload: body,
     schedule: parsed,
     enabled: true,
+    /**
+     * One-offs only: after it runs, push the same clock time one day forward instead of finishing, which
+     * is the "run it again tomorrow" some reminders actually mean. Ignored by recurring schedules, whose
+     * own rule already repeats.
+     */
+    autoRearm: parsed.kind === "once" ? autoRearm === true : false,
     createdAt: Number(now),
     lastRunAt: null,
     lastResult: null,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.29.0
+
+- **A finished one-off can be run again, and can re-arm itself.** `[再次运行]` pushes the task's *own clock time* a
+  day forward until it is in the future, keeps its history and re-enables it; a `完成后再排一次` switch on every
+  one-off does the same automatically after each run. `rearmOnce` walks a day at a time rather than adding 24h, so
+  "下周一 9 点" comes back at 9:00 instead of drifting to whenever it was last clicked.
+- **`dueTasks` now compares a one-off's last run against *its own* `atMs`**, not against the mere presence of a
+  `lastRunAt`. Without that change a re-armed task was permanently dead - it had a history entry, so the old guard
+  said "already ran" forever.
+- The route grew `rearm` and `auto`; a plain `toggle` on a finished one-off is still refused, now pointing at
+  `rearm` as the operation the person actually wanted.
+- Guards: both scheduler branches (plain end / re-arm), the two new route actions, the card's button and switch, and
+  the due-list rule for a re-armed task.
+- 28 suites / 493 cases.
+
 ## 0.28.3
 
 - **A finished one-off says why it has no pause button**: the row now reads

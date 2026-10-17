@@ -2801,7 +2801,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // A one-off that has already run is not "paused" - it is finished, and no toggle can bring it
           // back: `dueTasks` ignores a `once` task that has a `lastRunAt`. The card needs to tell those
           // two states apart, or it offers a button that does nothing.
-          finished: task.schedule?.kind === "once" && Boolean(task.lastRunAt),
+          // "Finished" is "ran this occurrence", not "ever ran": a re-armed one-off keeps its history and gets a
+          // future time, and must not look finished.
+          finished: task.schedule?.kind === "once" && Boolean(task.lastRunAt)
+            && Number(task.lastRunAt) >= Number(task.schedule?.atMs),
+          autoRearm: task.autoRearm === true,
+          once: task.schedule?.kind === "once",
           transport: task.transport,
           nextAt: next ? new Date(next).toISOString() : null,
           nextLocal: next ? tasks.formatWhen(next) : "",
@@ -4146,8 +4151,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           lastRunAt: startedAt,
           lastResult: result,
           runs: Number(task.runs ?? 0) + 1,
-          // A one-off that has run is done; keeping it enabled would fire it every tick.
-          enabled: task.schedule?.kind === "once" ? false : task.enabled !== false,
+          ...(() => {
+            // A one-off that has run is done - unless the person asked for it to come back tomorrow at the
+            // same time, in which case the same clock time is pushed a day forward and it stays enabled.
+            if (task.schedule?.kind !== "once") return { enabled: task.enabled !== false };
+            if (task.autoRearm === true) {
+              try {
+                return { schedule: tasks.rearmOnce(task.schedule, startedAt), enabled: true };
+              } catch (error) {
+                ctx.logger?.warn?.("[dsh-wechat-media] task %s could not re-arm: %s", task.id, error?.message ?? error);
+              }
+            }
+            return { enabled: false };
+          })(),
         };
         const next = (await state.loadTasks()).map((item) => (item.id === updated.id ? updated : item));
         await state.saveTasks(next);
@@ -5679,15 +5695,37 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           } else if (action === "toggle") {
             const wanted = asBool(body.enabled);
             if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });
-            // A finished one-off cannot be brought back - `dueTasks` ignores a `once` task that has run - so
-            // accepting "enable" would report success for something that can never happen. The card already
-            // hides the button; the route refuses it, because a button is not the only door.
-            if (wanted === true && found.schedule?.kind === "once" && found.lastRunAt) {
-              return json(res, 400, { ok: false, error: "这是一个已经跑完的一次性任务，无法恢复——要再跑一次请新建一个" });
+            // A finished one-off cannot simply be switched back on - there is no future `atMs` for it to fire
+            // at - so the card offers "run again" instead, and this refuses with that answer rather than
+            // reporting success for something that can never happen.
+            const ranThisOccurrence = found.schedule?.kind === "once" && found.lastRunAt
+              && Number(found.lastRunAt) >= Number(found.schedule.atMs);
+            if (wanted === true && ranThisOccurrence) {
+              return json(res, 400, { ok: false, error: "这个一次性任务已经跑完了，恢复不会让它再触发——请用「再次运行」（action=rearm）" });
             }
             await state.saveTasks(list.map((task) => (task.id === id ? { ...task, enabled: wanted } : task)));
+          } else if (action === "rearm") {
+            // "Run again": the same clock time, pushed a day at a time into the future, re-enabled, history kept.
+            if (found.schedule?.kind !== "once") {
+              return json(res, 400, { ok: false, error: "只有一次性任务需要「再次运行」；循环任务自己会再触发" });
+            }
+            try {
+              const schedule = tasks.rearmOnce(found.schedule, Date.now());
+              await state.saveTasks(list.map((task) => (task.id === id ? { ...task, schedule, enabled: true } : task)));
+              noteRoute("/task", { action: "rearm", id, via: "card", at: schedule.atMs });
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
+          } else if (action === "auto") {
+            // The switch behind "run again": keep re-arming this one-off automatically after each run.
+            const wanted = asBool(body.enabled);
+            if (wanted === null) return json(res, 400, { error: "enabled must be true or false" });
+            if (found.schedule?.kind !== "once") {
+              return json(res, 400, { ok: false, error: "只有一次性任务需要「完成后再排一次」；循环任务自己会重复" });
+            }
+            await state.saveTasks(list.map((task) => (task.id === id ? { ...task, autoRearm: wanted } : task)));
           } else {
-            return json(res, 400, { error: `未知 action：${action}（list / add / toggle / remove / command）` });
+            return json(res, 400, { error: `未知 action：${action}（list / add / toggle / rearm / auto / remove / command）` });
           }
           noteRoute("/task", { action, id, via: "card" });
           json(res, 200, { ok: true, tasks: await taskSummary() });

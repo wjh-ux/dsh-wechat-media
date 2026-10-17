@@ -167,6 +167,8 @@ window.__ModuleLoader__.load({
           paused: "paused",
           finished: "done",
           finishedHint: "a one-off cannot be paused",
+          runAgain: "Run again",
+          autoRearm: "re-arm after each run",
           pause: "Pause",
           resume: "Resume",
           remove: "Delete",
@@ -289,6 +291,8 @@ window.__ModuleLoader__.load({
           paused: "已暂停",
           finished: "已跑完",
           finishedHint: "一次性任务，不能暂停",
+          runAgain: "再次运行",
+          autoRearm: "完成后再排一次",
           pause: "暂停",
           resume: "恢复",
           remove: "删除",
@@ -721,6 +725,10 @@ window.__ModuleLoader__.load({
         }
         const toggleTask = (id, enabled) => taskAction({ action: "toggle", id, enabled: enabled ? "true" : "false" });
         const setTaskCommand = (enabled) => taskAction({ action: "command", enabled: enabled ? "true" : "false" });
+        /** "Run again": the same clock time, pushed a day forward by the host, re-enabled. */
+        const rearmTask = (id) => taskAction({ action: "rearm", id });
+        /** The switch behind it: keep re-arming this one-off after each run. */
+        const setTaskAutoRearm = (id, enabled) => taskAction({ action: "auto", id, enabled: enabled ? "true" : "false" });
 
         /**
          * Token ledger controls. The window length (1..30 days) and a manual reset live in
@@ -880,6 +888,26 @@ window.__ModuleLoader__.load({
                     : task.enabled === false ? ` · ⏸ ${t("paused", "已暂停")}`
                       : task.nextLocal ? ` · ${t("nextRun", "next")} ${task.nextLocal}` : "") +
                   (task.lastLocal ? ` · ${t("lastRun", "上次")} ${task.lastLocal} ${task.lastResult === "ok" ? "✅" : `❌ ${task.lastResult ?? ""}`}` : "")),
+                // A finished one-off gets "run again" instead of pause: the host pushes the same clock time a day
+                // forward and re-enables it, which is the only thing "resume" could sensibly mean here.
+                task.finished ? h("button", {
+                  key: "again",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => rearmTask(task.id),
+                }, t("runAgain", "再次运行")) : null,
+                // The switch behind that button: re-arm automatically after every run.
+                task.once ? h("label", { key: "auto", className: "dswxMeta" }, [
+                  h("input", {
+                    key: "c",
+                    type: "checkbox",
+                    checked: Boolean(task.autoRearm),
+                    disabled: busy,
+                    onChange: (event) => setTaskAutoRearm(task.id, event.target.checked),
+                  }),
+                  " " + t("autoRearm", "完成后再排一次"),
+                ]) : null,
                 // No toggle for a finished one-off: `dueTasks` ignores a `once` task that has already run,
                 // so "resume" would flip a flag and change nothing - a button that lies is worse than no button.
                 task.finished ? null : h("button", {

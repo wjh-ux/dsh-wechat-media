@@ -19,6 +19,7 @@ import {
   newestRouteTarget,
   nextRunAt,
   nextRunFor,
+  rearmOnce,
   transportOf,
   parseInterval,
   parseMoment,
@@ -168,8 +169,36 @@ test("nextRunFor answers for each kind, and stays silent for a finished once-off
   assert.equal(nextRunFor(daily, FRI), new Date(2026, 9, 16, 12, 0).getTime());
   const paused = { ...daily, enabled: false };
   assert.equal(nextRunFor(paused, FRI), undefined);
-  const done = { ...createTask({ transport: "wecom", accountId: "a", chatId: "c", action: "message", payload: "x", schedule: "once 2026-10-16 11:00", now: FRI, id: "o" }), lastRunAt: 1 };
+  // "Finished" means it ran *this* occurrence: a re-armed one-off keeps an older lastRunAt and a future atMs.
+  const fired = new Date(2026, 9, 16, 11, 0, 5).getTime();
+  const done = { ...createTask({ transport: "wecom", accountId: "a", chatId: "c", action: "message", payload: "x", schedule: "once 2026-10-16 11:00", now: FRI, id: "o" }), lastRunAt: fired };
   assert.equal(nextRunFor(done, FRI), undefined);
+  const rearmed = { ...done, schedule: { kind: "once", atMs: new Date(2026, 9, 17, 11, 0).getTime() } };
+  assert.equal(nextRunFor(rearmed, FRI), new Date(2026, 9, 17, 11, 0).getTime(), "a re-armed one-off has a next run again");
+});
+
+test("run again: the same clock time, pushed a day at a time into the future", () => {
+  const at = new Date(2026, 9, 16, 9, 0).getTime();
+  const later = new Date(2026, 9, 16, 10, 0).getTime();
+  const next = rearmOnce({ kind: "once", atMs: at }, later);
+  assert.equal(next.atMs, new Date(2026, 9, 17, 9, 0).getTime(), "not +24h from now - the clock time is kept");
+  assert.equal(new Date(next.atMs).getHours(), 9);
+  // A far-past one-off lands on the first future occurrence, not ten years of days one at a time.
+  const ancient = rearmOnce({ kind: "once", atMs: new Date(2020, 0, 1, 7, 30).getTime() }, later);
+  assert.ok(ancient.atMs > later, "always in the future");
+  assert.equal(new Date(ancient.atMs).getHours(), 7, "same time of day");
+  assert.throws(() => rearmOnce({ kind: "daily", hours: 8, minutes: 0 }, later), /只有一次性任务/);
+  assert.throws(() => rearmOnce({ kind: "once", atMs: "nope" }, later), /没有可用的时间/);
+});
+
+test("a re-armed one-off fires again, and the old occurrence does not re-fire", () => {
+  const at = new Date(2026, 9, 16, 11, 0).getTime();
+  const base = { id: "r", enabled: true, action: "message", schedule: { kind: "once", atMs: at }, createdAt: FRI };
+  const afterRun = { ...base, lastRunAt: at + 4000 };
+  assert.equal(dueTasks([afterRun], at + 30_000).length, 0, "already ran this occurrence");
+  const rearmed = { ...afterRun, schedule: { kind: "once", atMs: new Date(2026, 9, 17, 11, 0).getTime() } };
+  assert.equal(dueTasks([rearmed], at + 30_000).length, 0, "not due until tomorrow");
+  assert.equal(dueTasks([rearmed], new Date(2026, 9, 17, 11, 0).getTime()).length, 1, "due again tomorrow at the same time");
 });
 
 test("describeTask says why a task failed last time", () => {
