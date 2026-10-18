@@ -395,6 +395,12 @@ await test("a running browser is compared with the settings before it is reused"
   const verdict = browserArgsMatch(running, { headless: true, profileDir: "", proxy: "" });
   assert.equal(verdict.running.headless, false);
   assert.equal(verdict.wanted.headless, true);
+  // A PAC and a fixed proxy answer the same question: comparing a PAC against `--proxy-server` made every open look
+  // stale once a host list existed, which restarted the browser on every single open.
+  const pac = "file:///C:/x/proxy.pac";
+  assert.equal(browserArgsMatch([`--proxy-pac-url=${pac}`], { headless: false, proxy: "127.0.0.1:7897", pacUrl: pac }).match, true, "the same PAC is a match");
+  assert.equal(browserArgsMatch(["--proxy-server=127.0.0.1:7897"], { headless: false, proxy: "127.0.0.1:7897", pacUrl: pac }).match, false, "a fixed proxy is not the PAC");
+  assert.equal(browserArgsMatch([`--proxy-pac-url=${pac}`], { headless: false, proxy: "127.0.0.1:7897", pacUrl: "" }).match, false, "and a PAC is not the fixed proxy");
 });
 
 await test("proxy patterns are what a person types, and matching is what the PAC will do", () => {

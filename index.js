@@ -5336,7 +5336,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             runningArgs = null;
           }
           if (runningArgs) {
-            const verdict = mod.browserArgsMatch(runningArgs, settings);
+            // The PAC is part of the identity now: a browser started with a host list must be compared with that
+            // list, not with the fixed proxy it replaced.
+            const pacUrl = await writePacFile(await proxyHosts(), settings.proxy);
+            const verdict = mod.browserArgsMatch(runningArgs, { ...settings, pacUrl });
             if (!verdict.match) {
               ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings, restarting it", settings.port);
               await mod.browserCloseBrowser({ port: settings.port });

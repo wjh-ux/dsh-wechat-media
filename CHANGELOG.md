@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.43.1
+
+- **Fixed: a browser that has no PAC was treated as "settings match" once a host list existed.** 0.43.0 compared the
+  running instance against the fixed proxy only, so a window started before the list (with `--proxy-server`) counted as
+  current and was reused - the host list then had no effect at all while the tool said `设置一致`. The comparison now
+  treats a PAC and a fixed proxy as **alternatives**: with a list configured, the running `--proxy-pac-url` must match;
+  without one, the running `--proxy-server` must match and no PAC may be present.
+- Measured live: `pid 24520 · pac=(无) · proxy=127.0.0.1:7897` attached as a match, with `x.com` in the list - exactly
+  the silent no-op the stale check exists to prevent.
+- 30 suites / 538 cases.
+
 ## 0.43.0
 
 - **A proxy host list: only the sites you name go through the proxy.** `proxy-hosts.json` (one pattern per line), edited

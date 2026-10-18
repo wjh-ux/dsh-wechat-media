@@ -240,7 +240,7 @@ export async function browserRunningArgs({ port = 9222, fetchImpl = fetch, webSo
  * Only the three things that change what a person sees are compared: window visibility (`--headless`), the profile
  * directory, and the proxy. Ports are the same by definition (we found it by port), and the channel is implied.
  */
-export function browserArgsMatch(args, { headless = true, profileDir = "", proxy = "" } = {}) {
+export function browserArgsMatch(args, { headless = true, profileDir = "", proxy = "", pacUrl = "" } = {}) {
   const list = Array.isArray(args) ? args : [];
   const value = (prefix) => {
     const hit = list.find((arg) => String(arg).startsWith(prefix));
@@ -249,13 +249,21 @@ export function browserArgsMatch(args, { headless = true, profileDir = "", proxy
   const runningHeadless = list.some((arg) => String(arg).startsWith("--headless"));
   const runningProfile = value("--user-data-dir=");
   const runningProxy = value("--proxy-server=");
+  const runningPac = value("--proxy-pac-url=");
   const wantedProxy = String(proxy ?? "").trim();
+  const wantedPac = String(pacUrl ?? "").trim();
+  // A PAC and a fixed proxy are two ways to answer the same question, so they are compared as alternatives:
+  // comparing the PAC against `--proxy-server` made every open look stale once a host list existed, which meant a
+  // restart on every single open.
+  const proxyMatches = wantedPac
+    ? comparablePath(runningPac) === comparablePath(wantedPac)
+    : runningProxy === wantedProxy && !runningPac;
   return {
     match: runningHeadless === Boolean(headless)
       && (!profileDir || !runningProfile || comparablePath(runningProfile) === comparablePath(profileDir))
-      && runningProxy === wantedProxy,
-    running: { headless: runningHeadless, profileDir: runningProfile, proxy: runningProxy },
-    wanted: { headless: Boolean(headless), profileDir, proxy: wantedProxy },
+      && proxyMatches,
+    running: { headless: runningHeadless, profileDir: runningProfile, proxy: runningProxy, pacUrl: runningPac },
+    wanted: { headless: Boolean(headless), profileDir, proxy: wantedProxy, pacUrl: wantedPac },
   };
 }
 
