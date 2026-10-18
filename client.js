@@ -1807,6 +1807,17 @@ window.__ModuleLoader__.load({
                   h("option", { key: "e", value: "erp" }, t("browserModeErp", "ERP 操作（可见 + 独立 profile）")),
                 ]),
               ]),
+              h("label", { key: "proxy", className: "dswxMeta" }, [
+                t("browserProxy", " 代理 ") + " ",
+                h("input", {
+                  key: "i",
+                  className: "dswxInput",
+                  placeholder: t("browserProxyHint", "127.0.0.1:7897（留空 = 直连）"),
+                  disabled: busy,
+                  value: browserDraft.browserProxy ?? snapshot?.browser?.proxy ?? "",
+                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProxy: event.target.value })),
+                }),
+              ]),
               h("span", { key: "modenow", className: "dswxMeta" },
                 `${t("browserModeNow", "当前")}: ${snapshot?.browser?.mode ?? "?"}${snapshot?.browser?.visible ? " · 👁 " + t("browserVisible", "可见") : " · " + t("browserInvisible", "无窗口")}`),
               h("button", {

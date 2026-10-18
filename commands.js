@@ -74,7 +74,7 @@ export const COMMANDS = [
   {
     name: "browser",
     aliases: ["浏览器"],
-    usage: "/browser [status|mode headless|headed|erp]",
+    usage: "/browser [status|mode headless|headed|erp|proxy 127.0.0.1:7897|off]",
     summary: "浏览器模式：headless 无窗口；headed 可见窗口；erp 可见窗口 + 独立持久 profile（登录态保留，适合操作 ERP 时人手接管）",
   },
   {

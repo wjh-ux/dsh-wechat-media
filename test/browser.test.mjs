@@ -8,7 +8,7 @@ const {
   browserLaunch, createCdpSession, browserOpen, browserEvaluate, browserText, browserElementCentre,
   browserClick, browserType, browserScreenshot,
   BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
-  browserCloseBrowser,
+  browserCloseBrowser, parseProxyAddress, proxyListening,
 } = await import("../browser.js");
 
 const passed = [];
@@ -262,7 +262,7 @@ await test("the browser settings reach the panel, the route and the environment"
   // The default moved into the pure mode table in browser.js when `erp` needed its own profile.
   assert.match(browserSource, /join\(dshHome, "browser-profile"\)/, "the default profile is the plugin's own, not the user's browser");
   assert.match(browserSource, /join\(dshHome, "browser-profile-erp"\)/, "and the ERP mode keeps its own");
-  assert.match(host, /import \{ BROWSER_MODE_NAMES, browserModeSettings \}/, "the host imports the mode helpers");
+  assert.match(host, /import \{[^}]*BROWSER_MODE_NAMES[^}]*browserModeSettings[^}]*\} from "\.\/browser\.js"/, "the host imports the mode helpers");
   assert.match(panel, /const \[browserDraft, setBrowserDraft\]/, "the panel keeps its own draft");
   assert.match(panel, /browserDraft\.browserMode/, "the mode select is a real string");
   assert.match(panel, /snapshot\?\.browser\?\.channel/, "and the saved channel comes back after a reload");
@@ -330,6 +330,35 @@ await test("closing the browser goes through CDP, because the pid is not a relia
     /still answering/,
     "a close that did not happen is an error, not a success message",
   );
+});
+
+await test("a proxy address is accepted the way people write it, and refused when it is unusable", () => {
+  assert.equal(parseProxyAddress("127.0.0.1:7897").proxy, "127.0.0.1:7897", "scheme-less http is the common case");
+  assert.equal(parseProxyAddress("http://127.0.0.1:7897").proxy, "127.0.0.1:7897", "the http scheme is dropped, as Chrome wants");
+  assert.equal(parseProxyAddress("socks5://127.0.0.1:7897").proxy, "socks5://127.0.0.1:7897", "socks keeps its scheme");
+  assert.equal(parseProxyAddress("").proxy, "", "empty is off, not an error");
+  assert.equal(parseProxyAddress("off").proxy, "", "and so is the word off");
+  assert.throws(() => parseProxyAddress("127.0.0.1"), /要带端口/);
+  assert.throws(() => parseProxyAddress("127.0.0.1:99999"), /看不懂|要带端口/, "an impossible port is refused either way");
+  assert.throws(() => parseProxyAddress("ftp://127.0.0.1:21"), /协议只能是/);
+  assert.throws(() => parseProxyAddress("nonsense"), /看不懂|要带端口/);
+});
+
+await test("the proxy port is probed, and a closed one says why", async () => {
+  // A fake socket: `connectImpl` returns an EventEmitter-shaped object, so no real connection is attempted.
+  const { EventEmitter } = await import("node:events");
+  const make = (outcome, detail) => () => {
+    const socket = new EventEmitter();
+    socket.setTimeout = () => {};
+    socket.destroy = () => {};
+    setTimeout(() => socket.emit(outcome, detail), 0);
+    return socket;
+  };
+  assert.equal((await proxyListening({ host: "127.0.0.1", port: 7897, connectImpl: make("connect") })).listening, true);
+  const refused = await proxyListening({ host: "127.0.0.1", port: 7897, connectImpl: make("error", { code: "ECONNREFUSED" }) });
+  assert.equal(refused.listening, false);
+  assert.match(refused.reason, /ECONNREFUSED/);
+  assert.equal((await proxyListening({ host: "", port: 0 })).listening, false, "nothing to probe is not a crash");
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

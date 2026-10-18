@@ -78,6 +78,63 @@ export function browserModeSettings({ mode = "headless", profileDir = "", dshHom
   };
 }
 
+/**
+ * A proxy address, as Chrome takes it.
+ *
+ * `127.0.0.1:7897`, `localhost:7897`, `http://127.0.0.1:7897` and `socks5://127.0.0.1:7897` all mean something to
+ * a person; Chrome wants scheme-less `host:port` in `--proxy-server` for http and the scheme kept for socks. An
+ * empty string is "no proxy" - not an error, because switching it off is a normal thing to want.
+ */
+export function parseProxyAddress(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { proxy: "" };
+  if (raw.toLowerCase() === "off" || raw.toLowerCase() === "none") return { proxy: "" };
+  const withScheme = /^[a-z0-9]+:\/\//i.test(raw) ? raw : `http://${raw}`;
+  let url;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    throw new Error(`代理地址看不懂：${JSON.stringify(raw)}（示例：127.0.0.1:7897，端口要有效）`);
+  }
+  // The scheme is checked **before** the port: `new URL` hides a protocol's default port, so `ftp://host:21`
+  // arrives with an empty `port` and would be reported as "missing a port" - the wrong complaint entirely.
+  const scheme = url.protocol.replace(/:$/, "").toLowerCase();
+  if (!["http", "https", "socks4", "socks5"].includes(scheme)) {
+    throw new Error(`代理协议只能是 http / https / socks4 / socks5，收到 ${scheme}`);
+  }
+  const port = Number(url.port);
+  if (!url.hostname || !Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`代理地址要带端口：${JSON.stringify(raw)}（示例：127.0.0.1:7897）`);
+  }
+  const hostPort = `${url.hostname}:${port}`;
+  // Chrome keeps the scheme for socks and drops it for http, which is the shape it actually passes to the network.
+  return { proxy: scheme.startsWith("socks") ? `${scheme}://${hostPort}` : hostPort, host: url.hostname, port };
+}
+
+/**
+ * Is anything listening on that proxy port? A proxy that is not running makes every page fail with an unrelated
+ * error, so "the port answers" is worth answering before a launch.
+ */
+export async function proxyListening({ host = "127.0.0.1", port, timeoutMs = 1200, connectImpl } = {}) {
+  const number = Number(port);
+  if (!host || !Number.isInteger(number) || number <= 0) return { listening: false, reason: "没有可探测的地址" };
+  const connect = connectImpl ?? (await import("node:net")).connect;
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (listening, reason) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch { /* already gone */ }
+      resolve({ listening, reason });
+    };
+    const socket = connect({ host, port: number });
+    socket.setTimeout?.(Number(timeoutMs) || 1200);
+    socket.once?.("connect", () => done(true, ""));
+    socket.once?.("timeout", () => done(false, "连接超时"));
+    socket.once?.("error", (error) => done(false, String(error?.code ?? error?.message ?? error)));
+  });
+}
+
 export function browserExecutable(channel = "chrome") {
   const list = BROWSER_CHANNELS[String(channel).toLowerCase()] ?? BROWSER_CHANNELS.chrome;
   for (const path of list) if (existsSync(path)) return path;
@@ -169,6 +226,7 @@ export async function browserLaunch({
   profileDir = "",
   width = 1280,
   height = 900,
+  proxy = "",
   spawnImpl = spawn,
   fetchImpl = fetch,
   waitMs = 15000,
@@ -187,6 +245,11 @@ export async function browserLaunch({
     "--no-default-browser-check",
     `--window-size=${Number(width) || 1280},${Number(height) || 900}`,
     ...(headless ? ["--headless=new"] : []),
+    // A proxy the person configured is the whole reason the pages were failing to load before.
+    ...(() => {
+      const parsed = parseProxyAddress(proxy);
+      return parsed.proxy ? [`--proxy-server=${parsed.proxy}`] : [];
+    })(),
     "about:blank",
   ];
   let child;

@@ -30,7 +30,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
-import { BROWSER_MODE_NAMES, browserModeSettings } from "./browser.js";
+import { BROWSER_MODE_NAMES, browserModeSettings, parseProxyAddress, proxyListening } from "./browser.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -1672,14 +1672,41 @@ export function apply(ctx, config = {}) {
         await reply(`浏览器模式：${now.mode}（${now.visible ? "窗口可见" : "无窗口"}，profile：${now.profileDir}）\n下次打开浏览器时生效。`);
         return true;
       }
+      if (sub === "proxy") {
+        const wanted = String(command.args ?? "").trim().replace(/^proxy\s*/, "").trim();
+        if (!wanted) {
+          const now = browserConfig();
+          const probe = now.proxy
+            ? await proxyListening({ host: new URL(`http://${now.proxy.replace(/^[a-z0-9]+:\/\//i, "")}`).hostname, port: Number(now.proxy.split(":").pop()) })
+            : { listening: false, reason: "未设置" };
+          await reply([
+            `浏览器代理：${now.proxy || "未设置"}`,
+            `  端口：${now.proxy ? (probe.listening ? "✅ 在监听" : `❌ ${probe.reason}`) : "—"}`,
+            "设置：/browser proxy 127.0.0.1:7897 · 关闭：/browser proxy off",
+          ].join("\n"));
+          return true;
+        }
+        const parsed = parseProxyAddress(wanted);
+        await applyBrowserPrefs({ browserProxy: parsed.proxy });
+        noteRoute("/command", { command: "browser", action: "proxy", proxy: parsed.proxy });
+        const probe = parsed.proxy
+          ? await proxyListening({ host: parsed.host, port: parsed.port })
+          : { listening: false, reason: "已关闭" };
+        await reply(parsed.proxy
+          ? `浏览器代理已设为 ${parsed.proxy}（${probe.listening ? "端口在监听 ✅" : `但端口现在没响应：${probe.reason}`}）\n下次打开浏览器生效。`
+          : "浏览器代理已关闭。");
+        return true;
+      }
       const now = browserConfig();
       await reply([
         `浏览器模式：${now.mode}`,
         `  窗口：${now.visible ? "可见（人能直接看到并接管）" : "不可见（无头）"}`,
         `  视口：${now.width}×${now.height} · profile：${now.profileDir}`,
         `  通道：${now.channel} · 端口：${now.port}`,
+        `  代理：${now.proxy || "未设置"}`,
         "",
         "切换：/browser mode headless | headed | erp",
+        "代理：/browser proxy 127.0.0.1:7897 | off",
       ].join("\n"));
       return true;
     }
@@ -2798,6 +2825,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return {
       channel: (pick(saved.channel, given.channel, process.env.DSH_BROWSER_CHANNEL) || "chrome").toLowerCase(),
       port: Number(pick(saved.port, given.port, process.env.DSH_BROWSER_PORT)) || 9222,
+      // Normalised once, so the launcher and /state cannot disagree about what "127.0.0.1:7897" means.
+      proxy: parseProxyAddress(pick(saved.proxy, given.proxy, process.env.DSH_BROWSER_PROXY)).proxy,
       mode: mode.mode,
       headless: mode.headless,
       visible: mode.visible,
@@ -2813,6 +2842,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     browserChannel: "channel",
     browserPort: "port",
     browserProfileDir: "profileDir",
+    // A string like the rest of these, so it is forwarded by the same list - v0.39.0 forgot to do that for the
+    // mode and the setting saved nothing while answering "no change".
+    browserProxy: "proxy",
   });
   const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless" });
   // `browserMode` is a string, not a switch: it carries the three named modes, and a boolean cannot say "erp".
@@ -2963,6 +2995,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       port: settings.port,
       mode: settings.mode,
       headless: settings.headless,
+      proxy: settings.proxy,
       visible: settings.visible,
       keepOpen: settings.keepOpen,
       profileDir: settings.profileDir,
@@ -5016,6 +5049,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         profileDir: settings.profileDir,
         width: settings.width,
         height: settings.height,
+        proxy: settings.proxy,
       });
           pid = launched.pid ?? null;
           started = true;

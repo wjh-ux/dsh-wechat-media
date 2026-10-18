@@ -607,7 +607,7 @@ await test("the ERP browser mode is reachable from the card, the command and /st
   assert.match(browserSource, /export const BROWSER_MODES = Object\.freeze\(\{/, "the modes are declared once");
   assert.match(browserSource, /export function browserModeSettings\(/, "and mapped in one pure function");
   // Used must mean imported - the v0.38.1 lesson, applied before it bites.
-  assert.match(host, /import \{ BROWSER_MODE_NAMES, browserModeSettings \} from "\.\/browser\.js"/, "the host imports the helpers");
+  assert.match(host, /import \{[^}]*BROWSER_MODE_NAMES[^}]*browserModeSettings[^}]*\} from "\.\/browser\.js"/, "the host imports the helpers");
   assert.match(host, /mode: settings\.mode/, "/state reports the mode");
   assert.match(host, /visible: settings\.visible/, "and whether a human can see the window");
   assert.match(commandsSource, /name: "browser"/, "the /browser command exists");
@@ -615,6 +615,13 @@ await test("the ERP browser mode is reachable from the card, the command and /st
   assert.match(host, /applyBrowserPrefs\(\{ browserMode: wanted \}\)/, "it writes the same pref the card writes");
   assert.match(clientSource, /t\("browserModeErp", "ERP 操作/, "the card offers the ERP mode");
   assert.match(clientSource, /browserDraft\.browserMode/, "through the same draft the other browser fields use");
+  // The proxy is a string field, so it must be in `BROWSER_PREF_FIELDS` - the list /prefs forwards and /state
+  // advertises. v0.39.0 taught this exact lesson with the mode; the field list is the thing that keeps repeating.
+  assert.match(host, /browserProxy: "proxy",/, "the proxy is a forwarded browser field");
+  assert.match(host, /proxy: parseProxyAddress\(pick\(saved\.proxy/, "and normalised where the config is built");
+  assert.match(browserSource, /--proxy-server=/, "the launcher passes it to Chrome");
+  assert.match(host, /command\.args \?\? ""\)\.trim\(\)\.replace\(\/\^proxy/, "the /browser proxy subcommand exists");
+  assert.match(clientSource, /browserDraft\.browserProxy/, "the card can set it");
   // Declared is not forwarded. v0.39.0 added the mode to `browserPrefsPatch` and forgot the two lists that
   // decide which body fields reach it - so the card's select saved nothing and answered "无变化" cheerfully.
   assert.match(host, /Object\.keys\(\{ \.\.\.BROWSER_PREF_FIELDS, \.\.\.BROWSER_PREF_SWITCHES, \.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode field");
