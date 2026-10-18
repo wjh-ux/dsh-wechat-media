@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.44.2
+
+- **A mismatch now says what differs.** `检测到旧配置的浏览器，已关闭并按当前设置重新打开` was true but useless: it appeared on
+  every open during the PAC work, and neither the person nor the log could tell which of the three comparisons
+  (visibility, profile, proxy/PAC) failed. The message now ends with the difference, e.g.
+  `代理 http://127.0.0.1:4402/proxy.pac → 期望 http://127.0.0.1:47718/proxy.pac`.
+- **An unreadable command line attaches again instead of rebuilding the window.** 0.43.3 treated "cannot inspect" as
+  "not a match" to break a deadlock: windows launched before `--enable-automation` could never be verified. Every
+  launch carries the flag since 0.44, so that deadlock is gone - and rebuilding on every open is the worse failure
+  (it discards the window the person is looking at).
+- 30 suites / 540 cases.
+
 ## 0.44.1
 
 - **Fixed a flaky test: a fixed `settle(40)` sleep where the inbound pipeline is asynchronous.** It failed once on a

@@ -666,9 +666,12 @@ await test("the reliability trio is wired: doctor, task log, stale-browser check
   assert.match(browserSource, /export function browserArgsMatch\(/, "and compared with the settings");
   assert.match(host, /if \(!verdict\.match\)/, "a mismatch is acted on");
   assert.match(host, /replacedStale/, "the tool reports that it restarted one");
-  // A browser launched before `--enable-automation` cannot report its args, so it can never be verified. One
-  // restart is the only way out of that deadlock, and it is the honest reading of "cannot inspect".
-  assert.match(host, /runningArgs\.length === 0/, "an unreadable command line is treated as a mismatch");
+  // Unreadable args are NOT a mismatch: since 0.44 every launch carries `--enable-automation`, so a window that
+  // cannot report its args was started by someone else, and replacing it every open would be worse than reusing
+  // it. What must be true instead: a real mismatch says what differs.
+  assert.match(host, /runningArgs && runningArgs\.length/, "an unreadable command line attaches rather than rebuilds");
+  assert.match(host, /function diffSummary\(verdict\)/, "a mismatch names the difference");
+  assert.match(host, /staleReason/, "and the tool message carries it");
 });
 
 await test("the browser is closed by protocol, not by a pid that may already be dead", () => {

@@ -3270,6 +3270,21 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return text.length > 8000 ? `${text.slice(0, 8000)}\n…（已截断，共 ${text.length} 字符）` : text;
   }
 
+  /** One line naming what disagrees between the running browser and the settings. */
+  function diffSummary(verdict) {
+    const parts = [];
+    if (verdict.running.headless !== verdict.wanted.headless) {
+      parts.push(`窗口 ${verdict.running.headless ? "无头" : "可见"} → 期望 ${verdict.wanted.headless ? "无头" : "可见"}`);
+    }
+    if (verdict.running.profileDir !== verdict.wanted.profileDir) {
+      parts.push(`profile ${verdict.running.profileDir || "(无)"} → 期望 ${verdict.wanted.profileDir || "(无)"}`);
+    }
+    if (verdict.running.pacUrl !== verdict.wanted.pacUrl || verdict.running.proxy !== verdict.wanted.proxy) {
+      parts.push(`代理 ${verdict.running.pacUrl || verdict.running.proxy || "(无)"} → 期望 ${verdict.wanted.pacUrl || verdict.wanted.proxy || "(无)"}`);
+    }
+    return parts.join("；") || "参数不同";
+  }
+
   /** The host part of a normalised proxy (`host:port` or `scheme://host:port`), for a doctor comparison. */
   function hostOf(proxy) {
     try {
@@ -5360,6 +5375,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         let pid = null;
         let started = false;
         let replacedStale = false;
+        let staleReason = "";
         try {
           // Something already listening on the port is attached to rather than duplicated - but only if it was
           // started the way the settings now say. A browser left over from an earlier session (headless, no proxy,
@@ -5373,25 +5389,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try {
             runningArgs = (await mod.browserRunningArgs({ port: settings.port, timeoutMs: 4000 })).args;
           } catch (error) {
-            ctx.logger?.info?.("[dsh-wechat-media] running browser cannot report its command line (%s); replacing it", String(error?.message ?? error));
-            runningArgs = [];
+            // Unreadable is not a mismatch: a window we cannot inspect is still probably ours, and every launch from
+            // 0.44 onwards carries `--enable-automation`, so this only happens for a browser someone else started.
+            ctx.logger?.info?.("[dsh-wechat-media] running browser cannot report its command line (%s); attaching", String(error?.message ?? error));
+            runningArgs = null;
           }
-          if (runningArgs && runningArgs.length === 0) {
-            // Closed below through the same path a mismatch takes: one restart, then the window is inspectable.
-            await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
-            replacedStale = true;
-            throw new Error("unverifiable browser replaced");
-          }
-          if (runningArgs) {
+          if (runningArgs && runningArgs.length) {
             // The PAC is part of the identity now: a browser started with a host list must be compared with that
             // list, not with the fixed proxy it replaced.
             const pacUrl = await writePacFile(await proxyHosts(), settings.proxy);
             const verdict = mod.browserArgsMatch(runningArgs, { ...settings, pacUrl });
             if (!verdict.match) {
-              ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings, restarting it", settings.port);
-              await mod.browserCloseBrowser({ port: settings.port });
+              // Say what disagrees. "检测到旧配置" without the difference made a repeated false restart impossible to
+              // diagnose from the chat - the next line is what the person (and the log) needs.
+              staleReason = diffSummary(verdict);
+              ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings (%s), restarting it", settings.port, staleReason);
+              await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
               replacedStale = true;
-              throw new Error("stale browser closed"); // the outer catch launches a fresh one
+              throw new Error(`stale browser closed: ${staleReason}`);
             }
           }
         } catch {
@@ -5414,7 +5429,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const session = mod.createCdpSession(page.webSocketDebuggerUrl);
         await session.ready;
         await session.send("Page.enable");
-        browserLive = { session, port: settings.port, pid, started, replacedStale, url: String(page.url ?? "") };
+        browserLive = { session, port: settings.port, pid, started, replacedStale, staleReason, url: String(page.url ?? "") };
         return { mod, settings, live: browserLive };
       }
 
@@ -5449,7 +5464,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const opened = await mod.browserOpen(live.session, url);
           live.url = opened.url;
           const note = live.started
-            ? (live.replacedStale ? "（检测到旧配置的浏览器，已关闭并按当前设置重新打开）" : "")
+            ? (live.replacedStale ? `（检测到旧配置的浏览器，已关闭并按当前设置重新打开${live.staleReason ? `：${live.staleReason}` : ""}）` : "")
             : `（接管了端口 ${live.port} 上已开的浏览器，设置一致）`;
           return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${note}`;
         },
