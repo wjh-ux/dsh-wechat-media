@@ -576,6 +576,15 @@ await test("office tools are registered, honest about a missing toolchain, and r
   const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
   assert.match(commandsSource, /name: "office"/, "the /office command exists");
   assert.match(host, /command\.name === "office"/, "and the host handles it");
+  // The card half: it shows what /state reports and writes through the same pref the command sets, or the
+  // panel and the chat would drift into two sources of truth.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(clientSource, /key: "office", className: "dswxCard"/, "the card has an Office section");
+  assert.match(clientSource, /snapshot\?\.office\?\.canRead/, "it shows whether reading works");
+  assert.match(clientSource, /snapshot\?\.office\?\.canConvert/, "and whether conversion works");
+  assert.match(clientSource, /async function setOfficeDir\(/, "it can set the directory");
+  assert.match(clientSource, /api\(`\/prefs\?officeDir=\$\{encodeURIComponent/, "through the same pref the command writes");
+  assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

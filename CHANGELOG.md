@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.35.0
+
+- **The Web UI card has an Office section.** It shows whether the two programs were found (Python for docx/xlsx/pptx,
+  LibreOffice Kit for PDF and images), the exact paths, and the save directory with an input to change it and a button
+  to go back to the default. The card and `/office dir` write the same preference, so the panel and a chat cannot
+  disagree about where files go.
+- The directory field starts following `/state` and stops as soon as it is edited, so it never shows a stale path
+  while claiming to be the current one.
+- Guard: the card must show both capability flags and must write through `/prefs?officeDir=`, next to the assertion
+  that the command does the same.
+- 30 suites / 520 cases.
+
 ## 0.34.1
 
 - **Fixed the office test on Linux, which was green here and red on CI.** The new `officeDir` case wrote its paths as

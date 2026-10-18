@@ -157,6 +157,17 @@ window.__ModuleLoader__.load({
           tasks: "Scheduled tasks",
           tasksUnit: "",
           tasksEmpty: "No scheduled tasks yet. Say \u201cevery day at 8:00 remind me\u201d in a chat and one is created.",
+          office: "Office documents",
+          officeRead: "read/write",
+          officeConvert: "PDF",
+          officeDir: "Save to",
+          officeDirHint: "absolute folder; empty = the bridge's own directory",
+          officeDirSet: "using the folder above",
+          officeDirDefault: "default: the bridge's own directory",
+          officeHint: "relative paths from the four office tools land here",
+          missing: "not found",
+          save: "Save",
+          useDefault: "Default",
           taskCommand: "Let command tasks run local commands",
           taskAdd: "Add",
           taskText: "text / prompt / command",
@@ -284,6 +295,17 @@ window.__ModuleLoader__.load({
           tasks: "定时任务",
           tasksUnit: "",
           tasksEmpty: "还没有定时任务。在聊天里说「每天 8 点提醒我喝水」就会建一个。",
+          office: "办公文档",
+          officeRead: "读写",
+          officeConvert: "转 PDF",
+          officeDir: "保存到",
+          officeDirHint: "绝对路径；留空 = 桥接进程自己的目录",
+          officeDirSet: "使用上面的目录",
+          officeDirDefault: "默认：桥接进程自己的目录",
+          officeHint: "四个 office 工具的相对路径都落在这里",
+          missing: "未找到",
+          save: "保存",
+          useDefault: "用默认",
           taskCommand: "允许 command 任务执行本机命令",
           taskAdd: "添加",
           taskText: "内容 / 提示词 / 命令",
@@ -396,6 +418,8 @@ window.__ModuleLoader__.load({
         const [browserDraft, setBrowserDraft] = react.useState({});
         // The tasks form: one schedule line, one action and one payload. Creation from a chat stays the
         // normal path; this is for "I am already looking at the list".
+        // undefined = "not edited yet", so the field follows /state until somebody types in it.
+        const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
         const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
         const [taskNotice, setTaskNotice] = react.useState(undefined);
         // Which step each "run again" button will take: a day, a week or a month. Kept per row so
@@ -697,6 +721,20 @@ window.__ModuleLoader__.load({
          * All of it goes through `/tasks`, which is the same three operations the `/task` command exposes;
          * creation stays in the chat, because a schedule is a sentence ("每天 8 点"), not a form.
          */
+        /** Save the office directory. An empty value means "back to the bridge's own directory". */
+        async function setOfficeDir(value) {
+          setBusy(true);
+          try {
+            await api(`/prefs?officeDir=${encodeURIComponent(String(value ?? ""))}`);
+            setOfficeDirInput(undefined);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         async function taskAction(params) {
           setBusy(true);
           try {
@@ -837,6 +875,53 @@ window.__ModuleLoader__.load({
           ])),
 
           // Scheduled tasks. Creation stays in the chat (a schedule is a sentence, not a form); this is the
+          // Office: whether the two programs are there, and where relative paths land. The card is the
+          // management half of `/office`; the tools themselves are used from a chat.
+          h("div", { key: "office", className: "dswxCard" }, [
+            h("div", { key: "head", className: "dswxRow" }, [
+              h("strong", { key: "t" }, t("office", "Office documents")),
+              h("span", { key: "m", className: "dswxMeta" },
+                `${t("officeRead", "read/write")} ${snapshot?.office?.canRead ? "✅" : "❌"}` +
+                ` · ${t("officeConvert", "PDF")} ${snapshot?.office?.canConvert ? "✅" : "❌"}`),
+            ]),
+            h("div", { key: "py", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, "Python"),
+              h("span", { key: "v", className: "dswxMeta" }, snapshot?.office?.python ?? t("missing", "not found")),
+            ]),
+            h("div", { key: "kit", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, "LibreOffice"),
+              h("span", { key: "v", className: "dswxMeta" }, snapshot?.office?.kit ?? t("missing", "not found")),
+            ]),
+            h("div", { key: "dir", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, t("officeDir", "Save to")),
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("officeDirHint", "absolute folder; empty = the bridge's own directory"),
+                value: officeDirInput ?? snapshot?.office?.dir ?? "",
+                disabled: busy,
+                onChange: (event) => setOfficeDirInput(event.target.value),
+              }),
+              h("button", {
+                key: "s",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: () => setOfficeDir(officeDirInput ?? snapshot?.office?.dir ?? ""),
+              }, t("save", "Save")),
+              h("button", {
+                key: "d",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: () => setOfficeDir(""),
+              }, t("useDefault", "Default")),
+            ]),
+            h("div", { key: "note", className: "dswxMeta" },
+              (snapshot?.office?.dirConfigured ? `✔ ${t("officeDirSet", "using the folder above")}` : `(${t("officeDirDefault", "default: the bridge's own directory")})`) +
+              ` · ${t("officeHint", "relative paths from the four office tools land here")}`),
+          ]),
+
           // list, the pause/resume/delete buttons and the one switch that lets a task run a local command.
           h("div", { key: "tasks", className: "dswxCard" }, [
             h("div", { key: "head", className: "dswxRow" }, [
