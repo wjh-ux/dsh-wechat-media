@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.42.1
+
+- **Fixed: `/doctor` lost where the GUI port came from.** On the unchanged-port path the recording returned early
+  without a source, so the report showed a bare URL with `source: null`. It now says `来自请求头` /
+  `来自 DSH_WEB_URL` / `来自记录文件` every time.
+- **Corrected a claim from 0.42.0.** `DSH_WEB_URL` is set for the shells DSH spawns, **not** for the plugin's own
+  process - measured, not assumed: `source` came back `request` while the variable was set in a tool shell. The request
+  header is the practical primary source, the environment helps in CLI runs, and `gui-port.json` is what a third party
+  reads.
+- 30 suites / 535 cases.
+
 ## 0.42.0
 
 - **The GUI port is reported, not guessed.** The plugin now reads `DSH_WEB_URL` (the host prints it before any request),

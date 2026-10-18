@@ -3008,7 +3008,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
    * Every route can see it, so any request is enough - and the first request after a restart is the one that records
    * the new port. Nothing is done when it has not changed (see `saveGuiPort`).
    */
-  /** The port the host advertises in `DSH_WEB_URL` - authoritative, and available before any request. */
+  /**
+   * The port the host advertises in `DSH_WEB_URL`.
+   *
+   * That variable is set for the shells DSH spawns, **not** for the plugin's own process - measured, not assumed:
+   * `/state.gui.source` came back `request` while `$env:DSH_WEB_URL` was set in a tool shell. So it is a bonus for CLI
+   * runs; the request header is the practical primary source and `gui-port.json` is what a third party reads.
+   */
   function guiEnvPort() {
     const raw = String(process.env.DSH_WEB_URL ?? "").trim();
     if (!raw) return undefined;
@@ -3040,7 +3046,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       if (!Number.isInteger(port) || port <= 0) return;
       const saved = await state.loadGuiPort();
       if (saved.port === port) {
-        guiPortCache = saved; // the common case: nothing to write, but /state still needs the value
+        // Nothing to write, but /state and /doctor still need to know where the answer came from.
+        guiPortCache = { ...saved, source: "request" };
         return;
       }
       guiPortCache = { ...(await state.saveGuiPort(port, { host, url: `http://${host}` })), source: "request" };
@@ -3079,7 +3086,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           source: saved.source ?? null,
           pinned: Boolean(guiEnvPort()) ? "DSH_WEB_URL" : null,
           detail: saved.port
-            ? `${saved.url}（端口 ${saved.port}${saved.previousPort && saved.previousPort !== saved.port ? `，上次 ${saved.previousPort}` : ""}${saved.source === "env" ? "，来自 DSH_WEB_URL" : ""}）`
+            ? `${saved.url}（端口 ${saved.port}${saved.previousPort && saved.previousPort !== saved.port ? `，上次 ${saved.previousPort}` : ""}，来自 ${
+              saved.source === "env" ? "DSH_WEB_URL" : saved.source === "request" ? "请求头" : "记录文件"
+            }）`
             : "还没记录（刷新一次页面即可）",
         };
       })(),
