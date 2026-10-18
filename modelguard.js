@@ -56,6 +56,29 @@ export function hasModelBlock(text) {
     || new RegExp(`^-\\s*id:\\s*["']${MODEL_BLOCK_ID}["']\\s*$`, "m").test(String(text ?? ""));
 }
 
+/**
+ * Read the selection out of a patch that already declares one.
+ *
+ * This is evidence, not a guess: another profile on *this* machine says "provider X, model Y" and DSH has been starting
+ * with it. That is a far better basis for repairing a second profile than a hard-coded provider name would be, and it
+ * needs no session to have run first.
+ */
+export function parseModelBlock(text) {
+  const source = String(text ?? "");
+  if (!hasModelBlock(source)) return null;
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => new RegExp(`^-\\s*id:\\s*["']?${MODEL_BLOCK_ID}["']?\\s*$`).test(line));
+  if (start === -1) return null;
+  const found = {};
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^-\s/.test(line)) break; // next top-level entry
+    const match = /^\s+(provider|model|reasoningEffort):\s*["']?([^"'#]+?)["']?\s*(?:#.*)?$/.exec(line);
+    if (match) found[match[1]] = match[2].trim();
+  }
+  return selectionOf(found);
+}
+
 /** The block itself, indented the way a top-level loader entry is. */
 export function modelBlock({ provider, model, reasoningEffort } = {}) {
   const selection = selectionOf({ provider, model, reasoningEffort });

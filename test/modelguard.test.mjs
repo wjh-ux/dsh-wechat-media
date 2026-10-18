@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { hasModelBlock, insertModelBlock, isSelection, modelBlock, pickSelection, selectionOf } from "../modelguard.js";
+import { hasModelBlock, insertModelBlock, isSelection, modelBlock, parseModelBlock, pickSelection, selectionOf } from "../modelguard.js";
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +79,31 @@ await test("a byte-order mark is dropped, because PowerShell puts one there and 
   assert.equal(out.startsWith("\uFEFF"), false, "the mark is gone");
   assert.match(out, /^# header$/m, "the comment survived");
   assert.ok(hasModelBlock(withBom) === false, "and a file that only has the other entries is still detected as missing it");
+});
+
+await test("a selection declared by another profile can be read back", () => {
+  const file = [
+    "# header",
+    "- id: ui-settings-account",
+    "  name: x",
+    "- id: agent-default-model",
+    '  name: "@deepseek-ai/dsh-agent-default-model"',
+    "  config:",
+    "    # a comment that must not be mistaken for a value",
+    "    provider: deepseek-account",
+    "    model: deepseek-flash",
+    "    reasoningEffort: high",
+    "- id: ui-chat",
+    "  name: y",
+  ].join("\n");
+  assert.deepEqual(parseModelBlock(file), { provider: "deepseek-account", model: "deepseek-flash", reasoningEffort: "high" });
+  // It stops at the next entry, so a `provider:` belonging to another block is not stolen.
+  const neighbour = "- id: agent-default-model\n  config:\n    provider: a\n    model: b\n- id: other\n  config:\n    provider: WRONG\n    model: WRONG\n";
+  assert.deepEqual(parseModelBlock(neighbour), { provider: "a", model: "b" });
+  // Values may be quoted, and a trailing comment is not part of the value.
+  assert.deepEqual(parseModelBlock('- id: agent-default-model\n  config:\n    provider: "p"\n    model: m \u0023 note\n'), { provider: "p", model: "m" });
+  assert.equal(parseModelBlock("- id: ui-chat\n  config:\n    provider: a\n    model: b\n"), null, "no block, no selection");
+  assert.equal(parseModelBlock("- id: agent-default-model\n  config:\n    provider: a\n"), null, "a half selection is not a selection");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

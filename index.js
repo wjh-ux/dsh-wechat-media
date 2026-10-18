@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
-import { hasModelBlock, insertModelBlock, pickSelection } from "./modelguard.js";
+import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -1327,12 +1327,7 @@ export function apply(ctx, config = {}) {
    * selection above exists. This is for the *next* start, and for the main chat, which cannot use our fallback.
    */
   async function repairProfileModel() {
-    const selection = await rememberedModelSelection();
     const profiles = join(state.root, "..", "profiles");
-    let seen = 0;
-    let repaired = 0;
-    let already = 0;
-    let failed = "";
     let entries = [];
     try {
       entries = await readdir(profiles, { withFileTypes: true });
@@ -1340,46 +1335,71 @@ export function apply(ctx, config = {}) {
       modelRepair = { at: new Date().toISOString(), ok: false, detail: `读不到 profile 目录：${String(error?.message ?? error)}` };
       return modelRepair;
     }
+
+    // Read every profile that has a patch layer, and note which ones lost the block.
+    const files = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const file = join(profiles, entry.name, "cordis.patch.yml");
-      let text;
       try {
-        text = await readFile(file, "utf8");
+        const text = await readFile(file, "utf8");
+        files.push({ name: entry.name, file, text, has: hasModelBlock(text) });
       } catch {
-        continue; // a profile without a patch layer is not our business
-      }
-      seen += 1;
-      if (hasModelBlock(text)) {
-        already += 1;
-        continue;
-      }
-      if (!selection) {
-        failed = failed || "还不知道哪个 provider/model 可用，暂时不写";
-        continue;
-      }
-      try {
-        await writeFile(`${file}.before-model-repair-${Date.now()}.bak`, text, "utf8");
-        await writeFile(file, insertModelBlock(text, selection), "utf8");
-        repaired += 1;
-        ctx.logger?.info?.("[dsh-wechat-media] restored agent-default-model in %s", file);
-      } catch (error) {
-        failed = failed || `写入失败：${String(error?.message ?? error)}`;
+        // A profile without a patch layer is not our business.
       }
     }
+    const fine = files.filter((item) => item.has).map((item) => item.name);
+    const missing = files.filter((item) => !item.has);
+
+    // What to write. A selection that opened a session is proven; one declared by another profile on this machine is
+    // evidence, which is far better than a hard-coded provider name and needs no session to have run yet.
+    let selection = await rememberedModelSelection();
+    let source = selection ? "上次成功的" : "";
+    if (!selection) {
+      for (const item of files) {
+        const declared = parseModelBlock(item.text);
+        if (declared) {
+          selection = declared;
+          source = `沿用 ${item.name} 已声明的`;
+          break;
+        }
+      }
+    }
+
+    let repaired = 0;
+    const repairedNames = [];
+    let failed = "";
+    if (selection) {
+      for (const item of missing) {
+        try {
+          await writeFile(`${item.file}.before-model-repair-${Date.now()}.bak`, item.text, "utf8");
+          await writeFile(item.file, insertModelBlock(item.text, selection), "utf8");
+          repaired += 1;
+          repairedNames.push(item.name);
+          ctx.logger?.info?.("[dsh-wechat-media] restored agent-default-model in %s", item.file);
+        } catch (error) {
+          failed = failed || `写入失败（${item.name}）：${String(error?.message ?? error)}`;
+        }
+      }
+    }
+
+    const parts = [];
+    if (fine.length) parts.push(`${fine.join("、")} 完好`);
+    if (repaired) {
+      parts.push(`已补回 ${repairedNames.join("、")}（${source} ${selection.provider}/${selection.model}，下次重启生效）`);
+    }
+    if (missing.length && !repaired) {
+      const names = missing.map((item) => item.name).join("、");
+      parts.push(`${names} 缺 agent-default-model，且还没有可用的 provider/model 可写回（先在能用的 profile 配一次，或随便聊一句让我记住）`);
+    }
+    if (failed) parts.push(failed);
     modelRepair = {
       at: new Date().toISOString(),
-      ok: !failed,
-      seen,
-      repaired,
-      already,
+      // Still missing something means the guard has not finished its job - that is what the row reports.
+      ok: missing.length === repaired,
+      profiles: files.map((item) => ({ name: item.name, hasBlock: item.has })),
       ...(selection ? { provider: selection.provider, model: selection.model } : {}),
-      detail: failed
-        || (repaired
-          ? `已补回 ${repaired} 个 profile（下次重启生效）`
-          : already
-            ? "完好"
-            : "没有找到 profile 配置"),
+      detail: parts.join(" · ") || "没有找到 profile 配置",
     };
     return modelRepair;
   }

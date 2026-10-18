@@ -636,6 +636,10 @@ await test("a deleted agent-default-model cannot silence the chats", () => {
   assert.match(host, /picked\.source === "remembered"/, "and falls back to what last worked");
   assert.match(guard, /export function pickSelection/, "the choice is one tested function");
   assert.match(host, /repairProfileModel\(\)/, "the patch file is repaired");
+  // Two profiles exist on this machine (`desktop`, `web`) and only one had the block. A repair that cannot name
+  // which profile it means is the same uselessness as a stale-browser message without a difference.
+  assert.match(host, /沿用 \$\{item\.name\} 已声明的/, "a missing block borrows a selection another profile declares");
+  assert.match(host, /missing\.map\(\(item\) => item\.name\)/, "and the report names the profiles");
   assert.match(guard, /export function insertModelBlock/, "by inserting the block, not rewriting the file");
   assert.match(host, /before-model-repair-/, "with a backup first");
   assert.match(host, /model: \{/, "and /doctor reports it");

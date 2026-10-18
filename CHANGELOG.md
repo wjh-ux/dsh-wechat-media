@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.46.1
+
+- **Fixed: the repair gave up where it could have acted, and did not say which profile it meant.** This machine has two
+  profiles - `desktop` (with the block) and `web` (without) - so `/doctor` reported
+  `还不知道哪个 provider/model 可用，暂时不写` and named neither. A missing block now **borrows the selection another
+  profile already declares** (evidence from this machine, not a hard-coded provider name), and the row names every
+  profile: `desktop 完好 · 已补回 web（沿用 desktop 已声明的 deepseek-account/deepseek-flash，下次重启生效）`.
+- `parseModelBlock` reads a declared selection back out of a patch file: it stops at the next top-level entry, so a
+  `provider:` belonging to a neighbouring block is never stolen, and a trailing comment is not part of the value.
+- 31 suites / 548 cases.
+
 ## 0.46.0
 
 - **A deleted `agent-default-model` block can no longer silence the chats.** It disappeared twice (2026-10-17, and again
