@@ -5121,12 +5121,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         {},
         async () => {
           if (!browserLive) return "当前没有浏览器会话（无需关闭）";
-          const { session, pid, started, port } = browserLive;
+          const { session, started, port } = browserLive;
+          const mod = await import("./browser.js");
           try { session.close(); } catch { /* already gone */ }
           browserLive = null;
           if (!started) return `已断开与端口 ${port} 上浏览器的连接（那是你自己开的，我没有关它 ✓）`;
-          try { process.kill(pid); } catch { /* already gone */ }
-          return `已关闭本次启动的浏览器（pid ${pid}）✓`;
+          // By protocol, not by pid: Chrome hands the profile to another process, so the pid we spawned is not
+          // reliably the one holding the window - killing it left the browser open and reported success.
+          try {
+            await mod.browserCloseBrowser({ port });
+            return `已关闭本次启动的浏览器（端口 ${port}，经 Browser.close）✓`;
+          } catch (error) {
+            return `断开连接了，但关闭浏览器失败：${String(error?.message ?? error)}（端口 ${port}）`;
+          }
         },
       );
 

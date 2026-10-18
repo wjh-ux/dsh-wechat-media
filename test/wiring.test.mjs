@@ -587,6 +587,19 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
+await test("the browser is closed by protocol, not by a pid that may already be dead", () => {
+  const browserSource = readFileSync(join(root, "browser.js"), "utf8");
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(browserSource, /export async function browserCloseBrowser\(/, "the helper exists");
+  assert.match(browserSource, /method: "Browser\.close"|"Browser\.close"/, "and asks the browser to close");
+  assert.match(browserSource, /still answering/, "a browser that ignored it is an error");
+  assert.match(host, /await mod\.browserCloseBrowser\(\{ port \}\)/, "the tool uses it");
+  assert.doesNotMatch(host, /process\.kill\(pid\)/, "and no longer kills a pid instead");
+  // The client's close path keeps working through the tool, unchanged.
+  assert.match(host, /browserTool\(\s*"browser_close"/, "the tool still exists");
+  assert.ok(clientSource.length > 0);
+});
+
 await test("the ERP browser mode is reachable from the card, the command and /state", () => {
   const clientSource = readFileSync(join(root, "client.js"), "utf8");
   const browserSource = readFileSync(join(root, "browser.js"), "utf8");

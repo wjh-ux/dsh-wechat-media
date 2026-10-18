@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.39.2
+
+- **Fixed: rowser_close reported a close it did not perform.** It killed the pid spawn returned, but Chrome hands
+  the profile to a second process and the launcher can exit - so the pid was already dead, the window stayed open, and
+  the tool answered success. It now sends Browser.close over the browser-level CDP socket and then checks that the
+  port stopped answering; if it still answers, the tool says the close failed.
+- Tested without a browser: a fake /json/version and a fake socket assert the command is sent, and a browser that
+  ignores it is an error rather than a success message.
+- 30 suites / 526 cases.
+
 ## 0.39.1
 
 - **Fixed: the mode select saved nothing.** `browserMode` was handled by `browserPrefsPatch`, but `/prefs` builds the

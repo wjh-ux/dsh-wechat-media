@@ -8,6 +8,7 @@ const {
   browserLaunch, createCdpSession, browserOpen, browserEvaluate, browserText, browserElementCentre,
   browserClick, browserType, browserScreenshot,
   BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
+  browserCloseBrowser,
 } = await import("../browser.js");
 
 const passed = [];
@@ -286,6 +287,49 @@ await test("the three browser modes differ where it matters", () => {
   assert.equal(browserModeSettings({ mode: "erp", profileDir: "C:\\mine", dshHome: home }).profileDir, "C:\\mine");
   assert.deepEqual([...BROWSER_MODE_NAMES], ["headless", "headed", "erp"]);
   assert.deepEqual(Object.keys(BROWSER_MODES), [...BROWSER_MODE_NAMES]);
+});
+
+await test("closing the browser goes through CDP, because the pid is not a reliable handle", async () => {
+  // A fake browser that answers /json/version once, accepts one connection, records the commands, and then
+  // stops answering - which is what a browser that really closed looks like.
+  const sent = [];
+  let answers = 2;
+  const fetchImpl = async (url) => {
+    if (!String(url).includes("/json/version")) throw new Error("unexpected url " + url);
+    if (answers <= 0) throw new Error("port closed");
+    answers -= 1;
+    return {
+      ok: true,
+      json: async () => ({ Browser: "Chrome/120", webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+    };
+  };
+  const webSocketImpl = function FakeSocket(url) {
+    this.url = url;
+    this.ready = Promise.resolve();
+    this.send = (payload) => { sent.push(JSON.parse(payload)); return Promise.resolve({}); };
+    // `createCdpSession` waits for the "open" event; a no-op listener hangs the whole test.
+    this.addEventListener = (type, handler) => { if (type === "open") setTimeout(() => handler({}), 0); };
+    this.removeEventListener = () => {};
+    this.close = () => {};
+    this.on = () => {};
+    this.onmessage = null;
+    this.onerror = null;
+  };
+  const answer = await browserCloseBrowser({ port: 9222, fetchImpl, webSocketImpl, timeoutMs: 1 });
+  assert.equal(answer.closed, true);
+  assert.equal(sent[0].method, "Browser.close", "the browser is asked to close, not killed by pid");
+  assert.equal(sent[0].id, 1);
+
+  // A browser that ignores the request must not be reported as closed.
+  const stubborn = async () => ({
+    ok: true,
+    json: async () => ({ Browser: "Chrome/120", webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+  });
+  await assert.rejects(
+    () => browserCloseBrowser({ port: 9222, fetchImpl: stubborn, webSocketImpl, timeoutMs: 1 }),
+    /still answering/,
+    "a close that did not happen is an error, not a success message",
+  );
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

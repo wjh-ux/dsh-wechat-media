@@ -96,6 +96,45 @@ export async function browserVersion({ port = 9222, fetchImpl = fetch, timeoutMs
   return response.json();
 }
 
+/**
+ * Close the browser itself, over the browser-level CDP endpoint.
+ *
+ * `process.kill(pid)` was wrong, and the way it was wrong is worth keeping: Chrome starts, hands the profile to a
+ * second process, and the one we spawned can exit while the real browser keeps the window - so the pid we recorded
+ * was already gone and the window stayed open, while the tool reported success. `Browser.close` asks the browser to
+ * shut down, and it does not care which pid claims to be in charge.
+ *
+ * Returns `{ closed: true }`, or throws with what answered instead - never reports a close it did not perform.
+ */
+export async function browserCloseBrowser({ port = 9222, fetchImpl = fetch, webSocketImpl = globalThis.WebSocket, timeoutMs = 8000 } = {}) {
+  const version = await browserVersion({ port, fetchImpl, timeoutMs });
+  const url = String(version?.webSocketDebuggerUrl ?? "").trim();
+  if (!url) throw new Error(`the browser on port ${port} has no browser-level webSocketDebuggerUrl`);
+  const session = createCdpSession(url, { webSocketImpl, timeoutMs });
+  try {
+    await session.ready;
+    // The browser closes before it can answer, so do not wait for the reply: sending the command is the request.
+    session.send("Browser.close").catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  } finally {
+    try { session.close(); } catch { /* the socket usually dies first */ }
+  }
+  // A browser that is really closing stops answering the port; one that ignored us keeps answering.
+  let stillThere = false;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await browserVersion({ port, fetchImpl, timeoutMs: 800 });
+      stillThere = true;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    } catch {
+      stillThere = false;
+      break;
+    }
+  }
+  if (stillThere) throw new Error(`asked the browser on port ${port} to close, but it is still answering`);
+  return { closed: true };
+}
+
 /** The open targets (tabs, extensions, workers). */
 export async function browserTargets({ port = 9222, fetchImpl = fetch, timeoutMs = 4000 } = {}) {
   const response = await fetchImpl(`${cdpBase(port)}/json/list`, signalOption(timeoutMs));
