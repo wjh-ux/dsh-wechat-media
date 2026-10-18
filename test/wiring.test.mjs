@@ -624,6 +624,23 @@ await test("the proxy host list is one list, reachable from the file, the route,
   assert.match(clientSource, /proxyHostsDraft/, "through a draft that follows /state until edited");
 });
 
+await test("a deleted agent-default-model cannot silence the chats", () => {
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  const guard = readFileSync(join(root, "modelguard.js"), "utf8");
+  // Twice the profile patch lost this block, and each time every reply became
+  // `no API key for provider route "deepseek-official"`. Two independent defences, because the repair cannot help the
+  // run it happens in: the loader has already read the file.
+  assert.match(stateSource, /async loadModelSelection\(\)/, "the last working selection is stored");
+  assert.match(stateSource, /model-selection\.json/, "in its own file");
+  assert.match(host, /pickSelection\(ctx\.get\("agentDefaultModel"\)/, "a session prefers the host's default");
+  assert.match(host, /picked\.source === "remembered"/, "and falls back to what last worked");
+  assert.match(guard, /export function pickSelection/, "the choice is one tested function");
+  assert.match(host, /repairProfileModel\(\)/, "the patch file is repaired");
+  assert.match(guard, /export function insertModelBlock/, "by inserting the block, not rewriting the file");
+  assert.match(host, /before-model-repair-/, "with a backup first");
+  assert.match(host, /model: \{/, "and /doctor reports it");
+});
+
 await test("the GUI port is recorded, reported and shown", () => {
   // The host picks the port, so the plugin cannot fix it - but it can stop making people grep a runtime log.
   const stateSource = readFileSync(join(root, "state.js"), "utf8");

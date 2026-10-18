@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
+import { hasModelBlock, insertModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -1295,6 +1296,94 @@ export function apply(ctx, config = {}) {
     return Number.isFinite(generation) && generation > 0 ? Math.floor(generation) : 0;
   }
 
+  /** Cached copy of `model-selection.json`, which is written once a turn proves the provider works. */
+  let memorizedModel = null;
+  let memorizedLoaded = false;
+  /** When the last session fell back to the remembered selection, for `/state` and `/doctor`. */
+  let modelFallbackAt = null;
+  /** The last repair attempt on the profile patch, reported by `/doctor`. */
+  let modelRepair = null;
+
+  async function rememberedModelSelection() {
+    if (!memorizedLoaded) {
+      memorizedLoaded = true;
+      memorizedModel = await state.loadModelSelection().catch(() => null);
+    }
+    return memorizedModel;
+  }
+
+  async function rememberModelSelection(selection) {
+    const before = JSON.stringify(memorizedModel ?? null);
+    if (before === JSON.stringify(selection ?? null)) return;
+    memorizedModel = selection;
+    memorizedLoaded = true;
+    await state.saveModelSelection(selection);
+  }
+
+  /**
+   * Put `agent-default-model` back into every profile patch that lost it.
+   *
+   * It cannot help the run this happens in - the loader has already read the file - which is why the remembered
+   * selection above exists. This is for the *next* start, and for the main chat, which cannot use our fallback.
+   */
+  async function repairProfileModel() {
+    const selection = await rememberedModelSelection();
+    const profiles = join(state.root, "..", "profiles");
+    let seen = 0;
+    let repaired = 0;
+    let already = 0;
+    let failed = "";
+    let entries = [];
+    try {
+      entries = await readdir(profiles, { withFileTypes: true });
+    } catch (error) {
+      modelRepair = { at: new Date().toISOString(), ok: false, detail: `读不到 profile 目录：${String(error?.message ?? error)}` };
+      return modelRepair;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = join(profiles, entry.name, "cordis.patch.yml");
+      let text;
+      try {
+        text = await readFile(file, "utf8");
+      } catch {
+        continue; // a profile without a patch layer is not our business
+      }
+      seen += 1;
+      if (hasModelBlock(text)) {
+        already += 1;
+        continue;
+      }
+      if (!selection) {
+        failed = failed || "还不知道哪个 provider/model 可用，暂时不写";
+        continue;
+      }
+      try {
+        await writeFile(`${file}.before-model-repair-${Date.now()}.bak`, text, "utf8");
+        await writeFile(file, insertModelBlock(text, selection), "utf8");
+        repaired += 1;
+        ctx.logger?.info?.("[dsh-wechat-media] restored agent-default-model in %s", file);
+      } catch (error) {
+        failed = failed || `写入失败：${String(error?.message ?? error)}`;
+      }
+    }
+    modelRepair = {
+      at: new Date().toISOString(),
+      ok: !failed,
+      seen,
+      repaired,
+      already,
+      ...(selection ? { provider: selection.provider, model: selection.model } : {}),
+      detail: failed
+        || (repaired
+          ? `已补回 ${repaired} 个 profile（下次重启生效）`
+          : already
+            ? "完好"
+            : "没有找到 profile 配置"),
+    };
+    return modelRepair;
+  }
+
   /** A live agent handle per session id, so `/stop` and `/new` can act on it. */
   const conversationHandles = new Map();
 
@@ -1310,8 +1399,22 @@ export function apply(ctx, config = {}) {
 
     const presets = ctx.get("agentPresets");
     const mountId = config.agentPreset || presets?.defaultId;
-    const selection = ctx.get("agentDefaultModel")?.currentSelection?.();
-    const agentOptions = selection?.provider && selection?.model
+    // The host's default model, or - when that configuration has been deleted - whatever last opened a session.
+    // Without the second half a deleted `agent-default-model` block turned every chat into
+    // `no API key for provider route "deepseek-official"`, because the fallback route wants DEEPSEEK_API_KEY.
+    const picked = pickSelection(ctx.get("agentDefaultModel")?.currentSelection?.(), await rememberedModelSelection());
+    const selection = picked.selection;
+    if (picked.source === "current" && selection) {
+      await rememberModelSelection(selection).catch(() => {});
+    } else if (picked.source === "remembered") {
+      modelFallbackAt = new Date().toISOString();
+      ctx.logger?.warn?.(
+        "[dsh-wechat-media] the host has no default model; using the remembered %s/%s",
+        selection.provider,
+        selection.model,
+      );
+    }
+    const agentOptions = selection
       ? { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) }
       : undefined;
     const workspaceRoot = await resolvedInbox();
@@ -3225,6 +3328,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       tasks: {
         ok: true,
         detail: `${tasksList.length} 条任务 · 历史 ${history.length} 条 · 失败 ${counters.tasksFailed ?? 0} · 跳过 ${counters.tasksSkipped ?? 0}`,
+      },
+      model: {
+        ok: modelRepair?.ok !== false,
+        detail: modelRepair?.detail ?? "还没检查",
+        ...(modelRepair?.provider ? { provider: modelRepair.provider, model: modelRepair.model } : {}),
+        ...(modelFallbackAt ? { fallbackAt: modelFallbackAt } : {}),
       },
       secrets: {
         ok: secrets.atRest === "dpapi" && secrets.exposed.length === 0,
@@ -5939,6 +6048,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // The recorded GUI port survives a restart so `/state` can answer before any request has been seen - the
   // field then says "last known", and the next request corrects it.
   proxyHosts().then((list) => { proxyHostsCache = list; }).catch(() => {});
+  // Repair the profile patch early: it has to be in place before the next start reads it.
+  void repairProfileModel().catch(() => {});
 
   (async () => {
     const advertised = guiEnvPort();

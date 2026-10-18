@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.46.0
+
+- **A deleted `agent-default-model` block can no longer silence the chats.** It disappeared twice (2026-10-17, and again
+  after the crash on 2026-10-18), and each time every reply failed with
+  `no API key for provider route "deepseek-official"` - the fallback route needs `DEEPSEEK_API_KEY`, while the account
+  provider needs only the stored login. Two independent defences:
+  - the plugin **remembers the provider/model that last opened a session** (`model-selection.json`) and uses it when the
+    host reports no default. This is the half that works *in* the affected run;
+  - at startup the profile patch is **repaired** - the block is inserted, or nothing happens if it is already there -
+    with a timestamped backup beside it. This is the half that fixes the next start, and the main chat, which cannot use
+    the plugin's fallback.
+- `/doctor` gains a `model` row: `完好`, `已补回 N 个 profile（下次重启生效）`, or why it could not write. It also reports
+  when a run has fallen back to the remembered selection.
+- The repair refuses to invent a provider: with nothing remembered yet it writes nothing and says so, rather than
+  guessing a name that may not exist on another machine.
+- 31 suites / 545 cases.
+
 ## 0.45.0
 
 - **One owner per plugin run.** Any browser still answering the port at the first browser action of a run belongs to the

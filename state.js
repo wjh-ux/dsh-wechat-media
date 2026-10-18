@@ -399,6 +399,40 @@ export class WechatState {
   }
 
   /**
+   * The provider/model that last opened a session successfully.
+   *
+   * Kept because the `agent-default-model` entry in the profile patch can disappear (it has twice), and when it does the
+   * default route needs an API key that this machine does not have. Remembering what worked is the only answer that
+   * survives the deletion of the configuration.
+   */
+  async loadModelSelection() {
+    return await readJson(join(this.root, "model-selection.json"), null);
+  }
+
+  async saveModelSelection(selection) {
+    await this.init();
+    await writeJson(join(this.root, "model-selection.json"), { ...selection, at: new Date().toISOString() });
+    return selection;
+  }
+
+  /**
+   * The provider/model that last opened a session successfully.
+   *
+   * Kept because the `agent-default-model` entry in the profile patch can disappear (it has twice), and when it does the
+   * default route needs an API key that this machine does not have. Remembering what worked is the only answer that
+   * survives the deletion of the configuration.
+   */
+  async loadModelSelection() {
+    return await readJson(join(this.root, "model-selection.json"), null);
+  }
+
+  async saveModelSelection(selection) {
+    await this.init();
+    await writeJson(join(this.root, "model-selection.json"), { ...selection, at: new Date().toISOString() });
+    return selection;
+  }
+
+  /**
    * Domains that should go through the proxy (PAC patterns). Kept in its own file because it is edited by hand as
    * often as through a route - a text file is the friendlier of the two.
    */
