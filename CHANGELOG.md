@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.44.0
+
+- **Fixed: the PAC never loaded, because Chrome will not read a `file://` PAC.** Measured twice: a PAC containing
+  nothing but `return 'DIRECT'` produced `ERR_CONNECTION_REFUSED` on every request when passed as `--proxy-pac-url=file:///…`,
+  and the identical script worked when served over `http://127.0.0.1`. So a configured host list broke all browsing
+  instead of routing two sites - `x.com` timed out while `example.com` (DIRECT) also failed the same way.
+- The plugin now runs a **loopback-only http server** that answers exactly `/proxy.pac` with the current script, keeps
+  the script in memory (it changes with the list), and hands Chrome `http://127.0.0.1:<port>/proxy.pac`.
+- The server is unref'd and closed on dispose; an empty host list still means "no PAC", i.e. the fixed proxy.
+- 30 suites / 540 cases.
+
 ## 0.43.4
 
 - **CRITICAL: a browser timeout could take the whole app down.** `browserOpen` created its `Page.loadEventFired` waiter

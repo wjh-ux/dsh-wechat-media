@@ -3067,20 +3067,56 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /**
-   * Write the PAC file for the current host list, and return its URL.
+   * The PAC script, served over **http://127.0.0.1**.
    *
-   * Rewritten on demand (not per request): the file is small, but a browser watching it must see one stable answer
-   * per configuration. An empty list means "no PAC" - the proxy then applies to everything, as it did before.
+   * A `file://` PAC does not work: measured on this machine, Chrome was handed a PAC that returned `DIRECT` and still
+   * refused every connection - the file was never loaded, and the fallback was not "no proxy" but "nothing works".
+   * Served over http, the identical script works in both headless and windowed mode. So the plugin runs a tiny server
+   * on loopback that answers exactly one path with the current script.
+   *
+   * It is also why the file is kept in memory rather than on disk: the script changes when the host list changes, and
+   * a browser may fetch it at any moment.
    */
+  let pacServer = null;
+  let pacPort = 0;
+  let pacScript = "// no host list configured\n";
+
+  async function ensurePacServer() {
+    if (pacServer) return pacPort;
+    const { createServer } = await import("node:http");
+    pacServer = createServer((req, res) => {
+      const path = String(req.url ?? "").split("?")[0];
+      if (path !== "/proxy.pac") {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/x-ns-proxy-autoconfig", "cache-control": "no-store" });
+      res.end(pacScript);
+    });
+    await new Promise((resolve, reject) => {
+      pacServer.once("error", reject);
+      pacServer.listen(0, "127.0.0.1", resolve);
+    });
+    pacServer.unref?.();
+    pacPort = pacServer.address().port;
+    ctx.effect(() => () => {
+      try { pacServer?.close(); } catch { /* already closed */ }
+    });
+    ctx.logger?.info?.("[dsh-wechat-media] PAC served on http://127.0.0.1:%s/proxy.pac", pacPort);
+    return pacPort;
+  }
+
+  /** Point the PAC server at the current host list and return the URL Chrome should use ("" = no PAC). */
   async function writePacFile(patterns, proxy) {
     const list = normalizeProxyPatterns(patterns);
     if (!list.length || !proxy) {
-      await writeFile(join(state.root, "proxy.pac"), "// no host list configured\n").catch(() => {});
+      pacScript = "// no host list configured\n";
       return "";
     }
-    const script = buildPacScript({ patterns: list, proxy });
-    await writeFile(join(state.root, "proxy.pac"), script, "utf8");
-    return `file:///${join(state.root, "proxy.pac").replace(/\\/g, "/")}`;
+    pacScript = buildPacScript({ patterns: list, proxy });
+    const port = await ensurePacServer();
+    return `http://127.0.0.1:${port}/proxy.pac`;
   }
 
   /** The host list, cached like the other saved blocks. */

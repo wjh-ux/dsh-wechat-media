@@ -609,6 +609,12 @@ await test("the proxy host list is one list, reachable from the file, the route,
   assert.match(stateSource, /proxy-hosts\.json/, "in its own file, which is what 'a file with the URLs' means");
   assert.match(browserSource, /export function buildPacScript\(/, "the PAC is generated");
   assert.match(browserSource, /--proxy-pac-url=/, "and handed to Chrome");
+  // A `file://` PAC is not loaded by Chrome: measured, the same DIRECT script failed every connection as a file
+  // and worked when served over http. The plugin therefore serves it from loopback.
+  assert.match(host, /createServer\(\(req, res\) =>/, "the PAC is served by a loopback http server");
+  assert.match(host, /listen\(0, "127\.0\.0\.1"/, "bound to loopback on an ephemeral port");
+  assert.match(host, /return `http:\/\/127\.0\.0\.1:\$\{port\}\/proxy\.pac`/, "and handed over as an http URL");
+  assert.doesNotMatch(host, /file:\/\/\/\$\{/, "never as a file:// URL");
   assert.match(host, /path: "\/dsh-wechat-media\/proxy-hosts"/, "a route manages it");
   assert.match(host, /action === "add"[\s\S]{0,400}action === "remove"[\s\S]{0,400}action === "set"/, "add/remove/set");
   assert.match(host, /if \(sub === "hosts" \|\| sub === "host"\)/, "a command manages it");
