@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.43.2
+
+- **Fixed: the stale-browser check could never run.** Chrome answers `Browser.getBrowserCommandLine` with
+  `-32000 Command line not returned because --enable-automation not set` - so the plugin could not read the running
+  instance's arguments, took the "cannot inspect, attach anyway" branch, and reused windows started with older
+  settings. A configured host list then had no effect while the tool reported `设置一致`. The launcher now passes
+  `--enable-automation`, which is what makes the check possible at all; the cost is Chrome's automation infobar.
+- The profile comparison is lenient (normalised path or final segment): Chrome reports the same directory with a
+  trailing separator or different casing depending on how it was started, and a strict comparison would have restarted
+  the browser on every open.
+- Verified live: a browser started with the flag reports 11 arguments including `--enable-automation`; without it the
+  CDP call fails.
+- 30 suites / 539 cases.
+
 ## 0.43.1
 
 - **Fixed: a browser that has no PAC was treated as "settings match" once a host list existed.** 0.43.0 compared the

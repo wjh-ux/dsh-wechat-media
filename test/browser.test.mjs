@@ -43,6 +43,15 @@ await test("the executable lookup reports absence instead of guessing", () => {
   assert.equal(cdpBase(""), "http://127.0.0.1:9222", "a blank port falls back rather than producing a broken url");
 });
 
+await test("the launch enables automation, without which Chrome refuses to report its own command line", () => {
+  // Measured: `Browser.getBrowserCommandLine` answers `-32000 Command line not returned because
+  // --enable-automation not set`. Without the flag the stale-browser check could never run, so it fell back to
+  // attaching to a window started with older settings - the bug that made a configured host list look broken.
+  // By URL: this case runs before `pluginDir` is initialised further down the file.
+  const src = readFileSync(new URL("../browser.js", import.meta.url), "utf8");
+  assert.match(src, /--enable-automation/, "the flag is passed to every launch");
+});
+
 await test("launching waits for the port and reports where the browser is", async () => {
   const spawned = [];
   const spawnImpl = (file, args, options) => { spawned.push({ file, args, options }); return { pid: 4242, unref() {} }; };

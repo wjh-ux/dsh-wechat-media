@@ -3177,6 +3177,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         detail: toolchain.python ? `Python ✅ · LibreOffice ${toolchain.kit ? "✅" : "❌"}` : "找不到 Python（设 officePython）",
       },
       browser: {
+        // The stale check needs the running browser's command line, which needs --enable-automation at launch.
+        staleCheck: true,
         ok: !browser.proxy || proxyProbe.listening,
         detail: `模式 ${browser.mode} · 代理范围 ${proxyHostsCache.length ? `仅 ${proxyHostsCache.length} 个域名（PAC）` : browser.proxy ? "全局" : "关闭"}${browser.proxy
           ? ` · 代理 ${browser.proxy} ${proxyProbe.listening

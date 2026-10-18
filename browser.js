@@ -255,13 +255,16 @@ export function browserArgsMatch(args, { headless = true, profileDir = "", proxy
   // A PAC and a fixed proxy are two ways to answer the same question, so they are compared as alternatives:
   // comparing the PAC against `--proxy-server` made every open look stale once a host list existed, which meant a
   // restart on every single open.
+  // Chrome may report the profile spelled differently (long path, trailing separator, different case), so the
+  // comparison is lenient: the full path after normalising, or the final segment, which is what distinguishes
+  // `browser-profile` from `browser-profile-erp`. A strict comparison would restart the browser on every open.
+  const profileMatches = !profileDir || !runningProfile || comparablePath(runningProfile) === comparablePath(profileDir)
+    || comparablePath(runningProfile.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) === comparablePath(String(profileDir).replace(/[\\/]+$/, "").split(/[\\/]/).pop());
   const proxyMatches = wantedPac
     ? comparablePath(runningPac) === comparablePath(wantedPac)
     : runningProxy === wantedProxy && !runningPac;
   return {
-    match: runningHeadless === Boolean(headless)
-      && (!profileDir || !runningProfile || comparablePath(runningProfile) === comparablePath(profileDir))
-      && proxyMatches,
+    match: runningHeadless === Boolean(headless) && profileMatches && proxyMatches,
     running: { headless: runningHeadless, profileDir: runningProfile, proxy: runningProxy, pacUrl: runningPac },
     wanted: { headless: Boolean(headless), profileDir, proxy: wantedProxy, pacUrl: wantedPac },
   };
@@ -404,6 +407,10 @@ export async function browserLaunch({
     `--user-data-dir=${profile}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Chrome refuses `Browser.getBrowserCommandLine` (-32000) unless it was started with this flag, which made the
+    // stale-browser check a silent no-op: the plugin "could not read" the args and fell back to attaching to a window
+    // started with older settings. The cost is an infobar; the alternative is a check that never runs.
+    "--enable-automation",
     `--window-size=${Number(width) || 1280},${Number(height) || 900}`,
     ...(headless ? ["--headless=new"] : []),
     // `--proxy-pac-url` wins when a host list is configured: then the *browser* decides per request, which is what
