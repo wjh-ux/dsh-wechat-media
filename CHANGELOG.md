@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.43.0
+
+- **A proxy host list: only the sites you name go through the proxy.** `proxy-hosts.json` (one pattern per line), edited
+  from the card, `/browser hosts add x.com` (also `remove` / `set` / `clear` / no argument to list), or the
+  `/dsh-wechat-media/proxy-hosts` route. The plugin writes a **PAC** file and launches Chrome with `--proxy-pac-url`, so
+  the **browser** decides per request: listed hosts through `127.0.0.1:7897`, everything else `DIRECT`.
+- Patterns are what people type: `https://x.com/home` becomes `x.com`, `*.google.com` is subdomains only, a bare host
+  covers itself **and** its subdomains (`api.x.com` matches `x.com`). An empty list keeps the old behaviour - the proxy
+  applies to everything.
+- The PAC uses `dnsDomainIs` only, never `dnsResolve`: a PAC that resolves names blocks page loads on a slow resolver.
+- `/state.browser` reports `proxyHosts` and `proxyMode` (`pac` / `global` / `off`), `/doctor` says the scope in words.
+- 30 suites / 538 cases.
+
 ## 0.42.1
 
 - **Fixed: `/doctor` lost where the GUI port came from.** On the unchanged-port path the recording returned early

@@ -601,6 +601,23 @@ await test("a partial block patch is merged, a complete one is written as-is", (
   assert.match(host, /await state\.savePrefs\(\{ tavily: result\.patch \}\);/, "so does tavily");
 });
 
+await test("the proxy host list is one list, reachable from the file, the route, the command and the card", () => {
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  const browserSource = readFileSync(join(root, "browser.js"), "utf8");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(stateSource, /async loadProxyHosts\(\)/, "the list is stored");
+  assert.match(stateSource, /proxy-hosts\.json/, "in its own file, which is what 'a file with the URLs' means");
+  assert.match(browserSource, /export function buildPacScript\(/, "the PAC is generated");
+  assert.match(browserSource, /--proxy-pac-url=/, "and handed to Chrome");
+  assert.match(host, /path: "\/dsh-wechat-media\/proxy-hosts"/, "a route manages it");
+  assert.match(host, /action === "add"[\s\S]{0,400}action === "remove"[\s\S]{0,400}action === "set"/, "add/remove/set");
+  assert.match(host, /if \(sub === "hosts" \|\| sub === "host"\)/, "a command manages it");
+  assert.match(host, /proxyHosts: proxyHostsCache/, "/state reports the list");
+  assert.match(host, /proxyMode: proxyHostsCache\.length \? "pac"/, "and the scope it implies");
+  assert.match(clientSource, /saveProxyHosts\(/, "the card can edit it");
+  assert.match(clientSource, /proxyHostsDraft/, "through a draft that follows /state until edited");
+});
+
 await test("the GUI port is recorded, reported and shown", () => {
   // The host picks the port, so the plugin cannot fix it - but it can stop making people grep a runtime log.
   const stateSource = readFileSync(join(root, "state.js"), "utf8");

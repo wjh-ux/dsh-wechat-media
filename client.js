@@ -456,6 +456,8 @@ window.__ModuleLoader__.load({
       const [tavilyNotice, setTavilyNotice] = react.useState(undefined);
       // The browser block does the same: channel/port/profile/headless are its own, not Feishu's.
         const [browserDraft, setBrowserDraft] = react.useState({});
+        // The PAC host list: undefined until edited, so the field follows /state the rest of the time.
+        const [proxyHostsDraft, setProxyHostsDraft] = react.useState(undefined);
         // The tasks form: one schedule line, one action and one payload. Creation from a chat stays the
         // normal path; this is for "I am already looking at the list".
         // undefined = "not edited yet", so the field follows /state until somebody types in it.
@@ -829,6 +831,20 @@ window.__ModuleLoader__.load({
           try {
             await api("/prefs?wizardDone=true");
             setWizardStep(0);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /** Save the list of domains that should go through the proxy. Empty means "all of them". */
+        async function saveProxyHosts(text) {
+          setBusy(true);
+          try {
+            await api(`/proxy-hosts?action=set&hosts=${encodeURIComponent(String(text ?? ""))}`);
+            setProxyHostsDraft(undefined);
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -1826,6 +1842,27 @@ window.__ModuleLoader__.load({
                   onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProxy: event.target.value })),
                 }),
               ]),
+              // Which sites use the proxy. A file, a command and this field are the same list.
+              h("div", { key: "hosts", className: "dswxRow" }, [
+                h("span", { key: "k", className: "dswxName" }, t("proxyHosts", "走代理的域名")),
+                h("input", {
+                  key: "i",
+                  className: "dswxInput",
+                  placeholder: t("proxyHostsHint", "x.com, *.google.com（留空 = 全部网址走代理）"),
+                  disabled: busy,
+                  value: proxyHostsDraft ?? (snapshot?.browser?.proxyHosts ?? []).join(", "),
+                  onChange: (event) => setProxyHostsDraft(event.target.value),
+                }),
+                h("button", {
+                  key: "s",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => saveProxyHosts(proxyHostsDraft ?? (snapshot?.browser?.proxyHosts ?? []).join(", ")),
+                }, t("save", "Save")),
+              ]),
+              h("span", { key: "pacmode", className: "dswxMeta" },
+                `${t("proxyScope", "范围")}: ${snapshot?.browser?.proxyMode === "pac" ? t("proxyScopePac", "仅列表内域名（PAC）") : snapshot?.browser?.proxyMode === "global" ? t("proxyScopeGlobal", "全部网址") : t("proxyScopeOff", "关闭")}`),
               h("span", { key: "modenow", className: "dswxMeta" },
                 `${t("browserModeNow", "当前")}: ${snapshot?.browser?.mode ?? "?"}${snapshot?.browser?.visible ? " · 👁 " + t("browserVisible", "可见") : " · " + t("browserInvisible", "无窗口")}`),
               h("button", {

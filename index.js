@@ -30,7 +30,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
-import { BROWSER_MODE_NAMES, browserModeSettings, parseProxyAddress, proxyListening } from "./browser.js";
+import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -1692,6 +1692,45 @@ export function apply(ctx, config = {}) {
         await reply(`浏览器模式：${now.mode}（${now.visible ? "窗口可见" : "无窗口"}，profile：${now.profileDir}）\n下次打开浏览器时生效。`);
         return true;
       }
+      if (sub === "hosts" || sub === "host") {
+        // "which sites go through the proxy" - a list a person can grow one domain at a time.
+        const rest = String(command.args ?? "").trim().replace(/^hosts?\s*/, "").trim();
+        const [action = "list", ...values] = rest.split(/\s+/).filter(Boolean);
+        let list = await proxyHosts();
+        if (["add", "remove", "set", "clear"].includes(action)) {
+          try {
+            if (action === "add") list = normalizeProxyPatterns([...list, ...values]);
+            else if (action === "remove") {
+              const gone = normalizeProxyPatterns(values);
+              list = list.filter((entry) => !gone.includes(entry));
+            } else if (action === "set") list = normalizeProxyPatterns(values);
+            else list = [];
+          } catch (error) {
+            await reply(String(error?.message ?? error));
+            return true;
+          }
+          await state.saveProxyHosts(list);
+          proxyHostsCache = list;
+          const pac = await writePacFile(list, browserConfig().proxy);
+          noteRoute("/command", { command: "browser", action: "hosts", op: action, count: list.length });
+          await reply([
+            `${action} 完成，现在 ${list.length} 个域名走代理${pac ? "（PAC 已重写）" : ""}。`,
+            list.length ? list.map((entry) => `  · ${entry}`).join("\n") : "  （空 = 代理应用到全部网址）",
+            "",
+            "下次打开浏览器生效；已开的窗口需要重开。",
+          ].join("\n"));
+          return true;
+        }
+        const current = browserConfig();
+        await reply([
+          `代理：${current.proxy || "未设置"}`,
+          `范围：${list.length ? `仅这些域名走代理（PAC）` : current.proxy ? "全部网址" : "关闭"}`,
+          ...(list.length ? list.map((entry) => `  · ${entry}`) : []),
+          "",
+          "增删：/browser hosts add x.com · remove x.com · set a.com b.com · clear",
+        ].join("\n"));
+        return true;
+      }
       if (sub === "proxy") {
         const wanted = String(command.args ?? "").trim().replace(/^proxy\s*/, "").trim();
         if (!wanted) {
@@ -3027,6 +3066,32 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     }
   }
 
+  /**
+   * Write the PAC file for the current host list, and return its URL.
+   *
+   * Rewritten on demand (not per request): the file is small, but a browser watching it must see one stable answer
+   * per configuration. An empty list means "no PAC" - the proxy then applies to everything, as it did before.
+   */
+  async function writePacFile(patterns, proxy) {
+    const list = normalizeProxyPatterns(patterns);
+    if (!list.length || !proxy) {
+      await writeFile(join(state.root, "proxy.pac"), "// no host list configured\n").catch(() => {});
+      return "";
+    }
+    const script = buildPacScript({ patterns: list, proxy });
+    await writeFile(join(state.root, "proxy.pac"), script, "utf8");
+    return `file:///${join(state.root, "proxy.pac").replace(/\\/g, "/")}`;
+  }
+
+  /** The host list, cached like the other saved blocks. */
+  async function proxyHosts() {
+    try {
+      return normalizeProxyPatterns(await state.loadProxyHosts());
+    } catch {
+      return [];
+    }
+  }
+
   async function noteGuiPort(req) {
     try {
       // The environment wins: it is what the host actually bound, and it exists before the first request.
@@ -3113,7 +3178,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       },
       browser: {
         ok: !browser.proxy || proxyProbe.listening,
-        detail: `模式 ${browser.mode}${browser.proxy
+        detail: `模式 ${browser.mode} · 代理范围 ${proxyHostsCache.length ? `仅 ${proxyHostsCache.length} 个域名（PAC）` : browser.proxy ? "全局" : "关闭"}${browser.proxy
           ? ` · 代理 ${browser.proxy} ${proxyProbe.listening
             ? `✅${proxyProbe.host && proxyProbe.host !== hostOf(browser.proxy) ? `（${proxyProbe.host} 应答）` : ""}`
             : `❌ ${proxyProbe.reason}`}`
@@ -3188,6 +3253,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       mode: settings.mode,
       headless: settings.headless,
       proxy: settings.proxy,
+      proxyHosts: proxyHostsCache,
+      proxyMode: proxyHostsCache.length ? "pac" : (settings.proxy ? "global" : "off"),
       visible: settings.visible,
       keepOpen: settings.keepOpen,
       profileDir: settings.profileDir,
@@ -4526,6 +4593,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   let schedulerBusy = false;
   /** The GUI port as last recorded; `/state` reads it from here instead of touching the disk per request. */
   let guiPortCache = null;
+  /** The PAC host list, refreshed whenever it changes; `/state` reads it per request. */
+  let proxyHostsCache = [];
   /** Failures in a row before a task is stopped. Three is enough to tell "broken" from "a bad afternoon". */
   const TASK_FAILURE_LIMIT = 3;
   /**
@@ -5276,15 +5345,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             }
           }
         } catch {
-          const launched = await mod.browserLaunch({
-        channel: settings.channel,
-        port: settings.port,
-        headless: settings.headless,
-        profileDir: settings.profileDir,
-        width: settings.width,
-        height: settings.height,
-        proxy: settings.proxy,
-      });
+          const hosts = await proxyHosts();
+        const pacUrl = await writePacFile(hosts, settings.proxy);
+        const launched = await mod.browserLaunch({
+          channel: settings.channel,
+          port: settings.port,
+          headless: settings.headless,
+          profileDir: settings.profileDir,
+          width: settings.width,
+          height: settings.height,
+          proxy: settings.proxy,
+          pacUrl,
+        });
           pid = launched.pid ?? null;
           started = true;
         }
@@ -5805,6 +5877,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // (ran / failed) are counted.
   // The recorded GUI port survives a restart so `/state` can answer before any request has been seen - the
   // field then says "last known", and the next request corrects it.
+  proxyHosts().then((list) => { proxyHostsCache = list; }).catch(() => {});
+
   (async () => {
     const advertised = guiEnvPort();
     if (advertised) {
@@ -6314,6 +6388,43 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
           const payload = feishuScopePayload();
           json(res, 200, { ok: true, ...payload });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/proxy-hosts",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "list");
+          try {
+            let list = await proxyHosts();
+            if (action === "add") {
+              const values = String(body.host ?? "").split(/[\s,]+/).filter(Boolean);
+              if (!values.length) return json(res, 400, { ok: false, error: "需要 host（可一次给多个，逗号或空格分隔）" });
+              list = normalizeProxyPatterns([...list, ...values]);
+            } else if (action === "remove") {
+              const wanted = normalizeProxyPatterns([String(body.host ?? "")]);
+              if (!wanted.length) return json(res, 400, { ok: false, error: "需要 host" });
+              list = list.filter((entry) => !wanted.includes(entry));
+            } else if (action === "set") {
+              list = normalizeProxyPatterns(String(body.hosts ?? "").split(/[\s,]+/).filter(Boolean));
+            } else if (action === "clear") {
+              list = [];
+            } else if (action !== "list") {
+              return json(res, 400, { ok: false, error: `未知 action：${action}（list / add / remove / set / clear）` });
+            }
+            if (action !== "list") {
+              await state.saveProxyHosts(list);
+              proxyHostsCache = list;
+              await writePacFile(list, browserConfig().proxy);
+              noteRoute("/proxy-hosts", { action, count: list.length });
+            }
+            return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
         },
       },
       {

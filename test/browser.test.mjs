@@ -9,6 +9,7 @@ const {
   browserClick, browserType, browserScreenshot,
   BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
   browserCloseBrowser, parseProxyAddress, proxyListening, browserArgsMatch,
+  normalizeProxyPattern, normalizeProxyPatterns, hostMatchesPattern, buildPacScript,
 } = await import("../browser.js");
 
 const passed = [];
@@ -394,6 +395,36 @@ await test("a running browser is compared with the settings before it is reused"
   const verdict = browserArgsMatch(running, { headless: true, profileDir: "", proxy: "" });
   assert.equal(verdict.running.headless, false);
   assert.equal(verdict.wanted.headless, true);
+});
+
+await test("proxy patterns are what a person types, and matching is what the PAC will do", () => {
+  assert.equal(normalizeProxyPattern("https://x.com/home"), "x.com", "a pasted URL becomes its host");
+  assert.equal(normalizeProxyPattern("WWW.Google.com."), "www.google.com", "case and the DNS root dot are noise");
+  assert.equal(normalizeProxyPattern("*.GitHub.com"), "*.github.com");
+  assert.equal(normalizeProxyPattern("  "), "", "blank is not an error");
+  assert.throws(() => normalizeProxyPattern("not a host"), /不是有效的域名/);
+  assert.throws(() => normalizeProxyPattern("http://"), /不是有效的域名/);
+  assert.deepEqual(normalizeProxyPatterns(["x.com", "X.com", "https://x.com/a", "*.y.com"]), ["x.com", "*.y.com"], "duplicates collapse");
+  // A bare host covers its subdomains - `api.x.com` is still x.com for a proxy decision.
+  assert.equal(hostMatchesPattern("x.com", "x.com"), true);
+  assert.equal(hostMatchesPattern("api.x.com", "x.com"), true);
+  assert.equal(hostMatchesPattern("notx.com", "x.com"), false, "a suffix is not a match");
+  assert.equal(hostMatchesPattern("a.b.github.com", "*.github.com"), true);
+  assert.equal(hostMatchesPattern("github.com", "*.github.com"), false, "*. means subdomains only");
+});
+
+await test("the PAC script routes the listed hosts and leaves the rest direct", () => {
+  const pac = buildPacScript({ patterns: ["x.com", "*.google.com"], proxy: "127.0.0.1:7897" });
+  assert.match(pac, /function FindProxyForURL\(url, host\)/);
+  assert.match(pac, /var patterns = \["x\.com","\*\.google\.com"\]/);
+  assert.match(pac, /return "PROXY 127\.0\.0\.1:7897"/);
+  assert.match(pac, /return 'DIRECT'/);
+  assert.doesNotMatch(pac, /dnsResolve/, "no name resolution in PAC: it blocks page loads on a slow resolver");
+  // socks keeps its scheme, and the directive is the one Chrome understands.
+  assert.match(buildPacScript({ patterns: ["a.com"], proxy: "socks5://127.0.0.1:1080" }), /SOCKS5 127\.0\.0\.1:1080/);
+  assert.throws(() => buildPacScript({ patterns: ["a.com"], proxy: "" }), /需要一个代理地址/);
+  // An empty list is a valid (if pointless) PAC: everything direct.
+  assert.match(buildPacScript({ patterns: [], proxy: "127.0.0.1:7897" }), /var patterns = \[\]/);
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

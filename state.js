@@ -399,6 +399,22 @@ export class WechatState {
   }
 
   /**
+   * Domains that should go through the proxy (PAC patterns). Kept in its own file because it is edited by hand as
+   * often as through a route - a text file is the friendlier of the two.
+   */
+  async loadProxyHosts() {
+    const file = await readJson(join(this.root, "proxy-hosts.json"), { patterns: [] });
+    return Array.isArray(file?.patterns) ? file.patterns : [];
+  }
+
+  async saveProxyHosts(patterns) {
+    const list = Array.isArray(patterns) ? patterns : [];
+    await this.init();
+    await writeJson(join(this.root, "proxy-hosts.json"), { patterns: list, updatedAt: new Date().toISOString() });
+    return list;
+  }
+
+  /**
    * The port the Web GUI is listening on **this run**.
    *
    * The plugin cannot choose it - the host picks a free port, which is why it changes on every restart - but it sees
