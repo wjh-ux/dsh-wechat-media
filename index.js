@@ -1669,6 +1669,7 @@ export function apply(ctx, config = {}) {
         line(report.browser.ok, "浏览器", report.browser.detail),
         line(report.tasks.ok, "定时", report.tasks.detail),
         line(report.secrets.ok, "密钥", report.secrets.detail),
+        line(report.gui.ok, "界面", report.gui.detail),
       ];
       const problems = [report.routes.wechat, report.routes.wecom, report.routes.feishu, report.office, report.browser, report.tasks, report.secrets].filter((row) => !row.ok).length;
       await reply([`体检（v${report.version}）`, ...rows, "", problems ? `${problems} 项需要注意。` : "全部就绪。"].join("\n"));
@@ -3002,6 +3003,54 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /**
+   * Remember the GUI port from the `Host:` header of a request.
+   *
+   * Every route can see it, so any request is enough - and the first request after a restart is the one that records
+   * the new port. Nothing is done when it has not changed (see `saveGuiPort`).
+   */
+  /** The port the host advertises in `DSH_WEB_URL` - authoritative, and available before any request. */
+  function guiEnvPort() {
+    const raw = String(process.env.DSH_WEB_URL ?? "").trim();
+    if (!raw) return undefined;
+    try {
+      const url = new URL(raw);
+      const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+      return Number.isInteger(port) && port > 0 ? { port, url: url.origin, host: url.host } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function noteGuiPort(req) {
+    try {
+      // The environment wins: it is what the host actually bound, and it exists before the first request.
+      const advertised = guiEnvPort();
+      if (advertised) {
+        const saved = await state.loadGuiPort();
+        if (saved.port === advertised.port) {
+          guiPortCache = { ...saved, source: "env" };
+          return;
+        }
+        guiPortCache = { ...(await state.saveGuiPort(advertised.port, { host: advertised.host, url: advertised.url })), source: "env" };
+        ctx.logger?.info?.("[dsh-wechat-media] GUI port from DSH_WEB_URL: %s", advertised.port);
+        return;
+      }
+      const host = String(req?.headers?.host ?? "").trim();
+      const port = Number(host.split(":")[1] ?? (String(req?.socket?.localPort ?? "")));
+      if (!Number.isInteger(port) || port <= 0) return;
+      const saved = await state.loadGuiPort();
+      if (saved.port === port) {
+        guiPortCache = saved; // the common case: nothing to write, but /state still needs the value
+        return;
+      }
+      guiPortCache = { ...(await state.saveGuiPort(port, { host, url: `http://${host}` })), source: "request" };
+      ctx.logger?.info?.("[dsh-wechat-media] GUI port recorded: %s", port);
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not record the GUI port: %s", error?.message ?? error);
+    }
+  }
+
+  /**
    * Everything `/doctor` reports, as data. The point is to answer "why did that not work?" without a log hunt: each
    * row is a capability the plugin needs, whether it is there now, and the one thing to do if it is not.
    */
@@ -3020,6 +3069,20 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       : { listening: false, reason: "未设置" };
     return {
       version: buildInfo().version,
+      gui: (() => {
+        const saved = guiPortCache ?? {};
+        return {
+          ok: Boolean(saved.port),
+          port: saved.port ?? null,
+          url: saved.url ?? null,
+          previousPort: saved.previousPort ?? null,
+          source: saved.source ?? null,
+          pinned: Boolean(guiEnvPort()) ? "DSH_WEB_URL" : null,
+          detail: saved.port
+            ? `${saved.url}（端口 ${saved.port}${saved.previousPort && saved.previousPort !== saved.port ? `，上次 ${saved.previousPort}` : ""}${saved.source === "env" ? "，来自 DSH_WEB_URL" : ""}）`
+            : "还没记录（刷新一次页面即可）",
+        };
+      })(),
       routes: {
         wechat: { ok: accounts.length > 0, detail: accounts.length ? `${accounts.length} 个账号已配对` : "未配对任何微信账号（面板扫码）" },
         wecom: {
@@ -4452,6 +4515,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   let schedulerBusy = false;
+  /** The GUI port as last recorded; `/state` reads it from here instead of touching the disk per request. */
+  let guiPortCache = null;
   /** Failures in a row before a task is stopped. Three is enough to tell "broken" from "a bad afternoon". */
   const TASK_FAILURE_LIMIT = 3;
   /**
@@ -5729,6 +5794,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   // `schedulerTick` so a slow `prompt` task cannot fire twice. Tasks are the only thing in this plugin
   // that runs without a message arriving, which is exactly why every outcome is logged and both sides
   // (ran / failed) are counted.
+  // The recorded GUI port survives a restart so `/state` can answer before any request has been seen - the
+  // field then says "last known", and the next request corrects it.
+  (async () => {
+    const advertised = guiEnvPort();
+    if (advertised) {
+      try {
+        guiPortCache = { ...(await state.saveGuiPort(advertised.port, { host: advertised.host, url: advertised.url })), source: "env" };
+        return;
+      } catch { /* fall back to the file below */ }
+    }
+    try {
+      const saved = await state.loadGuiPort();
+      guiPortCache = saved && saved.port ? { ...saved, source: "file" } : null;
+    } catch { /* nothing recorded yet */ }
+  })();
+
   // Migrate the prefs file in place: any secret still stored as plaintext is sealed once, at startup, so a
   // file written before this version stops being readable by anyone who can read it.
   ctx.effect(() => {
@@ -6012,6 +6093,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         path: "/dsh-wechat-media/state",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          await noteGuiPort(req);
           const accounts = await state.loadAccounts();
           const prefs = await state.loadPrefs();
           const routes = await state.loadRoutes();
@@ -6059,6 +6141,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // How secrets are stored on disk, and anything still in the clear. A file that says
             // "plaintext" is honest; a file that said "encrypted" while storing plaintext would not be.
             secrets: await state.secretsStatus(),
+            // Where to reach this panel, and where that fact is written down: the port changes on every restart, so
+            // "find it in the runtime context" was the previous answer.
+            gui: guiPortCache ?? null,
             // Which programs the office tools found. A null here is the useful answer when a tool refuses: it
             // says the toolchain is missing, rather than the document being unreadable.
             office: (() => {
@@ -6227,6 +6312,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         path: "/dsh-wechat-media/doctor",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          await noteGuiPort(req);
           try {
             json(res, 200, { ok: true, doctor: await doctorReport() });
           } catch (error) {

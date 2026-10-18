@@ -601,6 +601,22 @@ await test("a partial block patch is merged, a complete one is written as-is", (
   assert.match(host, /await state\.savePrefs\(\{ tavily: result\.patch \}\);/, "so does tavily");
 });
 
+await test("the GUI port is recorded, reported and shown", () => {
+  // The host picks the port, so the plugin cannot fix it - but it can stop making people grep a runtime log.
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  assert.match(stateSource, /async loadGuiPort\(\)/, "the port is persisted");
+  assert.match(stateSource, /async saveGuiPort\(port/, "and written when it changes");
+  assert.match(stateSource, /previousPort/, "with the previous one kept, so a move is visible");
+  assert.match(host, /async function noteGuiPort\(req\)/, "every request can record it");
+  assert.match(host, /await noteGuiPort\(req\);\n          const accounts = await state\.loadAccounts\(\)/, "/state records it");
+  assert.match(host, /await noteGuiPort\(req\);\n          try \{\n            json\(res, 200, \{ ok: true, doctor/, "/doctor records it too");
+  assert.match(host, /gui: guiPortCache \?\? null/, "/state reports it");
+  assert.match(host, /line\(report\.gui\.ok, "界面"/, "and /doctor prints it");
+  assert.match(clientSource, /snapshot\?\.gui\?\.port/, "the card shows it");
+  assert.match(clientSource, /gui-port\.json/, "and says where it is written down");
+});
+
 await test("the reliability trio is wired: doctor, task log, stale-browser check", () => {
   const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
   const browserSource = readFileSync(join(root, "browser.js"), "utf8");

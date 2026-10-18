@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.42.0
+
+- **The GUI port is reported, not guessed.** The plugin now reads `DSH_WEB_URL` (the host prints it before any request),
+  records the port in `gui-port.json` under the state directory, and reports it in `/state.gui` and `/doctor` as a
+  `界面` row. A restart that moves the port is visible there (`上次 19387`), and the card shows the current address and
+  where it is written.
+- **The file is the stable entry point.** Anything that needs to reach this plugin - a script, another agent, a
+  bookmark - can read `$DSH_HOME/dsh-wechat-media/gui-port.json` instead of scraping a runtime log or probing ports.
+  The recorded port survives a restart, and the next request or the environment corrects it.
+- **A fixed port is a host flag, not a plugin setting**: `dsh web --port 19387` (the harness supports `--port`; `0`
+  means "let the OS pick", which is what the desktop app does). That hint is on the card next to the current port.
+- 30 suites / 535 cases.
+
 ## 0.41.1
 
 - **Fixed: `/doctor` reported `❌ ECONNREFUSED` for a proxy that works.** Clash Verge listens on `127.0.0.1` only; a

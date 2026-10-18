@@ -1109,6 +1109,14 @@ window.__ModuleLoader__.load({
             h("div", { key: "note", className: "dswxMeta" },
               (snapshot?.office?.dirConfigured ? `✔ ${t("officeDirSet", "using the folder above")}` : `(${t("officeDirDefault", "default: the bridge's own directory")})`) +
               ` · ${t("officeHint", "relative paths from the four office tools land here")}`),
+          // The GUI port changes on every restart; showing it here (and where it is written) ends the guessing.
+          snapshot?.gui?.port
+            ? h("div", { key: "gui", className: "dswxMeta" },
+                `${t("guiPort", "当前界面端口")}: ${snapshot.gui.port}` +
+                (snapshot.gui.previousPort && snapshot.gui.previousPort !== snapshot.gui.port ? ` · ${t("guiPortMoved", "上次")} ${snapshot.gui.previousPort}` : "") +
+                ` · ${snapshot.gui.url} · gui-port.json` +
+                ` · ${t("guiPortPin", "固定端口：dsh web --port 19387")}`)
+            : null,
           ]),
 
           // list, the pause/resume/delete buttons and the one switch that lets a task run a local command.

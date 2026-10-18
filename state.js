@@ -398,6 +398,43 @@ export class WechatState {
     return trimmed;
   }
 
+  /**
+   * The port the Web GUI is listening on **this run**.
+   *
+   * The plugin cannot choose it - the host picks a free port, which is why it changes on every restart - but it sees
+   * it on every request (`Host:`), and writing it down means a script or a person never has to grep a runtime log to
+   * find the page again. `history` keeps the last few, so "it moved again" is visible rather than surprising.
+   */
+  async loadGuiPort() {
+    const file = await readJson(join(this.root, "gui-port.json"), {});
+    return file && typeof file === "object" ? file : {};
+  }
+
+  async saveGuiPort(port, { host = "", url = "", keep = 8 } = {}) {
+    const number = Number(port);
+    if (!Number.isInteger(number) || number <= 0) return undefined;
+    const before = await this.loadGuiPort();
+    if (before.port === number) {
+      // Only the heartbeat moves; rewriting on every request would churn the disk for nothing.
+      const same = { ...before, host: host || before.host, url: url || before.url, seenAt: new Date().toISOString() };
+      await this.init();
+      await writeJson(join(this.root, "gui-port.json"), same);
+      return same;
+    }
+    const history = Array.isArray(before.history) ? before.history : [];
+    const next = {
+      port: number,
+      host: host || `127.0.0.1:${number}`,
+      url: url || `http://127.0.0.1:${number}`,
+      seenAt: new Date().toISOString(),
+      previousPort: before.port ?? null,
+      history: [...history, { port: number, at: new Date().toISOString() }].slice(-Math.max(1, Number(keep) || 8)),
+    };
+    await this.init();
+    await writeJson(join(this.root, "gui-port.json"), next);
+    return next;
+  }
+
   // ── token ledger ──────────────────────────────────────────────────────────
 
   /**

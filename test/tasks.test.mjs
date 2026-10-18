@@ -356,5 +356,12 @@ test("history is bounded, and trimming keeps the newest", () => {
   assert.equal(trimHistory(entries, { limit: 0 }).length, 10, "a nonsense limit is floored, not honoured as zero");
 });
 
+test("trimHistory keeps history bounded (the GUI port file uses the same idea)", () => {
+  // The port file keeps the last few ports so "it moved again" is visible; trimming is the shared shape.
+  const ports = Array.from({ length: 12 }, (_, index) => ({ port: 19000 + index }));
+  assert.equal(trimHistory(ports, { limit: 8 }).length, 8);
+  assert.equal(trimHistory(ports, { limit: 8 }).at(-1).port, 19011, "the newest survives");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
