@@ -1653,18 +1653,36 @@ export function apply(ctx, config = {}) {
       return true;
     }
     if (command.name === "office") {
-      // The honest status line: which program each capability needs, and whether it was found. A tool that
-      // refuses because the toolchain is missing should never look like a broken document.
-      const tool = office.resolveToolchain({ prefs: await state.loadPrefs() });
+      // The honest status line: which program each capability needs, whether it was found, and where relative
+      // paths land. A tool that refuses because the toolchain is missing should never look like a broken
+      // document, and a file that appears in an unexpected folder should be explainable in one glance.
+      const prefs = await state.loadPrefs();
+      const tool = office.resolveToolchain({ prefs });
+      const sub = String(command.args ?? "").trim();
+      if (sub.startsWith("dir")) {
+        const wanted = sub.replace(/^dir\s*/, "").trim();
+        if (!wanted) {
+          const base = office.resolveBaseDir({ prefs });
+          await reply(`Office 保存目录：${base.dir}${base.configured ? "" : "（默认：桥接进程工作目录）"}\n设置：/office dir C:\\路径\\到\\文件夹`);
+          return true;
+        }
+        await state.savePrefs({ officeDir: wanted });
+        noteRoute("/command", { command: "office", action: "dir" });
+        await reply(`已设置 Office 保存目录：${office.resolveBaseDir({ prefs: { officeDir: wanted } }).dir}`);
+        return true;
+      }
+      const base = office.resolveBaseDir({ prefs });
       await reply([
         "Office 工具链：",
         `  读写 docx/xlsx/pptx：${tool.python ? "✅" : "❌"} ${tool.python ?? "找不到 Python（设 officePython 或 DSH_OFFICE_PYTHON）"}`,
         `  转 PDF / 渲染图片：${tool.kit ? "✅" : "❌"} ${tool.kit ?? "找不到 LibreOffice Kit（设 officeKit 或 DSH_OFFICE_KIT）"}`,
+        `  保存目录：${base.dir}${base.configured ? "" : "（默认：桥接进程工作目录，用 /office dir <路径> 改）"}`,
         "",
         "用法（在聊天里说就行，或直接调工具）：",
         "  「把这份数据做成 Excel」→ office_write",
         "  「读一下这个 docx 的要点」→ office_read",
         "  「转成 PDF 发我」→ office_convert",
+        "  「把这个文件存到桌面那份」→ 先说 /office dir <路径>",
       ].join("\n"));
       noteRoute("/command", { command: "office", python: Boolean(tool.python), kit: Boolean(tool.kit) });
       return true;
@@ -5283,6 +5301,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
        * python-docx / openpyxl / python-pptx, and the LibreOffice Kit for PDF and page images); these tools
        * are the thin, honest surface over them - a missing program says which one and where it looked.
        */
+      // Relative paths land in the configured directory, and the tools say which one that is when a file
+      // appears somewhere unexpected.
+      const officeBase = async () => office.resolveBaseDir({ prefs: await state.loadPrefs() });
       const officeToolchain = async () => {
         const tool = office.resolveToolchain({ prefs: await state.loadPrefs() });
         return tool;
@@ -5300,7 +5321,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         name: "office_read",
         description: "Read a .docx / .xlsx / .pptx and return its text and structure (paragraphs, tables, sheets with rows, slide texts).",
         parameters: {
-          path: { type: "string", required: true, description: "Absolute path, or relative to the workspace." },
+          path: { type: "string", required: true, description: "Absolute path, or relative to officeDir (see /office; default is the bridge's working directory)." },
           maxRows: { type: "number", description: "How many rows per sheet to return (default 200)." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
@@ -5308,7 +5329,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         async execute(args) {
           try {
             const tool = await officeToolchain();
-            const file = office.absolutePath(args?.path);
+            const file = office.absolutePath(args?.path, (await officeBase()).dir);
             const answer = await office.runOffice({
               python: tool.python,
               exec: officeExec,
@@ -5325,7 +5346,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         name: "office_write",
         description: "Create a .docx / .xlsx / .pptx from a JSON spec (string). docx: {title, blocks:[{type:heading|paragraph|bullets|table,...}]}; xlsx: {sheets:[{name, rows, widths, header}]}; pptx: {slides:[{title, bullets}]}.",
         parameters: {
-          path: { type: "string", required: true, description: "Where to write; the extension decides the kind." },
+          path: { type: "string", required: true, description: "Where to write (absolute, or relative to officeDir); the extension decides the kind." },
           json: { type: "string", required: true, description: "The JSON spec as text." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
@@ -5333,7 +5354,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         async execute(args) {
           try {
             const tool = await officeToolchain();
-            const file = office.absolutePath(args?.path);
+            const file = office.absolutePath(args?.path, (await officeBase()).dir);
             const { kind, spec } = office.parseWriteSpec(file, args?.json);
             const answer = await office.runOffice({
               python: tool.python,
@@ -5361,8 +5382,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try {
             const tool = await officeToolchain();
             if (!tool.kit) return "office_convert 失败：找不到 LibreOffice Kit（设置 officeKit 或环境变量 DSH_OFFICE_KIT）";
-            const file = office.absolutePath(args?.path);
-            const output = args?.out ? office.absolutePath(args.out) : file.replace(/\.[^.]+$/, "") + ".pdf";
+            const base = (await officeBase()).dir;
+            const file = office.absolutePath(args?.path, base);
+            const output = args?.out ? office.absolutePath(args.out, base) : file.replace(/\.[^.]+$/, "") + ".pdf";
             await office.convertOffice({ kit: tool.kit, node: process.execPath, input: file, output, exec: officeExec });
             noteRoute("/office", { action: "convert", path: file, output });
             return `已转成 PDF：${output}`;
@@ -5388,8 +5410,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try {
             const tool = await officeToolchain();
             if (!tool.kit) return "office_render 失败：找不到 LibreOffice Kit（设置 officeKit 或环境变量 DSH_OFFICE_KIT）";
-            const file = office.absolutePath(args?.path);
-            const outDir = office.absolutePath(args?.outDir);
+            const base = (await officeBase()).dir;
+            const file = office.absolutePath(args?.path, base);
+            const outDir = office.absolutePath(args?.outDir, base);
             const answer = await office.renderOffice({
               kit: tool.kit,
               node: process.execPath,
@@ -5775,11 +5798,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // says the toolchain is missing, rather than the document being unreadable.
             office: (() => {
               const tool = office.resolveToolchain({ prefs });
+              const base = office.resolveBaseDir({ prefs });
               return {
                 python: tool.python ?? null,
                 kit: tool.kit ?? null,
                 canRead: Boolean(tool.python),
                 canConvert: tool.canConvert,
+                dir: base.dir,
+                dirConfigured: base.configured,
               };
             })(),
             tasks: await taskSummary(),
@@ -6035,6 +6061,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // The desktop switch goes through the same route as everything else: the Web UI panel and a
           // plain GET link both write here, and only an explicit boolean arms it.
           if (asBool(body.desktopControl) !== null) patch.desktopControl = asBool(body.desktopControl);
+          // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
+          if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
           // The Feishu block of the Web UI panel writes here. It is handled before the reply because a
           // changed app id/secret has to reconnect the long connection, and the response then carries
           // the fresh state so the panel can show "connected" or the reason it is not.

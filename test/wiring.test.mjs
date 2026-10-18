@@ -564,6 +564,15 @@ await test("office tools are registered, honest about a missing toolchain, and r
   // The payload goes over argv as base64, so no shell ever sees a path or a cell value.
   assert.match(officeSource, /base64\.b64decode\(sys\.argv\[1\]\)/, "python reads base64 from argv");
   assert.match(officeSource, /sys\.stdout\.reconfigure\(encoding="utf-8"\)/, "and answers in UTF-8");
+  // The directory is a setting, not a guess: it is reported, settable from a chat, writable through /prefs,
+  // and every tool resolves against it - otherwise "relative to the workspace" is a claim the code does not keep.
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(stateSource, /officeDir: ""/, "prefs carry the setting, empty by default");
+  assert.match(host, /office\.resolveBaseDir\(\{ prefs \}\)/, "/state reports the directory");
+  assert.match(host, /office\.absolutePath\(args\?\.path, base\)/, "the tools resolve against it");
+  assert.match(host, /if \(sub\.startsWith\("dir"\)\)/, "/office dir sets it from a chat");
+  assert.match(host, /patch\.officeDir = String\(body\.officeDir/, "and /prefs accepts it");
+  assert.match(host, /officeDir \(see \/office/, "the tool description names the setting instead of a workspace");
   const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
   assert.match(commandsSource, /name: "office"/, "the /office command exists");
   assert.match(host, /command\.name === "office"/, "and the host handles it");

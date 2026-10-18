@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.34.0
+
+- **`officeDir`: the office tools' files go where you say.** Relative paths from `office_read` / `office_write` /
+  `office_convert` / `office_render` now resolve against a configurable directory instead of "wherever the bridge
+  happens to run". Set it from a chat with `/office dir <路径>`, from `/prefs?officeDir=…`, or with
+  `DSH_OFFICE_DIR`; `/office` and `/state.office` both print the effective directory and whether it was configured.
+- **The tool descriptions stopped claiming a workspace.** They said "relative to the workspace" while the code
+  resolved against the bridge's working directory - the file appeared, just not where the description promised. The
+  description now names `officeDir`, and the setting behind that name actually exists.
+- A relative `officeDir` is resolved against the bridge's directory rather than against `process.cwd()`, which put a
+  setting like `officeDir: "out"` somewhere else entirely. Caught by the test that names both cases.
+- 30 suites / 520 cases.
+
 ## 0.33.0
 
 - **Office documents: read, create, convert.** Four tools (`office_read`, `office_write`, `office_convert`,

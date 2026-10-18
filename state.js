@@ -302,6 +302,10 @@ export class WechatState {
       // full / readonly. "moderate" is exactly the behaviour of every earlier release.
       authorization: "moderate",
       maxMediaMiB: 100,
+      // Where relative paths from the office tools land. Empty means "the bridge's working directory",
+      // which is what it did before there was a setting; `/office dir <path>` fills it in.
+      officeDir: "",
+
       ...(file && typeof file === "object" ? file : {}),
     };
   }

@@ -347,9 +347,24 @@ export async function renderOffice({ kit, node, input, outputDir, pages, sheet, 
   return { ok: true, outputDir, manifest };
 }
 
-/** An absolute path, resolved against `cwd`, with the source file preserved by callers. */
-export function absolutePath(path, cwd = process.cwd()) {
+/**
+ * Where relative paths land: `officeDir` when it is set, otherwise the bridge's own working directory.
+ *
+ * A configured directory is resolved against `fallback`, not against `process.cwd()`: a relative setting like
+ * `officeDir: "out"` means "under wherever the bridge runs", and resolving it against the process's own cwd
+ * silently put files somewhere else entirely. An empty value means "wherever this process happens to run",
+ * which is honest but forgettable, so `/office` prints the answer either way.
+ */
+export function resolveBaseDir({ prefs = {}, fallback = process.cwd(), env = process.env } = {}) {
+  const base = resolve(fallback);
+  const configured = String(prefs?.officeDir ?? env.DSH_OFFICE_DIR ?? "").trim();
+  if (!configured) return { dir: base, configured: false };
+  return { dir: isAbsolute(configured) ? resolve(configured) : resolve(base, configured), configured: true };
+}
+
+/** An absolute path, resolved against `base` (see `resolveBaseDir`), with the source file preserved. */
+export function absolutePath(path, base = process.cwd()) {
   const value = String(path ?? "").trim();
   if (!value) throw new Error("需要 path");
-  return isAbsolute(value) ? resolve(value) : resolve(cwd, value);
+  return isAbsolute(value) ? resolve(value) : resolve(base, value);
 }

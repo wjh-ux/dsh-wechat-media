@@ -50,6 +50,27 @@ test("a write spec is refused before any process starts", () => {
   assert.equal(okDocx.spec.blocks.length, 1, "a valid spec comes back parsed");
 });
 
+test("relative paths land in officeDir when it is set, and say so when it is not", () => {
+  const fallback = "C:\\bridge\\cwd";
+  const unset = office.resolveBaseDir({ prefs: {}, env: {}, fallback });
+  assert.equal(unset.configured, false);
+  assert.equal(unset.dir, office.absolutePath(fallback), "the fallback is the bridge's own cwd");
+  const set = office.resolveBaseDir({ prefs: { officeDir: "C:\\Users\\me\\Desktop\\报表" }, env: {}, fallback });
+  assert.equal(set.configured, true);
+  assert.equal(set.dir, office.absolutePath("C:\\Users\\me\\Desktop\\报表"));
+  // A relative setting is relative to the bridge's cwd, not to itself.
+  const relative = office.resolveBaseDir({ prefs: { officeDir: "out" }, env: {}, fallback });
+  assert.equal(relative.dir, office.absolutePath("out", office.absolutePath(fallback)));
+  // The environment is the second way in, for a deployment that cannot set prefs.
+  const fromEnv = office.resolveBaseDir({ prefs: {}, env: { DSH_OFFICE_DIR: "C:\\env\\dir" }, fallback });
+  assert.equal(fromEnv.dir, office.absolutePath("C:\\env\\dir"));
+  // An explicit pref wins over the environment.
+  const both = office.resolveBaseDir({ prefs: { officeDir: "C:\\pref" }, env: { DSH_OFFICE_DIR: "C:\\env" }, fallback });
+  assert.equal(both.dir, office.absolutePath("C:\\pref"));
+  // An absolute path argument ignores the base entirely.
+  assert.equal(office.absolutePath("C:\\elsewhere\\a.docx", "C:\\base"), office.absolutePath("C:\\elsewhere\\a.docx"));
+});
+
 test("a relative path is resolved, an empty one refused", () => {
   assert.match(office.absolutePath("out/a.docx", "C:\\\\work"), /[\\\\/]out[\\\\/]a\.docx$/);
   assert.throws(() => office.absolutePath("  "), /需要 path/);

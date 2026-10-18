@@ -372,7 +372,17 @@ answer for a script. A missing program is named (`找不到 Python（设置 offi
 broken document - the toolchain and the file are different problems and must not look alike.
 
 Create a file, then send it: the bridge already has `send_file` for WeChat, WeCom and Feishu, so "做个 Excel 发我"
-is `office_write` then `send_file`. Paths are resolved against the workspace when relative.
+is `office_write` then `send_file`.
+
+Relative paths land in **`officeDir`**, printed by `/office`:
+
+```text
+/office                      # toolchain + the directory relative paths use
+/office dir D:\报表\2026     # set it (also /prefs?officeDir=…, or DSH_OFFICE_DIR)
+```
+
+Empty means "the bridge's working directory" - workable, but forgettable, which is why `/office` always prints the
+effective path instead of expecting anyone to remember it.
 
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 
