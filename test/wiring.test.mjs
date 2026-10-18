@@ -587,6 +587,21 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
+await test("the Feishu scopes can be copied from the card", () => {
+  // Copying a scope list is only useful if it is the *right* list: the app the user pasted from holds ~150
+  // scopes, and half of them are access this plugin never exercises. The route serves the derived minimum.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  const feishuSource = readFileSync(join(root, "feishu.js"), "utf8");
+  assert.match(host, /path: "\/dsh-wechat-media\/feishu-scopes"/, "the route exists");
+  assert.match(host, /feishuScopePayload\(\)/, "and answers with the derived payload");
+  assert.match(feishuSource, /export const FEISHU_SCOPES = Object\.freeze\(\[/, "the list is declared once");
+  assert.match(feishuSource, /scopes: \{ tenant: list \}/, "the JSON is the API's own shape");
+  assert.match(clientSource, /async function copyFeishuScopes\(\)/, "the card can copy it");
+  assert.match(clientSource, /await navigator\.clipboard\.writeText\(text\)/, "through the clipboard API");
+  assert.match(clientSource, /document\.execCommand\("copy"\)/, "with a fallback for browsers that refuse");
+  assert.match(clientSource, /t\("copyScopes"/, "and a labelled button");
+});
+
 await test("the wizard shows once and then stays away", () => {
   // A wizard that cannot be dismissed is a nag; one that comes back after every restart is worse, because
   // the second time it is a bug. So: shown only when the stored preference says it is not done, and both

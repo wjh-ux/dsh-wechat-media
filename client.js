@@ -176,6 +176,10 @@ window.__ModuleLoader__.load({
           wizardFinish: "Done",
           wizardStep1: "WeCom and Feishu take credentials in the cards below; WeChat is one scan, right here.",
           wizardScan: "Pair WeChat (QR)",
+          copyScopes: "Copy scope JSON",
+          scopesHint: "only the 8 scopes this plugin calls",
+          scopesCopied: "scopes copied",
+          scopesCopyFailed: "the browser refused; read them from /feishu-scopes",
           wizardTest: "Send a test message",
           wizardTestHint: "goes to the chat that last wrote, through the real delivery path",
           wizardStep2a: "Only accept allowlisted chats (off by default)",
@@ -329,6 +333,10 @@ window.__ModuleLoader__.load({
           wizardFinish: "完成",
           wizardStep1: "企业微信 / 飞书在下面的卡片里填凭据；微信在这里直接扫码。",
           wizardScan: "扫码接微信",
+          copyScopes: "复制权限 JSON",
+          scopesHint: "只含本插件用到的 8 项，不是全部权限",
+          scopesCopied: "项已复制",
+          scopesCopyFailed: "浏览器拒绝了，可从 /feishu-scopes 取",
           wizardTest: "发一条测试消息",
           wizardTestHint: "发到最近有消息的那个会话，走真实的发送路径",
           wizardStep2a: "只接受白名单里的会话（默认关）",
@@ -454,6 +462,8 @@ window.__ModuleLoader__.load({
         const [wizardStep, setWizardStep] = react.useState(0);
         // The result of the wizard's test message: undefined = not tried yet.
         const [wizardTest, setWizardTest] = react.useState(undefined);
+        // The result of "copy the Feishu scopes": undefined = not tried yet.
+        const [scopeCopy, setScopeCopy] = react.useState(undefined);
         const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
         const [taskNotice, setTaskNotice] = react.useState(undefined);
         // Which step each "run again" button will take: a day, a week or a month. Kept per row so
@@ -755,6 +765,43 @@ window.__ModuleLoader__.load({
          * All of it goes through `/tasks`, which is the same three operations the `/task` command exposes;
          * creation stays in the chat, because a schedule is a sentence ("每天 8 点"), not a form.
          */
+        /**
+         * Copy the minimum Feishu scope payload.
+         *
+         * `navigator.clipboard` needs a secure context; the panel is served over http on loopback, where
+         * some browsers refuse it. So there is a textarea fallback - a copy button that silently does
+         * nothing on half the machines is worse than no button.
+         */
+        async function copyFeishuScopes() {
+          setBusy(true);
+          try {
+            const payload = await api("/feishu-scopes");
+            const text = String(payload?.json ?? "");
+            let copied = false;
+            try {
+              await navigator.clipboard.writeText(text);
+              copied = true;
+            } catch {
+              const area = document.createElement("textarea");
+              area.value = text;
+              area.style.position = "fixed";
+              area.style.opacity = "0";
+              document.body.appendChild(area);
+              area.select();
+              try {
+                copied = document.execCommand("copy");
+              } finally {
+                document.body.removeChild(area);
+              }
+            }
+            setScopeCopy({ ok: copied, text: `${payload?.count ?? 0} ${t("scopesCopied", "scopes copied")}${copied ? "" : " · " + t("scopesCopyFailed", "the browser refused, so copy it from /feishu-scopes")}` });
+          } catch (problem) {
+            setScopeCopy({ ok: false, text: String(problem?.message ?? problem) });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Send one real message through the bridge, from the wizard's second step. */
         async function sendWizardTest() {
           setBusy(true);
@@ -1431,6 +1478,12 @@ window.__ModuleLoader__.load({
             snapshot?.feishu?.savedFields?.length
               ? h("p", { key: "saved", className: "dswxMeta" }, `${t("feishuSavedHere", "saved from this panel")}: ${snapshot.feishu.savedFields.join(", ")}`)
               : null,
+            h("div", { key: "scopes", className: "dswxRow" }, [
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: copyFeishuScopes },
+                t("copyScopes", "复制权限 JSON")),
+              h("span", { key: "h", className: "dswxMeta" }, t("scopesHint", "只含本插件用到的 8 项，不是全部权限")),
+              scopeCopy ? h("span", { key: "r", className: "dswxMeta" }, `${scopeCopy.ok ? "✅ " : "❌ "}${scopeCopy.text}`) : null,
+            ]),
             h("p", { key: "counters", className: "dswxMeta" }, [
               `events ${snapshot?.feishu?.counters?.events ?? 0} · answered ${snapshot?.feishu?.counters?.answered ?? 0}`,
               ` · ignored ${snapshot?.feishu?.counters?.ignored ?? 0} · errors ${snapshot?.feishu?.counters?.errors ?? 0}`,

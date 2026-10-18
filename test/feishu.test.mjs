@@ -10,6 +10,8 @@
 import assert from "node:assert/strict";
 
 import {
+  FEISHU_SCOPES,
+  feishuScopePayload,
   feishuAesKey,
   feishuChallenge,
   feishuDecryptEvent,
@@ -479,6 +481,23 @@ await test("a wiki node is resolved with the parameter the live API required", a
   await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "" }), /node token/);
   await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "x", fetchImpl: async () => ({ json: async () => ({ code: 131005, msg: "not found" }) }) }), /not found/);
   await assert.rejects(() => feishuWikiResolve({ token: "t", nodeToken: "x", fetchImpl: async () => ({ json: async () => ({ code: 0, data: { node: {} } }) }) }), /no obj_token/);
+});
+
+test("the copied scopes are the ones this plugin calls, and no more", () => {
+  const payload = feishuScopePayload();
+  assert.equal(payload.count, FEISHU_SCOPES.length);
+  // The minimum set, named: messaging and its media, documents, spreadsheets, bitables, wiki lookup.
+  for (const scope of ["im:message", "im:message:send_as_bot", "im:resource", "docx:document", "sheets:spreadsheet", "bitable:app", "wiki:wiki:readonly"]) {
+    assert.ok(FEISHU_SCOPES.includes(scope), `${scope} is needed by an endpoint this plugin calls`);
+  }
+  // Nothing administrative, nothing that can rewrite an org chart, nothing that touches other apps' data.
+  for (const scope of FEISHU_SCOPES) {
+    assert.doesNotMatch(scope, /admin|contact:user\.employee|permission\.member|im:chat:delete|drive:drive$/, `${scope} is not something this plugin does`);
+  }
+  // The JSON is the API's own shape, so it can be pasted into a request body unchanged.
+  const parsed = JSON.parse(payload.json);
+  assert.deepEqual(parsed.scopes.tenant, [...FEISHU_SCOPES]);
+  assert.equal(payload.text.trim().split("\n").length, FEISHU_SCOPES.length, "the text form is one scope per line");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

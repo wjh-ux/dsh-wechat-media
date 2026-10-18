@@ -49,6 +49,40 @@ export function feishuDomain(value = "feishu") {
 }
 
 /** The message types this plugin sends. */
+/**
+ * The scopes this plugin actually calls, and nothing else.
+ *
+ * Derived from the endpoints in this file, not copied from an app that has everything: sending messages and
+ * their media (`im:message`, `im:message:send_as_bot`, `im:resource`), documents (`docx:document`,
+ * `docx:document:readonly` for `raw_content`), spreadsheets (`sheets:spreadsheet`), bitables
+ * (`bitable:app`) and wiki node lookup (`wiki:wiki:readonly`). Granting the other ~140 scopes an app can
+ * hold would work and would be wrong: every extra one is access nobody asked for.
+ */
+export const FEISHU_SCOPES = Object.freeze([
+  "im:message",
+  "im:message:send_as_bot",
+  "im:resource",
+  "docx:document",
+  "docx:document:readonly",
+  "sheets:spreadsheet",
+  "bitable:app",
+  "wiki:wiki:readonly",
+]);
+
+/**
+ * The API's own shape for a scope update (`PATCH /open-apis/application/v6/applications/:app_id` takes
+ * `{ scopes: { tenant: [...] } }`), so the copy can be pasted into a request body as-is. `text` is the
+ * same list one per line, for consoles that take a list rather than JSON.
+ */
+export function feishuScopePayload(scopes = FEISHU_SCOPES) {
+  const list = [...scopes];
+  return {
+    json: `${JSON.stringify({ scopes: { tenant: list } }, null, 2)}\n`,
+    text: `${list.join("\n")}\n`,
+    count: list.length,
+  };
+}
+
 export const FEISHU_MSG_TYPES = Object.freeze(["text", "post", "image", "file", "audio", "media"]);
 
 /**

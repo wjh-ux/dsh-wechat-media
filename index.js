@@ -5950,6 +5950,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       },
       {
         kind: "exact",
+        path: "/dsh-wechat-media/feishu-scopes",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          const payload = feishuScopePayload();
+          json(res, 200, { ok: true, ...payload });
+        },
+      },
+      {
+        kind: "exact",
         path: "/dsh-wechat-media/test-send",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });

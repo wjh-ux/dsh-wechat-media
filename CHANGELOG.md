@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.38.0
+
+- **One-click copy of the Feishu scopes, from the card.** A `复制权限 JSON` button next to the Feishu block copies the
+  minimal set - **8 scopes**, derived from the endpoints this plugin actually calls (messages, media, documents,
+  spreadsheets, bitables, wiki lookup) - in the API's own `{ scopes: { tenant: [...] } }` shape, so it can be pasted
+  into a request body unchanged. A second form (one scope per line) is served by the same route for consoles that take
+  a list.
+- **Deliberately not the full grant.** The list an existing app reports holds ~150 tenant scopes; copying that to a new
+  app would work and would hand over access this plugin never exercises (org contacts, other apps' documents, chat
+  administration). The minimum is the honest answer to "let someone else set this up".
+- The copy falls back to `execCommand("copy")` when the clipboard API refuses - the panel is served over plain http on
+  loopback, where some browsers refuse it, and a button that silently does nothing is worse than no button.
+- Guard: the route, the single declaration, the API shape, the button and both copy paths.
+- 30 suites / 522 cases.
+
 ## 0.37.0
 
 - **The wizard is five steps now, and two of them are actions rather than explanations.** Step 1 has the WeChat QR
