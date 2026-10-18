@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.38.1
+
+- **Fixed: the scope-copy route answered 400 with an empty body.** `feishuScopePayload` was called in the handler but
+  never added to the import list from `feishu.js`, so the first click threw a `ReferenceError` and the framework turned
+  it into a 400. The unit test imported the helper directly and passed; the wiring guard checked that the host *calls*
+  it - and calling is not importing. The guard now requires the import line as well.
+- **A 4xx in the card says what fixes it.** Routes register when the plugin loads, while the bundle is read per
+  request, so a refreshed page can show a button whose route does not exist yet - exactly what happened here. The card
+  now appends "可能需要重启 dsh 让插件路由生效" to a 400/404/405 instead of leaving a bare status code.
+- 30 suites / 522 cases.
+
 ## 0.38.0
 
 - **One-click copy of the Feishu scopes, from the card.** A `复制权限 JSON` button next to the Feishu block copies the

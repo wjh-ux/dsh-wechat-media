@@ -180,6 +180,7 @@ window.__ModuleLoader__.load({
           scopesHint: "only the 8 scopes this plugin calls",
           scopesCopied: "scopes copied",
           scopesCopyFailed: "the browser refused; read them from /feishu-scopes",
+          needsRestart: "the plugin may need a dsh restart for this route",
           wizardTest: "Send a test message",
           wizardTestHint: "goes to the chat that last wrote, through the real delivery path",
           wizardStep2a: "Only accept allowlisted chats (off by default)",
@@ -337,6 +338,7 @@ window.__ModuleLoader__.load({
           scopesHint: "只含本插件用到的 8 项，不是全部权限",
           scopesCopied: "项已复制",
           scopesCopyFailed: "浏览器拒绝了，可从 /feishu-scopes 取",
+          needsRestart: "可能需要重启 dsh 让插件路由生效",
           wizardTest: "发一条测试消息",
           wizardTestHint: "发到最近有消息的那个会话，走真实的发送路径",
           wizardStep2a: "只接受白名单里的会话（默认关）",
@@ -796,7 +798,12 @@ window.__ModuleLoader__.load({
             }
             setScopeCopy({ ok: copied, text: `${payload?.count ?? 0} ${t("scopesCopied", "scopes copied")}${copied ? "" : " · " + t("scopesCopyFailed", "the browser refused, so copy it from /feishu-scopes")}` });
           } catch (problem) {
-            setScopeCopy({ ok: false, text: String(problem?.message ?? problem) });
+            // A 4xx here almost always means the host half is older than this bundle: routes register at
+            // plugin load, so a refreshed page can show a button whose route does not exist yet. Saying so is
+            // the difference between "restart once" and "this feature is broken".
+            const text = String(problem?.message ?? problem);
+            const hint = /HTTP (400|404|405)/.test(text) ? ` · ${t("needsRestart", "可能需要重启 dsh 让插件路由生效")}` : "";
+            setScopeCopy({ ok: false, text: text + hint });
           } finally {
             setBusy(false);
           }

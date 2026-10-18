@@ -102,6 +102,7 @@ import {
   feishuMediaContent,
   feishuPostContent,
   feishuReplyMessage,
+  feishuScopePayload,
   feishuSendMessage,
   feishuTenantToken,
   feishuTextContent,

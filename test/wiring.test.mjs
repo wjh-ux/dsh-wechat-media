@@ -594,6 +594,9 @@ await test("the Feishu scopes can be copied from the card", () => {
   const feishuSource = readFileSync(join(root, "feishu.js"), "utf8");
   assert.match(host, /path: "\/dsh-wechat-media\/feishu-scopes"/, "the route exists");
   assert.match(host, /feishuScopePayload\(\)/, "and answers with the derived payload");
+  // Called is not imported. v0.38.0 shipped exactly that: the handler referenced the helper, the import
+  // list did not have it, and the route answered 400 with an empty body at the first click.
+  assert.match(host, /^\s+feishuScopePayload,$/m, "the helper is imported, not only called");
   assert.match(feishuSource, /export const FEISHU_SCOPES = Object\.freeze\(\[/, "the list is declared once");
   assert.match(feishuSource, /scopes: \{ tenant: list \}/, "the JSON is the API's own shape");
   assert.match(clientSource, /async function copyFeishuScopes\(\)/, "the card can copy it");
