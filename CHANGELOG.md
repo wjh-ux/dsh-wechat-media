@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.34.1
+
+- **Fixed the office test on Linux, which was green here and red on CI.** The new `officeDir` case wrote its paths as
+  `C:\\bridge\\cwd` and `C:\\Users\\me\\Desktop`; on POSIX those are *relative* paths, so the code resolved
+  them against the working directory and the assertion compared two different things. The case now builds its paths
+  with `join` + `tmpdir`, so it asserts the rule rather than a platform's path syntax.
+- No behaviour change: `resolveBaseDir` was correct on both platforms; the test was not.
+- 30 suites / 520 cases.
+
 ## 0.34.0
 
 - **`officeDir`: the office tools' files go where you say.** Relative paths from `office_read` / `office_write` /

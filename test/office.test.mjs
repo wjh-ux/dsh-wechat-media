@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 let passed = 0;
 let failed = 0;
@@ -51,24 +51,29 @@ test("a write spec is refused before any process starts", () => {
 });
 
 test("relative paths land in officeDir when it is set, and say so when it is not", () => {
-  const fallback = "C:\\bridge\\cwd";
+  // Built with `join`, not written as "C:\\...": on Linux those literals are *relative* paths, and the test
+  // would be asserting Windows behaviour on a platform that does not have it.
+  const root = resolve(tmpdir(), "office-base");
+  const fallback = join(root, "bridge");
+  const desktop = join(root, "Desktop", "报表");
   const unset = office.resolveBaseDir({ prefs: {}, env: {}, fallback });
   assert.equal(unset.configured, false);
-  assert.equal(unset.dir, office.absolutePath(fallback), "the fallback is the bridge's own cwd");
-  const set = office.resolveBaseDir({ prefs: { officeDir: "C:\\Users\\me\\Desktop\\报表" }, env: {}, fallback });
+  assert.equal(unset.dir, resolve(fallback), "the fallback is the bridge's own directory");
+  const set = office.resolveBaseDir({ prefs: { officeDir: desktop }, env: {}, fallback });
   assert.equal(set.configured, true);
-  assert.equal(set.dir, office.absolutePath("C:\\Users\\me\\Desktop\\报表"));
-  // A relative setting is relative to the bridge's cwd, not to itself.
+  assert.equal(set.dir, resolve(desktop));
+  // A relative setting is relative to the bridge's directory, not to process.cwd().
   const relative = office.resolveBaseDir({ prefs: { officeDir: "out" }, env: {}, fallback });
-  assert.equal(relative.dir, office.absolutePath("out", office.absolutePath(fallback)));
+  assert.equal(relative.dir, resolve(fallback, "out"));
   // The environment is the second way in, for a deployment that cannot set prefs.
-  const fromEnv = office.resolveBaseDir({ prefs: {}, env: { DSH_OFFICE_DIR: "C:\\env\\dir" }, fallback });
-  assert.equal(fromEnv.dir, office.absolutePath("C:\\env\\dir"));
+  const fromEnv = office.resolveBaseDir({ prefs: {}, env: { DSH_OFFICE_DIR: join(root, "env") }, fallback });
+  assert.equal(fromEnv.dir, resolve(root, "env"));
   // An explicit pref wins over the environment.
-  const both = office.resolveBaseDir({ prefs: { officeDir: "C:\\pref" }, env: { DSH_OFFICE_DIR: "C:\\env" }, fallback });
-  assert.equal(both.dir, office.absolutePath("C:\\pref"));
+  const both = office.resolveBaseDir({ prefs: { officeDir: join(root, "pref") }, env: { DSH_OFFICE_DIR: join(root, "env") }, fallback });
+  assert.equal(both.dir, resolve(root, "pref"));
   // An absolute path argument ignores the base entirely.
-  assert.equal(office.absolutePath("C:\\elsewhere\\a.docx", "C:\\base"), office.absolutePath("C:\\elsewhere\\a.docx"));
+  assert.equal(office.absolutePath(join(root, "elsewhere", "a.docx"), fallback), resolve(root, "elsewhere", "a.docx"));
+  assert.equal(office.absolutePath("a.docx", fallback), resolve(fallback, "a.docx"), "a relative one joins the base");
 });
 
 test("a relative path is resolved, an empty one refused", () => {
