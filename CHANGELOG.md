@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.45.0
+
+- **One owner per plugin run.** Any browser still answering the port at the first browser action of a run belongs to the
+  *previous* run, and the PAC URL it was launched with points at a server that died with that run - so adopting it means
+  a window whose host list can never work. It is now **closed**, the port is waited out, and this run starts its own.
+- **The argument comparison is gone from the launch path.** Five releases (0.43.2 -> 0.44.3) tried to decide "is this
+  window current?" by reading and comparing its command line, and every variant raced the process it was inspecting: a
+  browser that cannot report its args, a PAC URL that changes with every run, a close that has not finished yet. The
+  rule that replaced it is one a check can actually keep: nothing on the port at the start of a run, one browser during
+  it.
+- The message says which of the two happened (`关闭了上次运行遗留的浏览器` vs `接管了…设置一致`) instead of naming a
+  difference no reader could act on.
+- 30 suites / 540 cases.
+
 ## 0.44.3
 
 - **Fixed: the stale browser was replaced over and over.** Closing is asynchronous - Chrome keeps answering port 9222
