@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.37.0
+
+- **The wizard is five steps now, and two of them are actions rather than explanations.** Step 1 has the WeChat QR
+  button inline (the same `startPairing` the header uses), so the first thing a new user does is in front of them.
+  Step 2 sends **one real message** through the bridge and reports what happened - "configured" and "working" are
+  different states, and only the second one is worth showing.
+- The test message goes through `deliverTo`, the same function a scheduled task uses, to the same default target
+  (the chat that last wrote). A green tick here therefore means the real path works, not that a flag is set.
+- `/dsh-wechat-media/test-send` is the route behind it; a failure is reported with the host's own sentence
+  ("企业微信长连接没有连上"), never a generic "failed".
+- Guard: all five steps exist, step 1 calls `startPairing`, step 2 calls `/test-send`, and the route calls `deliverTo`.
+- 30 suites / 521 cases.
+
 ## 0.36.0
 
 - **A four-step wizard on the card, with a one-click skip.** Step 1 asks which transport is alive (it reads the

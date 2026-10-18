@@ -5950,6 +5950,25 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       },
       {
         kind: "exact",
+        path: "/dsh-wechat-media/test-send",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          // The wizard's "send a test message" step: one real message, through the same delivery path a task
+          // uses, to the same default target a task would pick. If this works, the transport works.
+          try {
+            const target = await defaultTaskTarget();
+            const text = `👋 测试消息：收到这条，说明 ${target.transport} 通道已经通了。这条由 Web UI 的新手向导发出。`;
+            await deliverTo(target, text);
+            noteRoute("/test-send", { transport: target.transport, chatId: target.chatId });
+            json(res, 200, { ok: true, transport: target.transport, chatId: target.chatId });
+          } catch (error) {
+            json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
         path: "/dsh-wechat-media/tasks",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });

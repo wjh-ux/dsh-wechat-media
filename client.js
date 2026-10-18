@@ -174,7 +174,10 @@ window.__ModuleLoader__.load({
           wizardPrev: "Back",
           wizardNext: "Next",
           wizardFinish: "Done",
-          wizardStep1: "Connect a transport first: scan a QR for WeChat, or fill in the bot/app credentials in the cards below.",
+          wizardStep1: "WeCom and Feishu take credentials in the cards below; WeChat is one scan, right here.",
+          wizardScan: "Pair WeChat (QR)",
+          wizardTest: "Send a test message",
+          wizardTestHint: "goes to the chat that last wrote, through the real delivery path",
           wizardStep2a: "Only accept allowlisted chats (off by default)",
           wizardStep2b: "Answer 1:1 chats only, ignore groups (off by default)",
           wizardStep3a: "Desktop control: mouse, keyboard, screenshots (off by default)",
@@ -324,7 +327,10 @@ window.__ModuleLoader__.load({
           wizardPrev: "上一步",
           wizardNext: "下一步",
           wizardFinish: "完成",
-          wizardStep1: "先接一个通道：微信点上面的「Add an account」扫码；企业微信/飞书在下面的卡片里填机器人或应用凭据。",
+          wizardStep1: "企业微信 / 飞书在下面的卡片里填凭据；微信在这里直接扫码。",
+          wizardScan: "扫码接微信",
+          wizardTest: "发一条测试消息",
+          wizardTestHint: "发到最近有消息的那个会话，走真实的发送路径",
           wizardStep2a: "只接受白名单里的会话（默认关）",
           wizardStep2b: "只回答一对一，忽略群（默认关）",
           wizardStep3a: "桌面控制：鼠标、键盘、截图（默认关）",
@@ -446,6 +452,8 @@ window.__ModuleLoader__.load({
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
         // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
         const [wizardStep, setWizardStep] = react.useState(0);
+        // The result of the wizard's test message: undefined = not tried yet.
+        const [wizardTest, setWizardTest] = react.useState(undefined);
         const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
         const [taskNotice, setTaskNotice] = react.useState(undefined);
         // Which step each "run again" button will take: a day, a week or a month. Kept per row so
@@ -747,6 +755,20 @@ window.__ModuleLoader__.load({
          * All of it goes through `/tasks`, which is the same three operations the `/task` command exposes;
          * creation stays in the chat, because a schedule is a sentence ("每天 8 点"), not a form.
          */
+        /** Send one real message through the bridge, from the wizard's second step. */
+        async function sendWizardTest() {
+          setBusy(true);
+          try {
+            const answer = await api("/test-send");
+            setWizardTest({ ok: true, text: `${answer?.transport ?? ""} · ${answer?.chatId ?? ""}` });
+          } catch (problem) {
+            // The host's sentence is the useful one ("企业微信长连接没有连上"), so show it as-is.
+            setWizardTest({ ok: false, text: String(problem?.message ?? problem) });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Finish or skip the wizard: both just record that it is done. */
         async function endWizard() {
           setBusy(true);
@@ -893,7 +915,7 @@ window.__ModuleLoader__.load({
           // order and a second run has a button that makes it stop.
           snapshot?.prefs?.wizardDone !== true ? h("div", { key: "wizard", className: "dswxCard dswxWizard" }, [
             h("div", { key: "head", className: "dswxRow" }, [
-              h("strong", { key: "t" }, `${t("wizard", "新手向导")} ${wizardStep + 1}/4`),
+              h("strong", { key: "t" }, `${t("wizard", "新手向导")} ${wizardStep + 1}/5`),
               h("span", { key: "m", className: "dswxMeta" }, t("wizardHint", "四步，随时可以跳过")),
               h("button", { key: "skip", type: "button", className: "dswxBtn", disabled: busy, onClick: endWizard },
                 t("wizardSkip", "跳过（我熟）")),
@@ -902,10 +924,22 @@ window.__ModuleLoader__.load({
             wizardStep === 0 ? h("div", { key: "s1" }, [
               h("div", { key: "a", className: "dswxMeta" },
                 `微信：${(snapshot?.accounts ?? []).length} 个账号 · 企业微信：${snapshot?.wecom?.bot?.connected ? "✅" : "❌"} · 飞书：${snapshot?.feishu?.connection?.connected ? "✅" : "❌"}`),
-              h("div", { key: "b", className: "dswxMeta" }, t("wizardStep1", "先接一个通道：微信点上面的「Add an account」扫码；企业微信/飞书在下面的卡片里填机器人或应用凭据。")),
+              h("div", { key: "b", className: "dswxRow" }, [
+                h("button", { key: "q", type: "button", className: "dswxBtn dswxPrimary", disabled: busy || Boolean(pending), onClick: startPairing },
+                  pending ? t("pairingNow", "Waiting for the scan…") : t("wizardScan", "扫码接微信")),
+                h("span", { key: "h", className: "dswxMeta" }, t("wizardStep1", "企业微信 / 飞书在下面的卡片里填凭据；微信在这里直接扫码。")),
+              ]),
             ]) : null,
-            // Step 2: who may talk to it.
-            wizardStep === 1 ? h("div", { key: "s2" }, [
+            // Step 2: one real message, because "configured" and "working" are different states.
+            wizardStep === 1 ? h("div", { key: "stest" }, [
+              h("div", { key: "a", className: "dswxRow" }, [
+                h("button", { key: "b", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: sendWizardTest }, t("wizardTest", "发一条测试消息")),
+                h("span", { key: "h", className: "dswxMeta" }, t("wizardTestHint", "发到最近有消息的那个会话，走的是真实的发送路径")),
+              ]),
+              wizardTest ? h("div", { key: "r", className: "dswxMeta" }, `${wizardTest.ok ? "✅" : "❌"} ${wizardTest.text}`) : null,
+            ]) : null,
+            // Step 3: who may talk to it.
+            wizardStep === 2 ? h("div", { key: "s2" }, [
               h("label", { key: "a", className: "dswxMeta" }, [
                 h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.prefs?.requireAllowlist), disabled: busy, onChange: (event) => setAllowlist(event.target.checked) }),
                 " " + t("wizardStep2a", "只接受白名单里的会话（默认关）"),
@@ -915,8 +949,8 @@ window.__ModuleLoader__.load({
                 " " + t("wizardStep2b", "只回答一对一，忽略群（默认关）"),
               ]),
             ]) : null,
-            // Step 3: the two capabilities that touch this machine.
-            wizardStep === 2 ? h("div", { key: "s3" }, [
+            // Step 4: the two capabilities that touch this machine.
+            wizardStep === 3 ? h("div", { key: "s3" }, [
               h("label", { key: "a", className: "dswxMeta" }, [
                 h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.prefs?.desktopControl), disabled: busy, onChange: (event) => setDesktop(event.target.checked) }),
                 " " + t("wizardStep3a", "桌面控制：鼠标、键盘、截图（默认关）"),
@@ -926,8 +960,8 @@ window.__ModuleLoader__.load({
                 " " + t("wizardStep3b", "允许定时任务执行本机命令（默认关）"),
               ]),
             ]) : null,
-            // Step 4: where generated documents go.
-            wizardStep === 3 ? h("div", { key: "s4" }, [
+            // Step 5: where generated documents go.
+            wizardStep === 4 ? h("div", { key: "s4" }, [
               h("div", { key: "a", className: "dswxRow" }, [
                 h("span", { key: "k", className: "dswxName" }, t("officeDir", "保存到")),
                 h("input", {
@@ -944,8 +978,8 @@ window.__ModuleLoader__.load({
             ]) : null,
             h("div", { key: "nav", className: "dswxRow" }, [
               h("button", { key: "p", type: "button", className: "dswxBtn", disabled: busy || wizardStep === 0, onClick: () => setWizardStep(Math.max(0, wizardStep - 1)) }, t("wizardPrev", "上一步")),
-              wizardStep < 3
-                ? h("button", { key: "n", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: () => setWizardStep(Math.min(3, wizardStep + 1)) }, t("wizardNext", "下一步"))
+              wizardStep < 4
+                ? h("button", { key: "n", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: () => setWizardStep(Math.min(4, wizardStep + 1)) }, t("wizardNext", "下一步"))
                 : h("button", { key: "f", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: endWizard }, t("wizardFinish", "完成")),
             ]),
           ]) : null,

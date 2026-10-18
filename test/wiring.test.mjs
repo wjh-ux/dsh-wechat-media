@@ -599,7 +599,7 @@ await test("the wizard shows once and then stays away", () => {
   assert.match(clientSource, /async function endWizard\(\)/, "there is one way to finish");
   assert.match(clientSource, /await api\("\/prefs\?wizardDone=true"\)/, "which writes the preference");
   // Four steps, and the same switches the rest of the card uses - a wizard with its own copies would drift.
-  for (const step of ["wizardStep === 0", "wizardStep === 1", "wizardStep === 2", "wizardStep === 3"]) {
+  for (const step of ["wizardStep === 0", "wizardStep === 1", "wizardStep === 2", "wizardStep === 3", "wizardStep === 4"]) {
     assert.match(clientSource, new RegExp(step.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${step} exists`);
   }
   assert.match(clientSource, /setAllowlist\(event\.target\.checked\)/, "step 2 reuses the allowlist switch");
@@ -607,6 +607,13 @@ await test("the wizard shows once and then stays away", () => {
   assert.match(clientSource, /setTaskCommand\(event\.target\.checked\)/, "and the command switch");
   assert.match(clientSource, /setOfficeDir\(officeDirInput/, "step 4 reuses the office directory writer");
   assert.match(clientSource, /t\("wizardSkip", "跳过（我熟）"\)|t\("wizardSkip"/, "the skip button exists");
+  // Step 1 pairs, step 2 sends: "configured" and "working" are different states, and only one of them is
+  // worth showing a new user.
+  assert.match(clientSource, /onClick: startPairing/, "step 1 can pair a WeChat account");
+  assert.match(clientSource, /async function sendWizardTest\(\)/, "step 2 has its own action");
+  assert.match(clientSource, /await api\("\/test-send"\)/, "which calls the test-send route");
+  assert.match(host, /path: "\/dsh-wechat-media\/test-send"/, "the route exists");
+  assert.match(host, /await deliverTo\(target, text\)/, "and sends through the real delivery path");
 });
 
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
