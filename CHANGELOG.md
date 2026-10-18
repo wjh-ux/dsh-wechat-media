@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.33.0
+
+- **Office documents: read, create, convert.** Four tools (`office_read`, `office_write`, `office_convert`,
+  `office_render`) over `.docx` / `.xlsx` / `.pptx`, plus PDF export and page images. They drive the runtime's own
+  Python (`python-docx`, `openpyxl`, `python-pptx`) and the LibreOffice Kit CLI - no new dependency, nothing installed
+  at run time, and `/office` prints which program each capability needs and whether it was found.
+- **The payload reaches Python as base64 on argv**, never through a shell, so a Chinese path or a cell containing a
+  quote is just data. **Python's answer is pinned to UTF-8**: on Windows a piped stdout otherwise uses the locale code
+  page (cp936 here) and every Chinese string came back as mojibake while the document itself was correct - the exact
+  shape of the PowerShell bug in 0.25.3, and caught the same way, by a live round trip asserting the text.
+- A missing toolchain is named, not disguised: `找不到 Python（设置 officePython 或 DSH_OFFICE_PYTHON）` and
+  `找不到 LibreOffice Kit（…）`, because "the program is absent" and "the document is broken" must not look alike.
+- `/state.office` reports `{ python, kit, canRead, canConvert }`; `/office` says the same in a chat.
+- 30 suites / 519 cases, including live round trips for all three kinds and a real PDF (`%PDF-`, source untouched).
+
 ## 0.32.0
 
 - **Secrets are encrypted at rest.** `prefs.json` held the Feishu app secret and the Tavily key in plain text - a file

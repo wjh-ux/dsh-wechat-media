@@ -90,6 +90,7 @@ import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
 import * as tasks from "./tasks.js";
+import * as office from "./office.js";
 import { openSessionAgent } from "./session.js";
 import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
@@ -1651,6 +1652,23 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
+    if (command.name === "office") {
+      // The honest status line: which program each capability needs, and whether it was found. A tool that
+      // refuses because the toolchain is missing should never look like a broken document.
+      const tool = office.resolveToolchain({ prefs: await state.loadPrefs() });
+      await reply([
+        "Office 工具链：",
+        `  读写 docx/xlsx/pptx：${tool.python ? "✅" : "❌"} ${tool.python ?? "找不到 Python（设 officePython 或 DSH_OFFICE_PYTHON）"}`,
+        `  转 PDF / 渲染图片：${tool.kit ? "✅" : "❌"} ${tool.kit ?? "找不到 LibreOffice Kit（设 officeKit 或 DSH_OFFICE_KIT）"}`,
+        "",
+        "用法（在聊天里说就行，或直接调工具）：",
+        "  「把这份数据做成 Excel」→ office_write",
+        "  「读一下这个 docx 的要点」→ office_read",
+        "  「转成 PDF 发我」→ office_convert",
+      ].join("\n"));
+      noteRoute("/command", { command: "office", python: Boolean(tool.python), kit: Boolean(tool.kit) });
+      return true;
+    }
     if (command.name === "task") {
       // Creating a task is a tool call (the model can do it from a sentence); this command is for
       // looking at them and switching them off, which is what people do from a chat.
@@ -2826,6 +2844,43 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         };
       }),
     };
+  }
+
+  /**
+   * Render an `office_read` answer as text a person can read in a chat.
+   *
+   * Bounded on purpose: a spreadsheet can hold ten thousand rows and a chat message cannot. The summary says how
+   * much was shown, so "the document is short" and "the answer was truncated" never look the same.
+   */
+  function formatOfficeRead(file, answer) {
+    const lines = [];
+    const name = String(file).split(/[\\/]/).pop();
+    if (answer?.kind === "docx") {
+      lines.push(`docx · ${name} · ${answer.counts?.paragraphs ?? 0} 段 / ${answer.counts?.tables ?? 0} 表`);
+      for (const block of answer.blocks ?? []) {
+        lines.push(block.type === "heading" ? `# ${block.text}` : block.text);
+      }
+      (answer.tables ?? []).forEach((rows, index) => {
+        lines.push(`\n表 ${index + 1}（${rows.length} 行）`);
+        for (const row of rows.slice(0, 20)) lines.push("| " + row.join(" | ") + " |");
+      });
+    } else if (answer?.kind === "xlsx") {
+      lines.push(`xlsx · ${name} · ${answer.sheets?.length ?? 0} 个工作表`);
+      for (const sheet of answer.sheets ?? []) {
+        lines.push(`\n【${sheet.name}】 ${sheet.dims ?? ""}（${sheet.maxRow ?? 0} 行 × ${sheet.maxColumn ?? 0} 列，显示 ${sheet.rows?.length ?? 0} 行）`);
+        for (const row of sheet.rows ?? []) lines.push(row.join("\t"));
+      }
+    } else if (answer?.kind === "pptx") {
+      lines.push(`pptx · ${name} · ${answer.counts?.slides ?? 0} 页`);
+      for (const slide of answer.slides ?? []) {
+        lines.push(`\n— 第 ${slide.index} 页 —`);
+        lines.push((slide.texts ?? []).join("\n"));
+      }
+    } else {
+      lines.push(JSON.stringify(answer).slice(0, 4000));
+    }
+    const text = lines.join("\n");
+    return text.length > 8000 ? `${text.slice(0, 8000)}\n…（已截断，共 ${text.length} 字符）` : text;
   }
 
   /** What a reader may know about the browser settings. */
@@ -5223,7 +5278,136 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool]) {
+      /**
+       * Office documents. The heavy lifting is two programs already on the machine (bundled Python with
+       * python-docx / openpyxl / python-pptx, and the LibreOffice Kit for PDF and page images); these tools
+       * are the thin, honest surface over them - a missing program says which one and where it looked.
+       */
+      const officeToolchain = async () => {
+        const tool = office.resolveToolchain({ prefs: await state.loadPrefs() });
+        return tool;
+      };
+      const officeExec = (command, args, options) => new Promise((resolvePromise, rejectPromise) => {
+        execFile(command, args, { timeout: options?.timeoutMs ?? 120000, windowsHide: true, maxBuffer: 8 << 20 }, (error, stdout, stderr) => {
+          if (error) {
+            error.stderr = stderr;
+            rejectPromise(error);
+          } else resolvePromise(stdout);
+        });
+      });
+
+      const officeReadTool = define({
+        name: "office_read",
+        description: "Read a .docx / .xlsx / .pptx and return its text and structure (paragraphs, tables, sheets with rows, slide texts).",
+        parameters: {
+          path: { type: "string", required: true, description: "Absolute path, or relative to the workspace." },
+          maxRows: { type: "number", description: "How many rows per sheet to return (default 200)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          try {
+            const tool = await officeToolchain();
+            const file = office.absolutePath(args?.path);
+            const answer = await office.runOffice({
+              python: tool.python,
+              exec: officeExec,
+              payload: { action: "read", path: file, maxRows: Number(args?.maxRows ?? 200) },
+            });
+            return formatOfficeRead(file, answer);
+          } catch (error) {
+            return `office_read 失败：${String(error?.message ?? error)}`;
+          }
+        },
+      });
+
+      const officeWriteTool = define({
+        name: "office_write",
+        description: "Create a .docx / .xlsx / .pptx from a JSON spec (string). docx: {title, blocks:[{type:heading|paragraph|bullets|table,...}]}; xlsx: {sheets:[{name, rows, widths, header}]}; pptx: {slides:[{title, bullets}]}.",
+        parameters: {
+          path: { type: "string", required: true, description: "Where to write; the extension decides the kind." },
+          json: { type: "string", required: true, description: "The JSON spec as text." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 120000,
+        async execute(args) {
+          try {
+            const tool = await officeToolchain();
+            const file = office.absolutePath(args?.path);
+            const { kind, spec } = office.parseWriteSpec(file, args?.json);
+            const answer = await office.runOffice({
+              python: tool.python,
+              exec: officeExec,
+              payload: { action: "write", path: file, spec },
+            });
+            noteRoute("/office", { action: "write", kind, path: file });
+            return `已生成 ${kind}：${file}（${Math.round(Number(answer.bytes ?? 0) / 1024)} KB）`;
+          } catch (error) {
+            return `office_write 失败：${String(error?.message ?? error)}`;
+          }
+        },
+      });
+
+      const officeConvertTool = define({
+        name: "office_convert",
+        description: "Convert a .docx / .xlsx / .pptx to PDF with LibreOffice Kit. The source file is left untouched.",
+        parameters: {
+          path: { type: "string", required: true, description: "The source document." },
+          out: { type: "string", description: "Where to write the PDF (default: same name, .pdf next to the source)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 180000,
+        async execute(args) {
+          try {
+            const tool = await officeToolchain();
+            if (!tool.kit) return "office_convert 失败：找不到 LibreOffice Kit（设置 officeKit 或环境变量 DSH_OFFICE_KIT）";
+            const file = office.absolutePath(args?.path);
+            const output = args?.out ? office.absolutePath(args.out) : file.replace(/\.[^.]+$/, "") + ".pdf";
+            await office.convertOffice({ kit: tool.kit, node: process.execPath, input: file, output, exec: officeExec });
+            noteRoute("/office", { action: "convert", path: file, output });
+            return `已转成 PDF：${output}`;
+          } catch (error) {
+            return `office_convert 失败：${String(error?.message ?? error)}`;
+          }
+        },
+      });
+
+      const officeRenderTool = define({
+        name: "office_render",
+        description: "Render document pages (or a sheet range) to PNG images with LibreOffice Kit - for visual checks or for sending a page as a picture.",
+        parameters: {
+          path: { type: "string", required: true, description: "The document to render." },
+          outDir: { type: "string", required: true, description: "Directory for the images (must not exist yet)." },
+          pages: { type: "string", description: "Comma-separated pages, e.g. 1,3." },
+          sheet: { type: "string", description: "For workbooks: the exact sheet name." },
+          range: { type: "string", description: "For workbooks: an A1 range." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 180000,
+        async execute(args) {
+          try {
+            const tool = await officeToolchain();
+            if (!tool.kit) return "office_render 失败：找不到 LibreOffice Kit（设置 officeKit 或环境变量 DSH_OFFICE_KIT）";
+            const file = office.absolutePath(args?.path);
+            const outDir = office.absolutePath(args?.outDir);
+            const answer = await office.renderOffice({
+              kit: tool.kit,
+              node: process.execPath,
+              input: file,
+              outputDir: outDir,
+              pages: args?.pages ? String(args.pages) : "",
+              sheet: args?.sheet ? String(args.sheet) : "",
+              range: args?.range ? String(args.range) : "",
+              exec: officeExec,
+            });
+            return `已渲染到 ${answer.outputDir}\n${JSON.stringify(answer.manifest).slice(0, 600)}`;
+          } catch (error) {
+            return `office_render 失败：${String(error?.message ?? error)}`;
+          }
+        },
+      });
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -5587,6 +5771,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // How secrets are stored on disk, and anything still in the clear. A file that says
             // "plaintext" is honest; a file that said "encrypted" while storing plaintext would not be.
             secrets: await state.secretsStatus(),
+            // Which programs the office tools found. A null here is the useful answer when a tool refuses: it
+            // says the toolchain is missing, rather than the document being unreadable.
+            office: (() => {
+              const tool = office.resolveToolchain({ prefs });
+              return {
+                python: tool.python ?? null,
+                kit: tool.kit ?? null,
+                canRead: Boolean(tool.python),
+                canConvert: tool.canConvert,
+              };
+            })(),
             tasks: await taskSummary(),
             approvals: approvals.list(),
             lastApproval: approvals.last() ?? null,

@@ -338,6 +338,42 @@ Two more behaviours worth knowing:
 - **Any chat can be targeted.** `task_add` takes `transport` (`wechat` / `wecom` / `feishu`) with `to`, so a task can
   be created for a group you have not just spoken to; without it, the default is still "the chat that asked".
 
+## Office documents / 办公文档
+
+Four tools read, create and convert `.docx` / `.xlsx` / `.pptx`, and export PDF or page images. They are a thin,
+honest surface over two programs already on this machine - the runtime's own Python (`python-docx`, `openpyxl`,
+`python-pptx`) and the LibreOffice Kit CLI - so nothing is bundled here and nothing is installed at run time:
+
+| Tool | Does |
+| --- | --- |
+| `office_read` | text and structure: paragraphs, tables, sheets with rows, slide texts |
+| `office_write` | create from a JSON spec (below) |
+| `office_convert` | `.docx/.xlsx/.pptx` → PDF, source untouched |
+| `office_render` | pages (or a sheet range) → PNG, for a visual check or to send as a picture |
+
+```jsonc
+// .docx
+{"title": "季度报告", "blocks": [
+  {"type": "heading", "level": 1, "text": "一、概述"},
+  {"type": "paragraph", "text": "正文"},
+  {"type": "bullets", "items": ["要点一", "要点二"]},
+  {"type": "table", "rows": [["项目", "数值"], ["收入", "120"]], "header": true}
+]}
+
+// .xlsx
+{"sheets": [{"name": "报表", "rows": [["月份", "收入"], ["1月", 120]], "widths": [12, 10], "header": true}]}
+
+// .pptx
+{"slides": [{"title": "第一页", "bullets": ["背景", "结论"]}]}
+```
+
+`/office` prints which program each capability needs and whether it was found; `/state.office` carries the same
+answer for a script. A missing program is named (`找不到 Python（设置 officePython…）`) rather than reported as a
+broken document - the toolchain and the file are different problems and must not look alike.
+
+Create a file, then send it: the bridge already has `send_file` for WeChat, WeCom and Feishu, so "做个 Excel 发我"
+is `office_write` then `send_file`. Paths are resolved against the workspace when relative.
+
 ## Desktop control (mouse, keyboard, screen) / 桌面控制
 
 Seven tools can drive this machine's own mouse and keyboard, read the screen and manage windows. They are

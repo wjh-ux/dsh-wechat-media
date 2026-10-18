@@ -476,7 +476,7 @@ await test("scheduled tasks are wired from the timer through to the switch", () 
   assert.match(host, /name: "task_add"/, "task_add exists");
   assert.match(host, /name: "task_list"/, "task_list exists");
   assert.match(host, /name: "task_remove"/, "task_remove exists");
-  assert.match(host, /taskAddTool, taskListTool, taskRemoveTool\]/, "and all three are registered");
+  assert.match(host, /taskAddTool, taskListTool, taskRemoveTool,/, "and all three are registered");
   // Two target shapes reach task_add: `{ accountId }` from the default target, and `{ account: { accountId } }`
   // from an explicit `to`. v0.26.0 read `.account.accountId` first, which is a TypeError on the shape with no
   // `account` - found live, on the first task anyone created. The optional chain is the fix; this keeps it.
@@ -544,6 +544,29 @@ await test("secrets are sealed at rest, and the state says how", () => {
   assert.match(host, /sealed %d secret\(s\) with DPAPI/, "startup seals what is still plaintext");
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   assert.ok(pkg.files.includes("secrets.js"), "the module ships");
+});
+
+await test("office tools are registered, honest about a missing toolchain, and reachable", () => {
+  const officeSource = readFileSync(join(root, "office.js"), "utf8");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.ok(pkg.files.includes("office.js"), "the module ships");
+  assert.match(host, /import \* as office from "\.\/office\.js"/, "the host imports it");
+  for (const tool of ["office_read", "office_write", "office_convert", "office_render"]) {
+    assert.match(host, new RegExp(`name: "${tool}"`), `${tool} exists`);
+  }
+  assert.match(host, /officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool\]\)/, "all four are registered");
+  // A missing program must be named, never guessed at: these are the two messages that distinguish
+  // "toolchain absent" from "document broken".
+  assert.match(officeSource, /找不到 Python（设置 officePython/, "read/write name the missing Python, where the runner is");
+  assert.match(officeSource, /找不到 LibreOffice Kit（设置 officeKit/, "convert/render name the missing kit");
+  assert.match(host, /if \(!tool\.kit\) return "office_convert 失败/, "and the tools surface it verbatim");
+  assert.match(host, /office: \(\(\) => \{/, "/state reports the toolchain");
+  // The payload goes over argv as base64, so no shell ever sees a path or a cell value.
+  assert.match(officeSource, /base64\.b64decode\(sys\.argv\[1\]\)/, "python reads base64 from argv");
+  assert.match(officeSource, /sys\.stdout\.reconfigure\(encoding="utf-8"\)/, "and answers in UTF-8");
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  assert.match(commandsSource, /name: "office"/, "the /office command exists");
+  assert.match(host, /command\.name === "office"/, "and the host handles it");
 });
 
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {

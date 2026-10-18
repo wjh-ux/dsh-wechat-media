@@ -72,6 +72,12 @@ export const COMMANDS = [
     summary: "定时任务：列表、删除、暂停/恢复；command on 才允许定时执行本机命令",
   },
   {
+    name: "office",
+    aliases: ["文档", "表格", "幻灯片"],
+    usage: "/office",
+    summary: "Office 工具链状态：读、写、转 PDF 分别需要哪个程序，以及现在找到没有",
+  },
+  {
     name: "desktop",
     aliases: ["桌面"],
     usage: "/desktop [on|off|status]",
