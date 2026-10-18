@@ -254,7 +254,8 @@ await test("startup warms every cache /state reads, not just Feishu's", () => {
 const browserSource = readFileSync(joinPath(pluginDir, "browser.js"), "utf8");
 await test("the browser settings reach the panel, the route and the environment", () => {
   assert.match(host, /browser: browserState\(\),/, "/state reports the browser settings");
-  assert.match(host, /const browserPatch = browserPrefsPatch/, "/prefs accepts them");
+  assert.match(host, /browserPatch = browserPrefsPatch\(browserArgs\)/, "/prefs accepts them");
+  assert.match(host, /\.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode too");
   assert.match(host, /browser: applied\.browser, browserChanged: applied\.changed/, "and reports what changed");
   assert.match(host, /DSH_BROWSER_PROFILE/, "the environment is honoured");
   // The default moved into the pure mode table in browser.js when `erp` needed its own profile.

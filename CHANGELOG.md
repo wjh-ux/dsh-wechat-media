@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.39.1
+
+- **Fixed: the mode select saved nothing.** `browserMode` was handled by `browserPrefsPatch`, but `/prefs` builds the
+  browser arguments from `BROWSER_PREF_FIELDS` and `BROWSER_PREF_SWITCHES` only - so the field never reached the
+  handler, the mode stayed `headless`, and the card would have reported "无变化" for a setting the person had just
+  changed. `/state.browser.prefFields` also omitted it, so nothing else could have noticed.
+- An invalid mode name is now a **400 with the three valid names**, not a thrown error inside the route.
+- Guards: the `/prefs` field list, `prefFields`, and the try/catch - three places that all have to know a field exists,
+  which is exactly how one of them got forgotten.
+- 30 suites / 524 cases.
+
 ## 0.39.0
 
 - **A visible browser mode for operating a system a human is watching.** `headless` / `headed` / **`erp`**, set from

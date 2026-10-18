@@ -2967,7 +2967,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       keepOpen: settings.keepOpen,
       profileDir: settings.profileDir,
       sources: { channel: source("channel"), port: source("port"), headless: source("headless"), profileDir: source("profileDir") },
-      prefFields: [...Object.keys(BROWSER_PREF_FIELDS), ...Object.keys(BROWSER_PREF_SWITCHES)],
+      prefFields: [...Object.keys(BROWSER_PREF_FIELDS), ...Object.keys(BROWSER_PREF_SWITCHES), ...Object.keys(BROWSER_PREF_MODES)],
     };
   }
 
@@ -6183,11 +6183,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return json(res, 200, { ok: true, prefs: publicPrefs(prefsAfter), tavily: applied.tavily, tavilyChanged: applied.changed });
           }
           // The browser block saves the same way and likewise needs no reconnect: the next browser action reads the
-          // refreshed settings. Its switch (headless) goes through the boolean rules, not the string ones.
+          // refreshed settings. Its mode is a string and its legacy switch a boolean - both lists are forwarded, or
+          // the card's select would save nothing and report success.
           const browserArgs = Object.fromEntries(
-            Object.keys({ ...BROWSER_PREF_FIELDS, ...BROWSER_PREF_SWITCHES }).map((field) => [field, body[field]]),
+            Object.keys({ ...BROWSER_PREF_FIELDS, ...BROWSER_PREF_SWITCHES, ...BROWSER_PREF_MODES }).map((field) => [field, body[field]]),
           );
-          const browserPatch = browserPrefsPatch(browserArgs);
+          // A bad mode name is the caller's mistake, not a crash: answer 400 with the three valid modes.
+          let browserPatch;
+          try {
+            browserPatch = browserPrefsPatch(browserArgs);
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
           if (browserPatch.changed.length) {
             const applied = await applyBrowserPrefs(browserArgs);
             const prefsAfter = await state.savePrefs({});

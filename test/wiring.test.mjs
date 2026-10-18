@@ -602,6 +602,11 @@ await test("the ERP browser mode is reachable from the card, the command and /st
   assert.match(host, /applyBrowserPrefs\(\{ browserMode: wanted \}\)/, "it writes the same pref the card writes");
   assert.match(clientSource, /t\("browserModeErp", "ERP 操作/, "the card offers the ERP mode");
   assert.match(clientSource, /browserDraft\.browserMode/, "through the same draft the other browser fields use");
+  // Declared is not forwarded. v0.39.0 added the mode to `browserPrefsPatch` and forgot the two lists that
+  // decide which body fields reach it - so the card's select saved nothing and answered "无变化" cheerfully.
+  assert.match(host, /Object\.keys\(\{ \.\.\.BROWSER_PREF_FIELDS, \.\.\.BROWSER_PREF_SWITCHES, \.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode field");
+  assert.match(host, /prefFields: \[\.\.\.Object\.keys\(BROWSER_PREF_FIELDS\), \.\.\.Object\.keys\(BROWSER_PREF_SWITCHES\), \.\.\.Object\.keys\(BROWSER_PREF_MODES\)\]/, "/state advertises it");
+  assert.match(host, /let browserPatch;\s*try \{\s*browserPatch = browserPrefsPatch\(browserArgs\);/, "an invalid mode is answered, not thrown");
 });
 
 await test("the Feishu scopes can be copied from the card", () => {
