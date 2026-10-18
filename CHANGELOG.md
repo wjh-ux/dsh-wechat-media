@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.39.0
+
+- **A visible browser mode for operating a system a human is watching.** `headless` / `headed` / **`erp`**, set from
+  the card's mode select or `/browser mode erp`. `erp` is not "not headless": it is **a visible window with its own
+  persistent profile** (`browser-profile-erp`), a bigger viewport (1600×1000) and no auto-close, so an ERP login
+  survives a restart and the person can take over the mouse at any moment.
+- The old `headless` checkbox became a mode select - two controls for one setting is how a panel starts disagreeing
+  with itself. A legacy `headless: false` preference still means "show me a window" (`headed`), so nobody's saved
+  setting silently changed meaning.
+- `/state.browser` reports `mode`, `visible` and `keepOpen`; `/browser` prints the mode, the profile path and the
+  channel, and `applyBrowserPrefs` validates the mode name (an unknown one is refused, never guessed).
+- 30 suites / 524 cases.
+
 ## 0.38.1
 
 - **Fixed: the scope-copy route answered 400 with an empty body.** `feishuScopePayload` was called in the handler but

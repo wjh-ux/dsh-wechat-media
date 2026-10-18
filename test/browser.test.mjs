@@ -7,6 +7,7 @@ const {
   BROWSER_CHANNELS, browserExecutable, cdpBase, browserVersion, browserTargets, browserPageTarget,
   browserLaunch, createCdpSession, browserOpen, browserEvaluate, browserText, browserElementCentre,
   browserClick, browserType, browserScreenshot,
+  BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
 } = await import("../browser.js");
 
 const passed = [];
@@ -250,15 +251,40 @@ await test("startup warms every cache /state reads, not just Feishu's", () => {
   }
 });
 
+const browserSource = readFileSync(joinPath(pluginDir, "browser.js"), "utf8");
 await test("the browser settings reach the panel, the route and the environment", () => {
   assert.match(host, /browser: browserState\(\),/, "/state reports the browser settings");
   assert.match(host, /const browserPatch = browserPrefsPatch/, "/prefs accepts them");
   assert.match(host, /browser: applied\.browser, browserChanged: applied\.changed/, "and reports what changed");
   assert.match(host, /DSH_BROWSER_PROFILE/, "the environment is honoured");
-  assert.match(host, /join\(dshHome, "browser-profile"\)/, "the default profile is the plugin's own, not the user's browser");
+  // The default moved into the pure mode table in browser.js when `erp` needed its own profile.
+  assert.match(browserSource, /join\(dshHome, "browser-profile"\)/, "the default profile is the plugin's own, not the user's browser");
+  assert.match(browserSource, /join\(dshHome, "browser-profile-erp"\)/, "and the ERP mode keeps its own");
+  assert.match(host, /import \{ BROWSER_MODE_NAMES, browserModeSettings \}/, "the host imports the mode helpers");
   assert.match(panel, /const \[browserDraft, setBrowserDraft\]/, "the panel keeps its own draft");
-  assert.match(panel, /browserHeadless: event\.target\.checked/, "the headless switch is a real boolean");
+  assert.match(panel, /browserDraft\.browserMode/, "the mode select is a real string");
   assert.match(panel, /snapshot\?\.browser\?\.channel/, "and the saved channel comes back after a reload");
+});
+
+await test("the three browser modes differ where it matters", () => {
+  const home = "C:\\dsh";
+  const headless = browserModeSettings({ mode: "headless", dshHome: home });
+  const headed = browserModeSettings({ mode: "headed", dshHome: home });
+  const erp = browserModeSettings({ mode: "erp", dshHome: home });
+  assert.equal(headless.headless, true);
+  assert.equal(headless.visible, false);
+  assert.equal(headed.visible, true, "headed means a human can see it");
+  assert.deepEqual([erp.width, erp.height], [1600, 1000], "erp gets the bigger viewport");
+  // The profile is the whole point of `erp`: the login to the system under work must survive a restart.
+  assert.match(erp.profileDir, /browser-profile-erp$/, "erp has its own profile");
+  assert.equal(headed.profileDir, headless.profileDir, "the other two share the scratch profile");
+  assert.equal(erp.keepOpen, true);
+  assert.equal(headless.keepOpen, false);
+  assert.equal(browserModeSettings({ mode: "", savedHeadless: false, dshHome: home }).mode, "headed", "a legacy boolean still means a window");
+  assert.equal(browserModeSettings({ mode: "nonsense", dshHome: home }).mode, "headless", "an unknown mode falls back, never throws");
+  assert.equal(browserModeSettings({ mode: "erp", profileDir: "C:\\mine", dshHome: home }).profileDir, "C:\\mine");
+  assert.deepEqual([...BROWSER_MODE_NAMES], ["headless", "headed", "erp"]);
+  assert.deepEqual(Object.keys(BROWSER_MODES), [...BROWSER_MODE_NAMES]);
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

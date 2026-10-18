@@ -1791,16 +1791,24 @@ window.__ModuleLoader__.load({
                 disabled: busy,
                 onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProfileDir: event.target.value })),
               }),
-              h("label", { key: "headless", className: "dswxMeta" }, [
-                h("input", {
-                  key: "h",
-                  type: "checkbox",
+              // A mode, not a checkbox: `erp` is not "not headless", it is a visible window with its own
+              // persistent profile - a boolean cannot express that, and guessing made the difference invisible.
+              h("label", { key: "mode", className: "dswxMeta" }, [
+                t("browserMode", " 模式 ") + " ",
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
                   disabled: busy,
-                  checked: (browserDraft.browserHeadless ?? (snapshot?.browser?.headless !== false ? "true" : "false")) === "true",
-                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserHeadless: event.target.checked ? "true" : "false" })),
-                }),
-                t("browserHeadless", " 无头运行（不弹窗口）"),
+                  value: browserDraft.browserMode ?? snapshot?.browser?.mode ?? "headless",
+                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserMode: event.target.value })),
+                }, [
+                  h("option", { key: "h", value: "headless" }, t("browserModeHeadless", "无头（不弹窗口）")),
+                  h("option", { key: "v", value: "headed" }, t("browserModeHeaded", "可见窗口")),
+                  h("option", { key: "e", value: "erp" }, t("browserModeErp", "ERP 操作（可见 + 独立 profile）")),
+                ]),
               ]),
+              h("span", { key: "modenow", className: "dswxMeta" },
+                `${t("browserModeNow", "当前")}: ${snapshot?.browser?.mode ?? "?"}${snapshot?.browser?.visible ? " · 👁 " + t("browserVisible", "可见") : " · " + t("browserInvisible", "无窗口")}`),
               h("button", {
                 key: "save",
                 type: "button",

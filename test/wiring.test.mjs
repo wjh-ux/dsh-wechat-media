@@ -587,6 +587,23 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
+await test("the ERP browser mode is reachable from the card, the command and /state", () => {
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  const browserSource = readFileSync(join(root, "browser.js"), "utf8");
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  assert.match(browserSource, /export const BROWSER_MODES = Object\.freeze\(\{/, "the modes are declared once");
+  assert.match(browserSource, /export function browserModeSettings\(/, "and mapped in one pure function");
+  // Used must mean imported - the v0.38.1 lesson, applied before it bites.
+  assert.match(host, /import \{ BROWSER_MODE_NAMES, browserModeSettings \} from "\.\/browser\.js"/, "the host imports the helpers");
+  assert.match(host, /mode: settings\.mode/, "/state reports the mode");
+  assert.match(host, /visible: settings\.visible/, "and whether a human can see the window");
+  assert.match(commandsSource, /name: "browser"/, "the /browser command exists");
+  assert.match(host, /command\.name === "browser"/, "and the host handles it");
+  assert.match(host, /applyBrowserPrefs\(\{ browserMode: wanted \}\)/, "it writes the same pref the card writes");
+  assert.match(clientSource, /t\("browserModeErp", "ERP 操作/, "the card offers the ERP mode");
+  assert.match(clientSource, /browserDraft\.browserMode/, "through the same draft the other browser fields use");
+});
+
 await test("the Feishu scopes can be copied from the card", () => {
   // Copying a scope list is only useful if it is the *right* list: the app the user pasted from holds ~150
   // scopes, and half of them are access this plugin never exercises. The route serves the derived minimum.

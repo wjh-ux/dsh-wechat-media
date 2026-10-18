@@ -28,6 +28,9 @@ import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
+// lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
+import { BROWSER_MODE_NAMES, browserModeSettings } from "./browser.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
  * cannot hand over an absolute path (a directory input only exposes relative names),
@@ -1653,6 +1656,33 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
+    if (command.name === "browser") {
+      // Three named modes instead of a boolean: "erp" is not "not headless", it is a visible window with its own
+      // profile that survives restarts, because the login to the system under work has to survive them too.
+      const [sub = "status", arg = ""] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (sub === "mode") {
+        const wanted = String(arg ?? "").trim().toLowerCase();
+        if (!BROWSER_MODE_NAMES.includes(wanted)) {
+          await reply(`模式只能是 ${BROWSER_MODE_NAMES.join(" / ")}，收到 ${JSON.stringify(arg)}\n当前：${browserConfig().mode}`);
+          return true;
+        }
+        await applyBrowserPrefs({ browserMode: wanted });
+        noteRoute("/command", { command: "browser", action: "mode", mode: wanted });
+        const now = browserConfig();
+        await reply(`浏览器模式：${now.mode}（${now.visible ? "窗口可见" : "无窗口"}，profile：${now.profileDir}）\n下次打开浏览器时生效。`);
+        return true;
+      }
+      const now = browserConfig();
+      await reply([
+        `浏览器模式：${now.mode}`,
+        `  窗口：${now.visible ? "可见（人能直接看到并接管）" : "不可见（无头）"}`,
+        `  视口：${now.width}×${now.height} · profile：${now.profileDir}`,
+        `  通道：${now.channel} · 端口：${now.port}`,
+        "",
+        "切换：/browser mode headless | headed | erp",
+      ].join("\n"));
+      return true;
+    }
     if (command.name === "office") {
       // The honest status line: which program each capability needs, whether it was found, and where relative
       // paths land. A tool that refuses because the toolchain is missing should never look like a broken
@@ -2758,13 +2788,23 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       return "";
     };
     const savedHeadless = saved.headless;
+    // One stored mode replaces the old boolean; a legacy `headless: false` still means "show me a window".
+    const mode = browserModeSettings({
+      mode: pick(saved.mode, given.mode, process.env.DSH_BROWSER_MODE),
+      profileDir: pick(saved.profileDir, given.profileDir, process.env.DSH_BROWSER_PROFILE),
+      dshHome,
+      savedHeadless,
+    });
     return {
       channel: (pick(saved.channel, given.channel, process.env.DSH_BROWSER_CHANNEL) || "chrome").toLowerCase(),
       port: Number(pick(saved.port, given.port, process.env.DSH_BROWSER_PORT)) || 9222,
-      headless: savedHeadless === true || savedHeadless === false
-        ? savedHeadless
-        : !(given.headless === false || String(process.env.DSH_BROWSER_HEADLESS ?? "").toLowerCase() === "false"),
-      profileDir: pick(saved.profileDir, given.profileDir, process.env.DSH_BROWSER_PROFILE) || join(dshHome, "browser-profile"),
+      mode: mode.mode,
+      headless: mode.headless,
+      visible: mode.visible,
+      keepOpen: mode.keepOpen,
+      width: mode.width,
+      height: mode.height,
+      profileDir: mode.profileDir,
     };
   }
 
@@ -2775,6 +2815,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     browserProfileDir: "profileDir",
   });
   const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless" });
+  // `browserMode` is a string, not a switch: it carries the three named modes, and a boolean cannot say "erp".
+  const BROWSER_PREF_MODES = Object.freeze({ browserMode: "mode" });
 
   /** Apply the browser fields from a request body; a boolean field is read as a boolean, not as the string "false". */
   function browserPrefsPatch(args = {}) {
@@ -2783,6 +2825,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     for (const [field, key] of Object.entries(BROWSER_PREF_FIELDS)) {
       if (args[field] === undefined) continue;
       patch[key] = String(args[field] ?? "").trim();
+      changed.push(key);
+    }
+    for (const [field, key] of Object.entries(BROWSER_PREF_MODES)) {
+      if (args[field] === undefined) continue;
+      const wanted = String(args[field] ?? "").trim().toLowerCase();
+      if (!wanted) continue;
+      if (!BROWSER_MODE_NAMES.includes(wanted)) throw new Error(`browserMode 只能是 ${BROWSER_MODE_NAMES.join(" / ")}，收到 ${wanted}`);
+      patch[key] = wanted;
       changed.push(key);
     }
     for (const [field, key] of Object.entries(BROWSER_PREF_SWITCHES)) {
@@ -2911,7 +2961,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return {
       channel: settings.channel,
       port: settings.port,
+      mode: settings.mode,
       headless: settings.headless,
+      visible: settings.visible,
+      keepOpen: settings.keepOpen,
       profileDir: settings.profileDir,
       sources: { channel: source("channel"), port: source("port"), headless: source("headless"), profileDir: source("profileDir") },
       prefFields: [...Object.keys(BROWSER_PREF_FIELDS), ...Object.keys(BROWSER_PREF_SWITCHES)],
@@ -4956,7 +5009,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // Something already listening on the port is attached to rather than duplicated.
           await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
         } catch {
-          const launched = await mod.browserLaunch({ channel: settings.channel, port: settings.port, headless: settings.headless, profileDir: settings.profileDir });
+          const launched = await mod.browserLaunch({
+        channel: settings.channel,
+        port: settings.port,
+        headless: settings.headless,
+        profileDir: settings.profileDir,
+        width: settings.width,
+        height: settings.height,
+      });
           pid = launched.pid ?? null;
           started = true;
         }

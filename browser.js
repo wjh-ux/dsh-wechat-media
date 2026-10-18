@@ -38,6 +38,46 @@ export const BROWSER_CHANNELS = Object.freeze({
 });
 
 /** The first path of `channel` that exists, or "" - so "not installed" is a fact rather than a guess. */
+/**
+ * How the browser should run, as three named modes rather than a boolean.
+ *
+ * `headless` is the default: nobody is watching, the window would only clutter. `headed` is the same session
+ * with a window. `erp` is the one added for real work in a system the person uses: window on, **its own
+ * persistent profile** (so the ERP login survives restarts), bigger viewport, and no auto-close - the point of
+ * the mode is that a human can watch and take over, which a profile shared with test browsing would spoil.
+ */
+export const BROWSER_MODES = Object.freeze({
+  headless: { headless: true, visible: false, width: 1280, height: 900, keepOpen: false },
+  headed: { headless: false, visible: true, width: 1280, height: 900, keepOpen: true },
+  erp: { headless: false, visible: true, width: 1600, height: 1000, keepOpen: true },
+});
+
+/** The mode names, in the order a panel should offer them. */
+export const BROWSER_MODE_NAMES = Object.freeze(["headless", "headed", "erp"]);
+
+/**
+ * Turn a stored mode into the settings the launcher needs.
+ *
+ * `profileDir` is only overridden for `erp`: that mode exists so a login persists, and letting it share the
+ * scratch profile would make "log in once, work all week" quietly false.
+ */
+export function browserModeSettings({ mode = "headless", profileDir = "", dshHome = ".", savedHeadless = undefined } = {}) {
+  // An explicit legacy `headless: false` means the person wanted a window, which is `headed`.
+  let wanted = String(mode ?? "").trim().toLowerCase();
+  if (!BROWSER_MODES[wanted]) wanted = savedHeadless === false ? "headed" : "headless";
+  const preset = BROWSER_MODES[wanted];
+  const shared = String(profileDir ?? "").trim() || join(dshHome, "browser-profile");
+  return {
+    mode: wanted,
+    headless: preset.headless,
+    visible: preset.visible,
+    keepOpen: preset.keepOpen,
+    width: preset.width,
+    height: preset.height,
+    profileDir: wanted === "erp" ? String(profileDir ?? "").trim() || join(dshHome, "browser-profile-erp") : shared,
+  };
+}
+
 export function browserExecutable(channel = "chrome") {
   const list = BROWSER_CHANNELS[String(channel).toLowerCase()] ?? BROWSER_CHANNELS.chrome;
   for (const path of list) if (existsSync(path)) return path;

@@ -72,6 +72,12 @@ export const COMMANDS = [
     summary: "定时任务：列表、删除、暂停/恢复；command on 才允许定时执行本机命令",
   },
   {
+    name: "browser",
+    aliases: ["浏览器"],
+    usage: "/browser [status|mode headless|headed|erp]",
+    summary: "浏览器模式：headless 无窗口；headed 可见窗口；erp 可见窗口 + 独立持久 profile（登录态保留，适合操作 ERP 时人手接管）",
+  },
+  {
     name: "office",
     aliases: ["文档", "表格", "幻灯片"],
     usage: "/office",
