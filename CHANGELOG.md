@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.41.0
+
+- **`/doctor`: one command that answers "why did that not work?"** It reports, from the plugin's own state, whether the
+  three transports are alive, whether the Office toolchain was found, whether the browser's proxy port is listening,
+  how the scheduled tasks are doing, and whether secrets are still plaintext - each row `✅` or `⚠️` with the one thing
+  to fix. `/dsh-wechat-media/doctor` serves the same as JSON.
+- **Task history + auto-disable.** Every run, failure and skip is appended to `task-history.json` (bounded to 200),
+  `/task log [id]` shows the last runs with duration, `/state.tasks.recent` carries ten for a panel. **Three failures in
+  a row disables the task** and says so in the chat - a broken `prompt` task used to fail silently every day. A skip
+  does not count: the task may be healthy and the machine asleep.
+- **A browser is only reused if it matches the settings.** The plugin asks the running instance for its own command
+  line (`Browser.getBrowserCommandLine`) and compares window visibility, profile directory and proxy before attaching.
+  A mismatch closes it, launches a fresh one, and says `检测到旧配置的浏览器，已关闭并按当前设置重新打开`. If the command
+  line cannot be read it attaches anyway - refusing to use a browser it cannot inspect would break working setups.
+- 30 suites / 533 cases.
+
 ## 0.40.2
 
 - **Fixed: saving the browser proxy wiped the browser mode.** `browserPrefsPatch` returns only the changed keys, and

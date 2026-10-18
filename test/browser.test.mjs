@@ -8,7 +8,7 @@ const {
   browserLaunch, createCdpSession, browserOpen, browserEvaluate, browserText, browserElementCentre,
   browserClick, browserType, browserScreenshot,
   BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
-  browserCloseBrowser, parseProxyAddress, proxyListening,
+  browserCloseBrowser, parseProxyAddress, proxyListening, browserArgsMatch,
 } = await import("../browser.js");
 
 const passed = [];
@@ -359,6 +359,22 @@ await test("the proxy port is probed, and a closed one says why", async () => {
   assert.equal(refused.listening, false);
   assert.match(refused.reason, /ECONNREFUSED/);
   assert.equal((await proxyListening({ host: "", port: 0 })).listening, false, "nothing to probe is not a crash");
+});
+
+await test("a running browser is compared with the settings before it is reused", () => {
+  const running = ["--remote-debugging-port=9222", "--user-data-dir=C:\\Users\\me\\.dsh\\browser-profile", "--proxy-server=127.0.0.1:7897", "--window-size=1600,1000"];
+  // Same settings, different separators and case: still a match, because Windows paths are like that.
+  const same = browserArgsMatch(running, { headless: false, profileDir: "c:/users/me/.dsh/browser-profile", proxy: "127.0.0.1:7897" });
+  assert.equal(same.match, true);
+  // A headless leftover must not be reused when the person asked for a window.
+  assert.equal(browserArgsMatch(["--headless=new", "--user-data-dir=C:\\p"], { headless: false, profileDir: "C:\\p", proxy: "" }).match, false);
+  // A different profile or a missing proxy is a mismatch too.
+  assert.equal(browserArgsMatch(running, { headless: false, profileDir: "C:\\other", proxy: "127.0.0.1:7897" }).match, false);
+  assert.equal(browserArgsMatch(running, { headless: false, profileDir: "C:\\Users\\me\\.dsh\\browser-profile", proxy: "" }).match, false);
+  // The verdict names what it saw, so a log line can explain the restart.
+  const verdict = browserArgsMatch(running, { headless: true, profileDir: "", proxy: "" });
+  assert.equal(verdict.running.headless, false);
+  assert.equal(verdict.wanted.headless, true);
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

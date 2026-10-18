@@ -68,8 +68,14 @@ export const COMMANDS = [
   {
     name: "task",
     aliases: ["定时", "任务"],
-    usage: "/task [list|rm <id>|off <id>|on <id>|command [on|off]]",
+    usage: "/task [list|log [id]|rm <id>|off <id>|on <id>|command [on|off]]",
     summary: "定时任务：列表、删除、暂停/恢复；command on 才允许定时执行本机命令",
+  },
+  {
+    name: "doctor",
+    aliases: ["体检", "自检"],
+    usage: "/doctor",
+    summary: "一键体检：通道、Office 工具链、浏览器与代理、定时任务、密钥加密，逐项告诉你能不能跑、不能跑怎么修",
   },
   {
     name: "browser",

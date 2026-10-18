@@ -380,6 +380,24 @@ export class WechatState {
     };
   }
 
+  /**
+   * Task run history, bounded. One file for all tasks keeps "why did nothing arrive" answerable with a single read,
+   * and `trimHistory` decides how much of it is worth keeping.
+   */
+  async loadTaskHistory() {
+    const file = await readJson(join(this.root, "task-history.json"), []);
+    return Array.isArray(file) ? file : [];
+  }
+
+  async appendTaskHistory(entry, { limit = 200 } = {}) {
+    const list = await this.loadTaskHistory();
+    list.push(entry);
+    const trimmed = list.slice(-Math.max(1, Number(limit) || 200));
+    await this.init();
+    await writeJson(join(this.root, "task-history.json"), trimmed);
+    return trimmed;
+  }
+
   // ── token ledger ──────────────────────────────────────────────────────────
 
   /**

@@ -1656,6 +1656,25 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "retry", value: next, chatId });
       return true;
     }
+    if (command.name === "doctor") {
+      // One command that answers "why did that not work?" from the plugin's own state, because every support
+      // conversation so far has started with a guess about whether a program, a port or a switch was the problem.
+      const report = await doctorReport();
+      const line = (ok, name, detail) => `${ok ? "✅" : "⚠️"} ${name.padEnd(6, " ")} ${detail}`;
+      const rows = [
+        line(report.routes.wechat.ok, "微信", report.routes.wechat.detail),
+        line(report.routes.wecom.ok, "企业微信", report.routes.wecom.detail),
+        line(report.routes.feishu.ok, "飞书", report.routes.feishu.detail),
+        line(report.office.ok, "工具链", report.office.detail),
+        line(report.browser.ok, "浏览器", report.browser.detail),
+        line(report.tasks.ok, "定时", report.tasks.detail),
+        line(report.secrets.ok, "密钥", report.secrets.detail),
+      ];
+      const problems = [report.routes.wechat, report.routes.wecom, report.routes.feishu, report.office, report.browser, report.tasks, report.secrets].filter((row) => !row.ok).length;
+      await reply([`体检（v${report.version}）`, ...rows, "", problems ? `${problems} 项需要注意。` : "全部就绪。"].join("\n"));
+      noteRoute("/command", { command: "doctor", problems });
+      return true;
+    }
     if (command.name === "browser") {
       // Three named modes instead of a boolean: "erp" is not "not headless", it is a visible window with its own
       // profile that survives restarts, because the login to the system under work has to survive them too.
@@ -1750,6 +1769,24 @@ export function apply(ctx, config = {}) {
       // looking at them and switching them off, which is what people do from a chat.
       const [sub = "list", arg = ""] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
       const list = await state.loadTasks();
+      if (sub === "log") {
+        const wanted = String(arg ?? "").trim();
+        const history = await state.loadTaskHistory();
+        const rows = (wanted ? history.filter((entry) => entry.id === wanted) : history).slice(-15).reverse();
+        if (!rows.length) {
+          await reply(wanted ? `任务 ${wanted} 还没有历史记录` : "还没有任何任务历史");
+          return true;
+        }
+        const label = { ok: "✅", failed: "❌", skipped: "⏭" };
+        await reply([
+          `最近 ${rows.length} 次执行${wanted ? `（${wanted}）` : ""}：`,
+          ...rows.map((entry) => `  ${label[entry.outcome] ?? "?"} ${new Date(entry.at).toLocaleString()} · ${entry.id} · ${entry.outcome}${entry.ms ? ` · ${entry.ms}ms` : ""}${entry.detail ? ` · ${String(entry.detail).slice(0, 60)}` : ""}`),
+          "",
+          "连续失败 ${TASK_FAILURE_LIMIT} 次会自动停用任务。".replace("${TASK_FAILURE_LIMIT}", String(TASK_FAILURE_LIMIT)),
+        ].join("\n"));
+        noteRoute("/command", { command: "task", action: "log" });
+        return true;
+      }
       if (sub === "list" || sub === "") {
         await reply(list.length
           ? `${list.length} 个定时任务（本地时间）：\n${list.map((task) => `  ${tasks.describeTask(task)}`).join("\n")}\n\n删除：/task rm <id> · 暂停：/task off <id> · 恢复：/task on <id>`
@@ -2930,6 +2967,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       // Skipped is its own number: "it did not run" and "it failed" are different answers, and a slept
       // machine is the commonest reason for the first.
       skipped: counters.tasksSkipped ?? 0,
+      failureLimit: TASK_FAILURE_LIMIT,
+      recent: (await state.loadTaskHistory()).slice(-10).reverse(),
       graceMinutes: Number.isFinite(gracePref) ? gracePref : tasks.DEFAULT_GRACE_MS / 60_000,
       items: list.map((task) => {
         const next = tasks.nextRunFor(task);
@@ -2959,6 +2998,59 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           payload: String(task.payload ?? "").slice(0, 120),
         };
       }),
+    };
+  }
+
+  /**
+   * Everything `/doctor` reports, as data. The point is to answer "why did that not work?" without a log hunt: each
+   * row is a capability the plugin needs, whether it is there now, and the one thing to do if it is not.
+   */
+  async function doctorReport() {
+    const prefs = await state.loadPrefs();
+    const tasksList = await state.loadTasks();
+    const toolchain = office.resolveToolchain({ prefs });
+    const browser = browserConfig();
+    const secrets = await state.secretsStatus();
+    const history = await state.loadTaskHistory();
+    const accounts = await state.listAccounts().catch(() => []);
+    const wecom = await wecomState().catch(() => ({ bot: { connected: false } }));
+    const feishu = await feishuState().catch(() => ({ configured: false, connection: {} }));
+    const proxyProbe = browser.proxy
+      ? await proxyListening({ host: (() => { try { return new URL(`http://${browser.proxy.replace(/^[a-z0-9]+:\/\//i, "")}`).hostname; } catch { return ""; } })(), port: Number(String(browser.proxy).split(":").pop()) })
+      : { listening: false, reason: "未设置" };
+    return {
+      version: buildInfo().version,
+      routes: {
+        wechat: { ok: accounts.length > 0, detail: accounts.length ? `${accounts.length} 个账号已配对` : "未配对任何微信账号（面板扫码）" },
+        wecom: {
+          ok: wecom?.bot?.connected === true,
+          detail: wecom?.bot?.connected === true
+            ? `长连接已连接${wecom?.bot?.authenticated ? "·已认证" : ""}`
+            : `未连接（${wecom?.botConfigured ? "已配置但没连上" : "未配置"}，面板填 botId/secret）`,
+        },
+        feishu: {
+          ok: feishu?.configured === true && (feishu?.connection?.connected === true || feishu?.webhook === true),
+          detail: feishu?.configured
+            ? `已配置 · ${feishu?.connection?.state ?? "未知"}${feishu?.webhook ? " · webhook" : ""}`
+            : "未配置（面板填 appId/appSecret 或 webhook）",
+        },
+      },
+      office: {
+        ok: Boolean(toolchain.python),
+        detail: toolchain.python ? `Python ✅ · LibreOffice ${toolchain.kit ? "✅" : "❌"}` : "找不到 Python（设 officePython）",
+      },
+      browser: {
+        ok: !browser.proxy || proxyProbe.listening,
+        detail: `模式 ${browser.mode}${browser.proxy ? ` · 代理 ${browser.proxy} ${proxyProbe.listening ? "✅" : `❌ ${proxyProbe.reason}`}` : " · 无代理"}`,
+      },
+      tasks: {
+        ok: true,
+        detail: `${tasksList.length} 条任务 · 历史 ${history.length} 条 · 失败 ${counters.tasksFailed ?? 0} · 跳过 ${counters.tasksSkipped ?? 0}`,
+      },
+      secrets: {
+        ok: secrets.atRest === "dpapi" && secrets.exposed.length === 0,
+        detail: `${secrets.atRest}${secrets.exposed.length ? ` · 明文 ${secrets.exposed.join(", ")}` : " · 无明文"}`,
+      },
     };
   }
 
@@ -4347,6 +4439,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   let schedulerBusy = false;
+  /** Failures in a row before a task is stopped. Three is enough to tell "broken" from "a bad afternoon". */
+  const TASK_FAILURE_LIMIT = 3;
   /**
    * One scheduler tick.
    *
@@ -4379,6 +4473,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             enabled: task.schedule?.kind === "once" ? false : task.enabled !== false,
           };
           await state.saveTasks((await state.loadTasks()).map((item) => (item.id === skipped.id ? skipped : item)));
+          await state.appendTaskHistory({ id: task.id, at: startedAt, outcome: "skipped", detail: skipped.lastResult, ms: 0 });
           counters.tasksSkipped = Number(counters.tasksSkipped ?? 0) + 1;
           ctx.logger?.warn?.("[dsh-wechat-media] task %s missed by %s min, skipped", task.id, late);
           continue;
@@ -4403,6 +4498,23 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return { enabled: false };
           })(),
         };
+        // Remember what happened, so "it stopped arriving" has an answer that is not a guess.
+        const history = await state.appendTaskHistory({
+          id: task.id,
+          at: startedAt,
+          outcome: result === "ok" ? "ok" : "failed",
+          detail: result === "ok" ? "" : String(result).slice(0, 300),
+          ms: Math.max(0, Date.now() - startedAt),
+        });
+        // Three failures in a row means it will not succeed tomorrow either: stop it and say so, rather than
+        // retrying quietly until the end of time.
+        if (result !== "ok" && tasks.consecutiveFailures(history, task.id) >= TASK_FAILURE_LIMIT) {
+          updated.enabled = false;
+          updated.lastResult = `${String(result).slice(0, 200)} · 连续失败 ${TASK_FAILURE_LIMIT} 次，已自动停用`;
+          try {
+            await deliverTo(task, `⚠️ 定时任务 ${task.id} 连续失败 ${TASK_FAILURE_LIMIT} 次，已自动停用。\n最近一次：${String(result).slice(0, 200)}\n恢复：/task on ${task.id}`);
+          } catch { /* the report is best effort; the task is stopped either way */ }
+        }
         const next = (await state.loadTasks()).map((item) => (item.id === updated.id ? updated : item));
         await state.saveTasks(next);
         if (result === "ok") counters.tasksRun = Number(counters.tasksRun ?? 0) + 1;
@@ -5053,9 +5165,29 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         if (browserLive?.session) return { mod, settings, live: browserLive };
         let pid = null;
         let started = false;
+        let replacedStale = false;
         try {
-          // Something already listening on the port is attached to rather than duplicated.
+          // Something already listening on the port is attached to rather than duplicated - but only if it was
+          // started the way the settings now say. A browser left over from an earlier session (headless, no proxy,
+          // another profile) made every new setting look like it did nothing.
           await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
+          // Read how the running browser was started. If that fails, attach anyway: refusing to use a browser we
+          // cannot inspect would break working setups, and closing one blindly would be worse.
+          let runningArgs = null;
+          try {
+            runningArgs = (await mod.browserRunningArgs({ port: settings.port, timeoutMs: 4000 })).args;
+          } catch {
+            runningArgs = null;
+          }
+          if (runningArgs) {
+            const verdict = mod.browserArgsMatch(runningArgs, settings);
+            if (!verdict.match) {
+              ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings, restarting it", settings.port);
+              await mod.browserCloseBrowser({ port: settings.port });
+              replacedStale = true;
+              throw new Error("stale browser closed"); // the outer catch launches a fresh one
+            }
+          }
         } catch {
           const launched = await mod.browserLaunch({
         channel: settings.channel,
@@ -5073,7 +5205,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const session = mod.createCdpSession(page.webSocketDebuggerUrl);
         await session.ready;
         await session.send("Page.enable");
-        browserLive = { session, port: settings.port, pid, started, url: String(page.url ?? "") };
+        browserLive = { session, port: settings.port, pid, started, replacedStale, url: String(page.url ?? "") };
         return { mod, settings, live: browserLive };
       }
 
@@ -5107,7 +5239,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!url) throw new Error("需要一个 url");
           const opened = await mod.browserOpen(live.session, url);
           live.url = opened.url;
-          return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${live.started ? "" : "（接管了端口 " + live.port + " 上已开的浏览器）"}`;
+          const note = live.started
+            ? (live.replacedStale ? "（检测到旧配置的浏览器，已关闭并按当前设置重新打开）" : "")
+            : `（接管了端口 ${live.port} 上已开的浏览器，设置一致）`;
+          return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${note}`;
         },
       );
 
@@ -6072,6 +6207,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
           const payload = feishuScopePayload();
           json(res, 200, { ok: true, ...payload });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/doctor",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          try {
+            json(res, 200, { ok: true, doctor: await doctorReport() });
+          } catch (error) {
+            json(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
         },
       },
       {

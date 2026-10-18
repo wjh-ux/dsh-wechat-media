@@ -601,6 +601,34 @@ await test("a partial block patch is merged, a complete one is written as-is", (
   assert.match(host, /await state\.savePrefs\(\{ tavily: result\.patch \}\);/, "so does tavily");
 });
 
+await test("the reliability trio is wired: doctor, task log, stale-browser check", () => {
+  const commandsSource = readFileSync(join(root, "commands.js"), "utf8");
+  const browserSource = readFileSync(join(root, "browser.js"), "utf8");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  // 1) doctor: a command, a route, and a report that reuses what /state already knows.
+  assert.match(commandsSource, /name: "doctor"/, "the /doctor command exists");
+  assert.match(host, /command\.name === "doctor"/, "and the host handles it");
+  assert.match(host, /async function doctorReport\(\)/, "the report is one function");
+  assert.match(host, /path: "\/dsh-wechat-media\/doctor"/, "a route exposes it as JSON");
+  for (const section of ["routes.wechat", "routes.wecom", "routes.feishu", "office", "browser", "tasks", "secrets"]) {
+    assert.match(host, new RegExp(section.replace(".", "\\.")), `the report covers ${section}`);
+  }
+  // 2) task history: recorded on every outcome, bounded, and the streak stops a hopeless task.
+  assert.match(stateSource, /async loadTaskHistory\(\)/, "history is persisted");
+  assert.match(stateSource, /async appendTaskHistory\(entry/, "and appended");
+  assert.match(host, /await state\.appendTaskHistory\(\{ id: task\.id, at: startedAt, outcome: "skipped"/, "skips are recorded");
+  assert.match(host, /tasks\.consecutiveFailures\(history, task\.id\) >= TASK_FAILURE_LIMIT/, "a streak stops the task");
+  assert.match(host, /已自动停用/, "and says so in the chat");
+  assert.match(host, /if \(sub === "log"\)/, "/task log reads it");
+  assert.match(host, /recent: \(await state\.loadTaskHistory\(\)\)/, "/state carries the recent entries");
+  // 3) stale browser: compared by its own command line, before reuse.
+  assert.match(browserSource, /export async function browserRunningArgs\(/, "the command line can be read");
+  assert.match(browserSource, /Browser\.getBrowserCommandLine/, "through the CDP call that answers it");
+  assert.match(browserSource, /export function browserArgsMatch\(/, "and compared with the settings");
+  assert.match(host, /if \(!verdict\.match\)/, "a mismatch is acted on");
+  assert.match(host, /replacedStale/, "the tool reports that it restarted one");
+});
+
 await test("the browser is closed by protocol, not by a pid that may already be dead", () => {
   const browserSource = readFileSync(join(root, "browser.js"), "utf8");
   const clientSource = readFileSync(join(root, "client.js"), "utf8");

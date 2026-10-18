@@ -387,6 +387,31 @@ export function transportOf(accountId) {
 }
 
 /**
+ * How many times in a row a task has failed, from its history (newest first or oldest first - both work).
+ *
+ * Used to stop a task that can never succeed from retrying forever: a `prompt` task whose chat was deleted fails every
+ * day, silently, and the person finds out when they notice nothing ever arrives.
+ */
+export function consecutiveFailures(entries, id) {
+  const relevant = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && entry.id === id)
+    .sort((a, b) => Number(b.at ?? 0) - Number(a.at ?? 0));
+  let count = 0;
+  for (const entry of relevant) {
+    if (entry.outcome === "ok") break;
+    if (entry.outcome === "failed") count += 1;
+    else break; // skipped/missed breaks the streak: it is not evidence the task is broken
+  }
+  return count;
+}
+
+/** The history entries to keep: newest `limit` for one task, or the whole log capped. */
+export function trimHistory(entries, { limit = 200 } = {}) {
+  const list = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  return list.slice(-Math.max(1, Number(limit) || 200));
+}
+
+/**
  * The most recently used chat in a `routes.json` map, or undefined when there is none.
  *
  * `routes.json` is written on every inbound message and survives restarts, while `lastInbound` is memory

@@ -20,6 +20,8 @@ import {
   nextRunAt,
   nextRunFor,
   rearmOnce,
+  consecutiveFailures,
+  trimHistory,
   classifyOccurrence,
   occurrenceAt,
   DEFAULT_GRACE_MS,
@@ -323,6 +325,35 @@ test("a slept machine skips stale occurrences instead of dumping them", () => {
   assert.equal(occurrenceAt(once), nine);
   // An unreadable schedule is idle, never a crash in the tick.
   assert.equal(classifyOccurrence({ id: "x", enabled: true, schedule: { kind: "nope" } }).verdict, "idle");
+});
+
+test("a failure streak is counted from history, and a skip breaks it", () => {
+  const at = (n) => 1_700_000_000_000 + n * 1000;
+  const entries = [
+    { id: "a", at: at(1), outcome: "ok" },
+    { id: "a", at: at(2), outcome: "failed" },
+    { id: "a", at: at(3), outcome: "failed" },
+    { id: "b", at: at(4), outcome: "failed" },
+    { id: "a", at: at(5), outcome: "failed" },
+  ];
+  assert.equal(consecutiveFailures(entries, "a"), 3, "three in a row, newest last");
+  assert.equal(consecutiveFailures(entries, "b"), 1, "other tasks do not count");
+  assert.equal(consecutiveFailures(entries, "c"), 0, "an unknown task has no streak");
+  // A skip is not a failure: the task may be perfectly healthy and the machine asleep.
+  assert.equal(consecutiveFailures([{ id: "a", at: at(1), outcome: "ok" }, { id: "a", at: at(2), outcome: "skipped" }], "a"), 0);
+  // Newest-first input must give the same answer as oldest-first.
+  assert.equal(consecutiveFailures([...entries].reverse(), "a"), 3);
+  // An ok after the streak resets it.
+  assert.equal(consecutiveFailures([{ id: "a", at: at(1), outcome: "failed" }, { id: "a", at: at(2), outcome: "ok" }, { id: "a", at: at(3), outcome: "failed" }], "a"), 1);
+});
+
+test("history is bounded, and trimming keeps the newest", () => {
+  const entries = Array.from({ length: 10 }, (_, index) => ({ id: "x", at: index, outcome: "ok" }));
+  const kept = trimHistory(entries, { limit: 3 });
+  assert.equal(kept.length, 3);
+  assert.deepEqual(kept.map((entry) => entry.at), [7, 8, 9], "the newest three");
+  assert.deepEqual(trimHistory(null), [], "a missing file is an empty history, not a crash");
+  assert.equal(trimHistory(entries, { limit: 0 }).length, 10, "a nonsense limit is floored, not honoured as zero");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

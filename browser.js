@@ -192,6 +192,57 @@ export async function browserCloseBrowser({ port = 9222, fetchImpl = fetch, webS
   return { closed: true };
 }
 
+/**
+ * The command line of the browser that is already listening, straight from CDP.
+ *
+ * `Browser.getBrowserCommandLine` is the only reliable way to know how the *running* instance was started - the pid,
+ * the profile and the proxy are all in there, and a process listing cannot be trusted to answer it portably. This is
+ * what lets the plugin notice that the browser on the port predates the settings the person just changed.
+ */
+export async function browserRunningArgs({ port = 9222, fetchImpl = fetch, webSocketImpl = globalThis.WebSocket, timeoutMs = 8000 } = {}) {
+  const version = await browserVersion({ port, fetchImpl, timeoutMs });
+  const url = String(version?.webSocketDebuggerUrl ?? "").trim();
+  if (!url) throw new Error(`the browser on port ${port} has no browser-level webSocketDebuggerUrl`);
+  const session = createCdpSession(url, { webSocketImpl, timeoutMs });
+  try {
+    await session.ready;
+    const answer = await session.send("Browser.getBrowserCommandLine");
+    return { args: Array.isArray(answer?.arguments) ? answer.arguments.map(String) : [] };
+  } finally {
+    try { session.close(); } catch { /* the socket usually closes itself */ }
+  }
+}
+
+/**
+ * Does the running browser match the settings the person wants now?
+ *
+ * Only the three things that change what a person sees are compared: window visibility (`--headless`), the profile
+ * directory, and the proxy. Ports are the same by definition (we found it by port), and the channel is implied.
+ */
+export function browserArgsMatch(args, { headless = true, profileDir = "", proxy = "" } = {}) {
+  const list = Array.isArray(args) ? args : [];
+  const value = (prefix) => {
+    const hit = list.find((arg) => String(arg).startsWith(prefix));
+    return hit === undefined ? "" : String(hit).slice(prefix.length).replace(/^"|"$/g, "");
+  };
+  const runningHeadless = list.some((arg) => String(arg).startsWith("--headless"));
+  const runningProfile = value("--user-data-dir=");
+  const runningProxy = value("--proxy-server=");
+  const wantedProxy = String(proxy ?? "").trim();
+  return {
+    match: runningHeadless === Boolean(headless)
+      && (!profileDir || !runningProfile || comparablePath(runningProfile) === comparablePath(profileDir))
+      && runningProxy === wantedProxy,
+    running: { headless: runningHeadless, profileDir: runningProfile, proxy: runningProxy },
+    wanted: { headless: Boolean(headless), profileDir, proxy: wantedProxy },
+  };
+}
+
+/** Windows paths are case-insensitive and separator-agnostic; comparing them raw reports false mismatches. */
+function comparablePath(value) {
+  return String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 /** The open targets (tabs, extensions, workers). */
 export async function browserTargets({ port = 9222, fetchImpl = fetch, timeoutMs = 4000 } = {}) {
   const response = await fetchImpl(`${cdpBase(port)}/json/list`, signalOption(timeoutMs));
