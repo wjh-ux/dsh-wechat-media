@@ -506,9 +506,12 @@ export async function browserOpen(session, url, { waitMs = 20000 } = {}) {
   const wanted = String(url ?? "").trim();
   if (!wanted) throw new Error("opening a page needs a url");
   if (!/^https?:\/\//i.test(wanted)) throw new Error(`a page url must start with http:// or https:// (got "${wanted.slice(0, 60)}")`);
-  const loaded = session.once("Page.loadEventFired", waitMs);
+  // The catch goes on **at creation**, not after the next await. When `Page.navigate` rejects first (a timeout is
+  // exactly that), the load waiter is never reached and its 20-second rejection becomes an unhandled promise -
+  // which DSH escalates to a fatal load failure and kills the whole app. Measured: a slow page took the GUI down.
+  const loaded = session.once("Page.loadEventFired", waitMs).catch(() => undefined);
   const navigated = await session.send("Page.navigate", { url: wanted });
-  await loaded.catch(() => undefined); // a page that never fires load is still readable
+  await loaded; // a page that never fires load is still readable
   const title = await browserEvaluate(session, "document.title");
   return { url: wanted, title: String(title ?? ""), frameId: navigated?.frameId ?? "" };
 }

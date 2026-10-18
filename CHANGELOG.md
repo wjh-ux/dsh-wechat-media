@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.43.4
+
+- **CRITICAL: a browser timeout could take the whole app down.** `browserOpen` created its `Page.loadEventFired` waiter
+  **before** awaiting `Page.navigate`, and only attached a `.catch` afterwards. When the navigation timed out first (a
+  slow page under a proxy), the waiter was never reached - so its own 20-second rejection became an **unhandled promise
+  rejection**, which DSH escalates to `fatal load failure` and closes the GUI. The catch is now attached at creation, and
+  a behavioural test drives exactly that order (navigate rejects, waiter rejects later) and asserts zero unhandled
+  rejections.
+- Found in production: `browser_open 失败：CDP Page.navigate timed out` followed by the app's fatal error screen quoting
+  `browser.js:491`.
+- 30 suites / 540 cases.
+
 ## 0.43.3
 
 - **Fixed the deadlock 0.43.2 could not break.** A window started before `--enable-automation` exists cannot report its

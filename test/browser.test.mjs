@@ -43,6 +43,28 @@ await test("the executable lookup reports absence instead of guessing", () => {
   assert.equal(cdpBase(""), "http://127.0.0.1:9222", "a blank port falls back rather than producing a broken url");
 });
 
+await test("a timed-out navigation leaves no unhandled rejection (it used to kill the app)", async () => {
+  // Measured in production: `browser_open` timed out, and 20 seconds later the load waiter rejected with nobody
+  // listening - DSH treats an unhandled rejection as a fatal load failure and closed the GUI. The order matters:
+  // navigate rejects *first*, so a catch attached after that await never runs.
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(String(error?.message ?? error));
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const session = {
+      once: (event, ms) => new Promise((_, reject) => setTimeout(() => reject(new Error(`waiting for ${event} timed out`)), ms)),
+      send: async () => { throw new Error("CDP Page.navigate timed out after 15ms"); },
+      close: () => {},
+    };
+    await assert.rejects(() => browserOpen(session, "https://example.com", { waitMs: 40 }), /Page\.navigate timed out/);
+    // Wait past the waiter's own deadline so its rejection has had every chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(unhandled, [], "the waiter's rejection must be consumed at creation");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 await test("the launch enables automation, without which Chrome refuses to report its own command line", () => {
   // Measured: `Browser.getBrowserCommandLine` answers `-32000 Command line not returned because
   // --enable-automation not set`. Without the flag the stale-browser check could never run, so it fell back to
