@@ -1,6 +1,6 @@
 {
   "name": "dsh-wechat-media",
-  "version": "0.44.0",
+  "version": "0.44.1",
   "private": false,
   "type": "module",
   "description": "Personal WeChat, WeCom and Feishu (飞书) for DeepSeek Harness (dsh): QR-code login over Tencent's iLink channel, one DSH conversation per contact or group, two-way text, image, video, document and archive transfer, and Feishu bots (custom webhook and app)",

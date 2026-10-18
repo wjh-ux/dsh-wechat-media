@@ -46,6 +46,21 @@ async function test(name, fn) {
 }
 
 const settle = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Wait until a condition holds, or give up after `ms`.
+ *
+ * A fixed `settle()` is a bet that the work finishes in 40ms - true on a developer machine and sometimes false
+ * on a loaded CI runner, where it produced `exactly one turn was queued: 0 !== 1` once and never reproduced.
+ * Waiting for the thing itself is both faster when it is quick and honest when it is not.
+ */
+const until = async (predicate, ms = 4000) => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (predicate()) return true;
+    if (Date.now() > deadline) return false;
+    await settle(20);
+  }
+};
 
 // -----------------------------------------------------------------------------------------------------------
 // A fake socket: records what was sent, and lets the test push frames in.
@@ -421,7 +436,7 @@ await test("a text message becomes a turn and its answer goes back as a reply", 
     assert.equal(JSON.parse(String(handshakeCall.body)).AppID, "cli_drive");
 
     socket.deliver(messageEvent({ content: { text: "帮我总结一下" } }));
-    await settle();
+    await until(() => app.queued.length >= 1);
 
     assert.equal(app.queued.length, 1, "exactly one turn was queued");
     const prompt = app.queued[0].content[0].text;

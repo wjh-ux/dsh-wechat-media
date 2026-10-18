@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.44.1
+
+- **Fixed a flaky test: a fixed `settle(40)` sleep where the inbound pipeline is asynchronous.** It failed once on a
+  loaded CI runner (`exactly one turn was queued: 0 !== 1`) and never reproduced locally, because 40 ms is enough on an
+  idle machine and not always enough on a busy one. The test now waits **for the condition** (up to 4 s), which is
+  faster when the work is quick and honest when it is not.
+- No production code changed. Eight consecutive runs of that suite are clean.
+- 30 suites / 540 cases.
+
 ## 0.44.0
 
 - **Fixed: the PAC never loaded, because Chrome will not read a `file://` PAC.** Measured twice: a PAC containing
