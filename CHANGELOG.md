@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.44.3
+
+- **Fixed: the stale browser was replaced over and over.** Closing is asynchronous - Chrome keeps answering port 9222
+  for a moment - so launching immediately after the close attached to the **dying** window, which then looked stale
+  again on the next open. Same message, same difference, forever. A replacement now waits for the port to stop
+  answering (up to 8 s) before starting the new browser.
+- The diagnostic from 0.44.2 is what made this visible: `代理 …:47718 → 期望 …:60212` repeated after a replacement that
+  had actually succeeded, which pointed at the timing rather than the comparison.
+- 30 suites / 540 cases.
+
 ## 0.44.2
 
 - **A mismatch now says what differs.** `检测到旧配置的浏览器，已关闭并按当前设置重新打开` was true but useless: it appeared on

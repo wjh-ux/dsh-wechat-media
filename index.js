@@ -3270,6 +3270,23 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return text.length > 8000 ? `${text.slice(0, 8000)}\n…（已截断，共 ${text.length} 字符）` : text;
   }
 
+  /**
+   * Wait until nothing answers the debugging port (or give up after `ms`), so a launch cannot attach to a browser that
+   * is still exiting. Returns true when the port went quiet in time.
+   */
+  async function waitForPortFree(port, ms = 8000) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      try {
+        await fetch(`http://127.0.0.1:${Number(port)}/json/version`, { signal: AbortSignal.timeout(700) });
+      } catch {
+        return true; // nothing answered: the port is free
+      }
+      if (Date.now() > deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
   /** One line naming what disagrees between the running browser and the settings. */
   function diffSummary(verdict) {
     const parts = [];
@@ -5405,6 +5422,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               staleReason = diffSummary(verdict);
               ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings (%s), restarting it", settings.port, staleReason);
               await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
+              // Chrome takes a moment to release the port. Launching immediately meant the next request attached to
+              // the window that was still dying - the same stale browser, reported as stale again on every open.
+              await waitForPortFree(settings.port);
               replacedStale = true;
               throw new Error(`stale browser closed: ${staleReason}`);
             }

@@ -671,6 +671,9 @@ await test("the reliability trio is wired: doctor, task log, stale-browser check
   // it. What must be true instead: a real mismatch says what differs.
   assert.match(host, /runningArgs && runningArgs\.length/, "an unreadable command line attaches rather than rebuilds");
   assert.match(host, /function diffSummary\(verdict\)/, "a mismatch names the difference");
+  // Closing is asynchronous: launching before the port is free attached to the dying window, which then looked
+  // stale again on the next open - the same message, forever.
+  assert.match(host, /async function waitForPortFree\(port/, "a replacement waits for the port to go quiet");
   assert.match(host, /staleReason/, "and the tool message carries it");
 });
 
