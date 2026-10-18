@@ -359,6 +359,25 @@ await test("the proxy port is probed, and a closed one says why", async () => {
   assert.equal(refused.listening, false);
   assert.match(refused.reason, /ECONNREFUSED/);
   assert.equal((await proxyListening({ host: "", port: 0 })).listening, false, "nothing to probe is not a crash");
+  // Clash listens on 127.0.0.1 only, while `localhost` can resolve to ::1 and be refused. Probing one address
+  // reported "❌ ECONNREFUSED" for a proxy that works, which is the most misleading answer available.
+  const perHost = (host) => () => {
+    const socket = new EventEmitter();
+    socket.setTimeout = () => {};
+    socket.destroy = () => {};
+    setTimeout(() => {
+      // The real shape: `localhost` refuses (Clash is IPv4-only), 127.0.0.1 answers.
+      if (host === "127.0.0.1") socket.emit("connect");
+      else socket.emit("error", { code: "ECONNREFUSED" });
+    }, 0);
+    return socket;
+  };
+  const fallback = await proxyListening({ host: "localhost", port: 7897, connectImpl: (options) => perHost(options.host)() });
+  assert.equal(fallback.listening, true, "another address answering is still a working proxy");
+  assert.equal(fallback.host, "127.0.0.1", "and the answer names the address that answered");
+  const dead = await proxyListening({ host: "127.0.0.1", port: 7897, connectImpl: () => perHost("other")() });
+  assert.equal(dead.listening, false, "nothing anywhere means not listening");
+  assert.equal(dead.attempts.length >= 2, true, "and every address was tried");
 });
 
 await test("a running browser is compared with the settings before it is reused", () => {

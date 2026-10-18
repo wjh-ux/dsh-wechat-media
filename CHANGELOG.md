@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.41.1
+
+- **Fixed: `/doctor` reported `❌ ECONNREFUSED` for a proxy that works.** Clash Verge listens on `127.0.0.1` only; a
+  probe that resolves `localhost` to `::1` is refused, and the row said the proxy was down while `--proxy-server=127.0.0.1:7897`
+  was loading pages fine. The probe now tries the configured address, then `127.0.0.1`, then `localhost`, and names the
+  one that answered: `✅ （127.0.0.1 应答）`.
+- Every attempt is recorded, so a real failure still shows which addresses were tried and why each refused.
+- 30 suites / 534 cases.
+
 ## 0.41.0
 
 - **`/doctor`: one command that answers "why did that not work?"** It reports, from the plugin's own state, whether the

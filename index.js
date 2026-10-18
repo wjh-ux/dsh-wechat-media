@@ -3016,7 +3016,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const wecom = await wecomState().catch(() => ({ bot: { connected: false } }));
     const feishu = await feishuState().catch(() => ({ configured: false, connection: {} }));
     const proxyProbe = browser.proxy
-      ? await proxyListening({ host: (() => { try { return new URL(`http://${browser.proxy.replace(/^[a-z0-9]+:\/\//i, "")}`).hostname; } catch { return ""; } })(), port: Number(String(browser.proxy).split(":").pop()) })
+      ? await proxyListening({ host: hostOf(browser.proxy), port: Number(String(browser.proxy).split(":").pop()) })
       : { listening: false, reason: "未设置" };
     return {
       version: buildInfo().version,
@@ -3041,7 +3041,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       },
       browser: {
         ok: !browser.proxy || proxyProbe.listening,
-        detail: `模式 ${browser.mode}${browser.proxy ? ` · 代理 ${browser.proxy} ${proxyProbe.listening ? "✅" : `❌ ${proxyProbe.reason}`}` : " · 无代理"}`,
+        detail: `模式 ${browser.mode}${browser.proxy
+          ? ` · 代理 ${browser.proxy} ${proxyProbe.listening
+            ? `✅${proxyProbe.host && proxyProbe.host !== hostOf(browser.proxy) ? `（${proxyProbe.host} 应答）` : ""}`
+            : `❌ ${proxyProbe.reason}`}`
+          : " · 无代理"}`,
       },
       tasks: {
         ok: true,
@@ -3089,6 +3093,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     }
     const text = lines.join("\n");
     return text.length > 8000 ? `${text.slice(0, 8000)}\n…（已截断，共 ${text.length} 字符）` : text;
+  }
+
+  /** The host part of a normalised proxy (`host:port` or `scheme://host:port`), for a doctor comparison. */
+  function hostOf(proxy) {
+    try {
+      return new URL(`http://${String(proxy ?? "").replace(/^[a-z0-9]+:\/\//i, "")}`).hostname;
+    } catch {
+      return "";
+    }
   }
 
   /** What a reader may know about the browser settings. */

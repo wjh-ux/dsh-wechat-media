@@ -119,15 +119,36 @@ export async function proxyListening({ host = "127.0.0.1", port, timeoutMs = 120
   const number = Number(port);
   if (!host || !Number.isInteger(number) || number <= 0) return { listening: false, reason: "没有可探测的地址" };
   const connect = connectImpl ?? (await import("node:net")).connect;
+  // A local proxy frequently listens on one family only: Clash's mixed port is 127.0.0.1, while `localhost` may
+  // resolve to ::1 first and be refused. Reporting "❌ ECONNREFUSED" for a working proxy is the worst answer, so
+  // every plausible address for the same port is tried and the one that answered is named.
+  const candidates = [...new Set([host, "127.0.0.1", "localhost"].filter(Boolean))];
+  const attempts = [];
+  for (const candidate of candidates) {
+    const verdict = await probeOne(connect, candidate, number, timeoutMs);
+    attempts.push({ host: candidate, ...verdict });
+    if (verdict.listening) return { listening: true, host: candidate, reason: "", attempts };
+  }
+  return { listening: false, host: "", reason: attempts[0]?.reason ?? "连接被拒绝", attempts };
+}
+
+/** One address, one attempt. Resolves either way; the socket is always destroyed. */
+function probeOne(connect, host, port, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
+    let socket;
     const done = (listening, reason) => {
       if (settled) return;
       settled = true;
-      try { socket.destroy(); } catch { /* already gone */ }
+      try { socket?.destroy?.(); } catch { /* already gone */ }
       resolve({ listening, reason });
     };
-    const socket = connect({ host, port: number });
+    try {
+      socket = connect({ host, port });
+    } catch (error) {
+      resolve({ listening: false, reason: String(error?.code ?? error?.message ?? error) });
+      return;
+    }
     socket.setTimeout?.(Number(timeoutMs) || 1200);
     socket.once?.("connect", () => done(true, ""));
     socket.once?.("timeout", () => done(false, "连接超时"));

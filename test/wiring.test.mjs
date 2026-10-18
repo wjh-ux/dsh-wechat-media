@@ -664,6 +664,9 @@ await test("the ERP browser mode is reachable from the card, the command and /st
   assert.match(browserSource, /--proxy-server=/, "the launcher passes it to Chrome");
   assert.match(host, /command\.args \?\? ""\)\.trim\(\)\.replace\(\/\^proxy/, "the /browser proxy subcommand exists");
   assert.match(clientSource, /browserDraft\.browserProxy/, "the card can set it");
+  // One refused address is not a dead proxy: Clash listens on 127.0.0.1 while `localhost` may be ::1.
+  assert.match(browserSource, /const candidates = \[\.\.\.new Set\(\[host, "127\.0\.0\.1", "localhost"\]/, "the probe tries every address");
+  assert.match(browserSource, /return \{ listening: true, host: candidate/, "and names the one that answered");
   // Declared is not forwarded. v0.39.0 added the mode to `browserPrefsPatch` and forgot the two lists that
   // decide which body fields reach it - so the card's select saved nothing and answered "无变化" cheerfully.
   assert.match(host, /Object\.keys\(\{ \.\.\.BROWSER_PREF_FIELDS, \.\.\.BROWSER_PREF_SWITCHES, \.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode field");
