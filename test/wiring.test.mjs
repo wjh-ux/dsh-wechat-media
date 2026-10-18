@@ -587,6 +587,20 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
+await test("a partial block patch is merged, a complete one is written as-is", () => {
+  // `savePrefs` merges at the top level, so `savePrefs({ browser: patch })` replaced the whole block: setting the
+  // proxy wiped `mode: erp`. The browser patch is partial, so it must be merged. The Feishu and Tavily patches are
+  // complete on purpose - they delete cleared keys - and merging those would resurrect a credential.
+  assert.match(host, /async function saveBrowserPrefs\(patch\)/, "the browser has a merging writer");
+  assert.match(host, /const current = prefs\?\.browser/, "which reads what is already saved");
+  assert.match(host, /browser: \{ \.\.\.current, \.\.\.patch \}/, "and spreads it rather than replacing");
+  assert.match(host, /await saveBrowserPrefs\(result\.patch\)/, "the browser save uses it");
+  assert.doesNotMatch(host, /await state\.savePrefs\(\{ browser: result\.patch \}\)/, "and no longer replaces the block");
+  // Feishu and Tavily stay as they were: their patch already carries every key, including deletions.
+  assert.match(host, /await state\.savePrefs\(\{ feishu: result\.patch \}\);/, "feishu writes its complete block");
+  assert.match(host, /await state\.savePrefs\(\{ tavily: result\.patch \}\);/, "so does tavily");
+});
+
 await test("the browser is closed by protocol, not by a pid that may already be dead", () => {
   const browserSource = readFileSync(join(root, "browser.js"), "utf8");
   const clientSource = readFileSync(join(root, "client.js"), "utf8");

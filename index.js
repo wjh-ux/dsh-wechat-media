@@ -2785,6 +2785,21 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return { changed: result.changed, tavily: tavilyState() };
   }
 
+  /**
+   * Save the browser block, merged with what is already there.
+   *
+   * `browserPrefsPatch` returns **only the changed keys**, while `savePrefs` merges at the top level - so
+   * `savePrefs({ browser: patch })` replaced the whole block and setting the proxy wiped `mode: erp`. The Feishu and
+   * Tavily patches are a different shape on purpose: they start from the saved block and delete cleared keys, so
+   * merging *those* would resurrect a credential someone just cleared. Partial patch, merge here; complete patch,
+   * write as-is.
+   */
+  async function saveBrowserPrefs(patch) {
+    const prefs = await state.loadPrefs();
+    const current = prefs?.browser && typeof prefs.browser === "object" ? prefs.browser : {};
+    return state.savePrefs({ browser: { ...current, ...patch } });
+  }
+
   /** The browser settings saved in prefs, cached the same way the others are. */
   let browserSavedPrefs = {};
 
@@ -3008,7 +3023,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   async function applyBrowserPrefs(args = {}) {
     const result = browserPrefsPatch(args);
     if (!result.changed.length) return { changed: [], browser: browserState() };
-    await state.savePrefs({ browser: result.patch });
+    await saveBrowserPrefs(result.patch);
     await refreshBrowserSavedPrefs();
     return { changed: result.changed, browser: browserState() };
   }

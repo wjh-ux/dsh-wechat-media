@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.40.2
+
+- **Fixed: saving the browser proxy wiped the browser mode.** `browserPrefsPatch` returns only the changed keys, and
+  `savePrefs` merges at the top level - so `savePrefs({ browser: patch })` replaced the whole block. Setting
+  `127.0.0.1:7897` therefore dropped `mode: erp`, and the next launch silently opened a headless window.
+- The browser save now merges over the saved block (`saveBrowserPrefs`). **Feishu and Tavily deliberately do not**:
+  their patches are built from the saved block and delete cleared keys, so merging those would resurrect a credential
+  someone just cleared - which an existing test caught when the first version of this fix was too wide.
+- Guard: the merge for the browser, and the "write the complete block as-is" shape for the other two, with the reason.
+- 30 suites / 529 cases.
+
 ## 0.40.1
 
 - **Documentation repair**: the 0.40.0 changelog entry never made it into the file (a quoting accident in the release
