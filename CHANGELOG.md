@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.43.3
+
+- **Fixed the deadlock 0.43.2 could not break.** A window started before `--enable-automation` exists cannot report its
+  own command line, so the check had nothing to compare and fell back to attaching - which is exactly the old window
+  that ignores the settings. "Cannot inspect" is now treated as **not a match**: the first open after an upgrade closes
+  that window once and launches a fresh one, and every launch from then on is inspectable.
+- The fallback is still deliberate and narrower than "never trust anything": a browser that *can* report its arguments
+  and agrees with the settings is reused, so no restart loop.
+- 30 suites / 539 cases.
+
 ## 0.43.2
 
 - **Fixed: the stale-browser check could never run.** Chrome answers `Browser.getBrowserCommandLine` with

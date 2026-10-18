@@ -660,6 +660,9 @@ await test("the reliability trio is wired: doctor, task log, stale-browser check
   assert.match(browserSource, /export function browserArgsMatch\(/, "and compared with the settings");
   assert.match(host, /if \(!verdict\.match\)/, "a mismatch is acted on");
   assert.match(host, /replacedStale/, "the tool reports that it restarted one");
+  // A browser launched before `--enable-automation` cannot report its args, so it can never be verified. One
+  // restart is the only way out of that deadlock, and it is the honest reading of "cannot inspect".
+  assert.match(host, /runningArgs\.length === 0/, "an unreadable command line is treated as a mismatch");
 });
 
 await test("the browser is closed by protocol, not by a pid that may already be dead", () => {

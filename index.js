@@ -5329,13 +5329,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // started the way the settings now say. A browser left over from an earlier session (headless, no proxy,
           // another profile) made every new setting look like it did nothing.
           await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
-          // Read how the running browser was started. If that fails, attach anyway: refusing to use a browser we
-          // cannot inspect would break working setups, and closing one blindly would be worse.
+          // Read how the running browser was started. If that fails, the browser predates `--enable-automation`
+          // (Chrome refuses to answer without it), which means it was started by an older build and cannot be
+          // verified against the settings on screen. "Cannot inspect" is therefore treated as "not a match": the
+          // first open after an upgrade replaces the window once, and every launch from then on is inspectable.
           let runningArgs = null;
           try {
             runningArgs = (await mod.browserRunningArgs({ port: settings.port, timeoutMs: 4000 })).args;
-          } catch {
-            runningArgs = null;
+          } catch (error) {
+            ctx.logger?.info?.("[dsh-wechat-media] running browser cannot report its command line (%s); replacing it", String(error?.message ?? error));
+            runningArgs = [];
+          }
+          if (runningArgs && runningArgs.length === 0) {
+            // Closed below through the same path a mismatch takes: one restart, then the window is inspectable.
+            await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
+            replacedStale = true;
+            throw new Error("unverifiable browser replaced");
           }
           if (runningArgs) {
             // The PAC is part of the identity now: a browser started with a host list must be compared with that
