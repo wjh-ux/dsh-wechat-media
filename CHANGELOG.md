@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.40.1
+
+- **Documentation repair**: the 0.40.0 changelog entry never made it into the file (a quoting accident in the release
+  script exited before writing it), so the release notes described work the changelog did not. It is written below, in
+  its own section, rather than folded into this one - two releases happened and the history says so.
+
+## 0.40.0
+
+- **Browser proxy: `127.0.0.1:7897` and friends.** Set it on the card, with `/browser proxy 127.0.0.1:7897`, or via
+  `DSH_BROWSER_PROXY`; `/browser proxy off` clears it, `/browser proxy` shows it. Addresses are accepted the way people
+  write them (`host:port`, `http://`, `socks5://`, `off`, empty) and normalised to what Chrome's `--proxy-server` wants.
+- **The port is probed** when the setting changes: a proxy nothing listens on makes every page fail with an unrelated
+  error, so the command answers `端口在监听 ✅` or `但端口现在没响应：ECONNREFUSED`.
+- The scheme is validated **before** the port, because `new URL` hides a protocol's default port - `ftp://host:21` used
+  to be reported as "missing a port", which points at the wrong thing.
+- `browserProxy` is a string field in `BROWSER_PREF_FIELDS`, so `/prefs` forwards it and `/state.browser.prefFields`
+  advertises it - the list v0.39.0 forgot, which the guard now checks.
+- 30 suites / 528 cases.
+
 ## 0.39.2
 
 - **Fixed: rowser_close reported a close it did not perform.** It killed the pid spawn returned, but Chrome hands
