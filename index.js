@@ -5394,41 +5394,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         let replacedStale = false;
         let staleReason = "";
         try {
-          // Something already listening on the port is attached to rather than duplicated - but only if it was
-          // started the way the settings now say. A browser left over from an earlier session (headless, no proxy,
-          // another profile) made every new setting look like it did nothing.
+          // Any browser still answering the port belongs to a *previous* run: the PAC it was launched with points at
+          // a server that died with that run, so adopting it means a window whose host list can never work again.
+          // So the first browser action of a run adopts nothing: it closes the leftover and starts its own. One
+          // owner per run is a rule this code can keep; comparing arguments meant racing the process being closed.
           await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
-          // Read how the running browser was started. If that fails, the browser predates `--enable-automation`
-          // (Chrome refuses to answer without it), which means it was started by an older build and cannot be
-          // verified against the settings on screen. "Cannot inspect" is therefore treated as "not a match": the
-          // first open after an upgrade replaces the window once, and every launch from then on is inspectable.
-          let runningArgs = null;
-          try {
-            runningArgs = (await mod.browserRunningArgs({ port: settings.port, timeoutMs: 4000 })).args;
-          } catch (error) {
-            // Unreadable is not a mismatch: a window we cannot inspect is still probably ours, and every launch from
-            // 0.44 onwards carries `--enable-automation`, so this only happens for a browser someone else started.
-            ctx.logger?.info?.("[dsh-wechat-media] running browser cannot report its command line (%s); attaching", String(error?.message ?? error));
-            runningArgs = null;
-          }
-          if (runningArgs && runningArgs.length) {
-            // The PAC is part of the identity now: a browser started with a host list must be compared with that
-            // list, not with the fixed proxy it replaced.
-            const pacUrl = await writePacFile(await proxyHosts(), settings.proxy);
-            const verdict = mod.browserArgsMatch(runningArgs, { ...settings, pacUrl });
-            if (!verdict.match) {
-              // Say what disagrees. "检测到旧配置" without the difference made a repeated false restart impossible to
-              // diagnose from the chat - the next line is what the person (and the log) needs.
-              staleReason = diffSummary(verdict);
-              ctx.logger?.info?.("[dsh-wechat-media] browser on port %s does not match the settings (%s), restarting it", settings.port, staleReason);
-              await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
-              // Chrome takes a moment to release the port. Launching immediately meant the next request attached to
-              // the window that was still dying - the same stale browser, reported as stale again on every open.
-              await waitForPortFree(settings.port);
-              replacedStale = true;
-              throw new Error(`stale browser closed: ${staleReason}`);
-            }
-          }
+          staleReason = "上次运行遗留的浏览器";
+          ctx.logger?.info?.("[dsh-wechat-media] closing the browser left over from the previous run on port %s", settings.port);
+          await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
+          await waitForPortFree(settings.port);
+          replacedStale = true;
+          throw new Error("leftover browser closed");
         } catch {
           const hosts = await proxyHosts();
         const pacUrl = await writePacFile(hosts, settings.proxy);

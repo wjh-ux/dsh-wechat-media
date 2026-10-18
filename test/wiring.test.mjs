@@ -660,21 +660,14 @@ await test("the reliability trio is wired: doctor, task log, stale-browser check
   assert.match(host, /已自动停用/, "and says so in the chat");
   assert.match(host, /if \(sub === "log"\)/, "/task log reads it");
   assert.match(host, /recent: \(await state\.loadTaskHistory\(\)\)/, "/state carries the recent entries");
-  // 3) stale browser: compared by its own command line, before reuse.
-  assert.match(browserSource, /export async function browserRunningArgs\(/, "the command line can be read");
-  assert.match(browserSource, /Browser\.getBrowserCommandLine/, "through the CDP call that answers it");
-  assert.match(browserSource, /export function browserArgsMatch\(/, "and compared with the settings");
-  assert.match(host, /if \(!verdict\.match\)/, "a mismatch is acted on");
-  assert.match(host, /replacedStale/, "the tool reports that it restarted one");
-  // Unreadable args are NOT a mismatch: since 0.44 every launch carries `--enable-automation`, so a window that
-  // cannot report its args was started by someone else, and replacing it every open would be worse than reusing
-  // it. What must be true instead: a real mismatch says what differs.
-  assert.match(host, /runningArgs && runningArgs\.length/, "an unreadable command line attaches rather than rebuilds");
-  assert.match(host, /function diffSummary\(verdict\)/, "a mismatch names the difference");
-  // Closing is asynchronous: launching before the port is free attached to the dying window, which then looked
-  // stale again on the next open - the same message, forever.
-  assert.match(host, /async function waitForPortFree\(port/, "a replacement waits for the port to go quiet");
-  assert.match(host, /staleReason/, "and the tool message carries it");
+  // 3) one owner per run: a browser left by a previous run is closed at the first action, not adopted. Its PAC URL
+  //    points at a server that died with that run, so adopting it means a host list that can never work again.
+  assert.match(browserSource, /export async function browserCloseBrowser\(/, "closing goes through CDP");
+  assert.match(host, /closing the browser left over from the previous run/, "a leftover browser is closed");
+  assert.match(host, /async function waitForPortFree\(port/, "and the port is waited out before starting one");
+  assert.doesNotMatch(host, /browserArgsMatch\(runningArgs/, "the launch path does not compare arguments");
+  assert.match(host, /replacedStale/, "the tool reports which of the two happened");
+  assert.match(host, /staleReason/, "and names it in the message");
 });
 
 await test("the browser is closed by protocol, not by a pid that may already be dead", () => {
