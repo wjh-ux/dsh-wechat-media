@@ -168,6 +168,18 @@ window.__ModuleLoader__.load({
           missing: "not found",
           save: "Save",
           useDefault: "Default",
+          wizard: "Getting started",
+          wizardHint: "four steps; skippable at any point",
+          wizardSkip: "Skip (I know this)",
+          wizardPrev: "Back",
+          wizardNext: "Next",
+          wizardFinish: "Done",
+          wizardStep1: "Connect a transport first: scan a QR for WeChat, or fill in the bot/app credentials in the cards below.",
+          wizardStep2a: "Only accept allowlisted chats (off by default)",
+          wizardStep2b: "Answer 1:1 chats only, ignore groups (off by default)",
+          wizardStep3a: "Desktop control: mouse, keyboard, screenshots (off by default)",
+          wizardStep3b: "Let scheduled tasks run local commands (off by default)",
+          wizardStep4: "Generated documents can be sent straight to a chat; this directory decides where relative paths land.",
           taskCommand: "Let command tasks run local commands",
           taskAdd: "Add",
           taskText: "text / prompt / command",
@@ -306,6 +318,18 @@ window.__ModuleLoader__.load({
           missing: "未找到",
           save: "保存",
           useDefault: "用默认",
+          wizard: "新手向导",
+          wizardHint: "四步，随时可以跳过",
+          wizardSkip: "跳过（我熟）",
+          wizardPrev: "上一步",
+          wizardNext: "下一步",
+          wizardFinish: "完成",
+          wizardStep1: "先接一个通道：微信点上面的「Add an account」扫码；企业微信/飞书在下面的卡片里填机器人或应用凭据。",
+          wizardStep2a: "只接受白名单里的会话（默认关）",
+          wizardStep2b: "只回答一对一，忽略群（默认关）",
+          wizardStep3a: "桌面控制：鼠标、键盘、截图（默认关）",
+          wizardStep3b: "允许定时任务执行本机命令（默认关）",
+          wizardStep4: "做完文档可以直接发到聊天里；这里的目录决定相对路径落在哪。",
           taskCommand: "允许 command 任务执行本机命令",
           taskAdd: "添加",
           taskText: "内容 / 提示词 / 命令",
@@ -420,6 +444,8 @@ window.__ModuleLoader__.load({
         // normal path; this is for "I am already looking at the list".
         // undefined = "not edited yet", so the field follows /state until somebody types in it.
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
+        // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
+        const [wizardStep, setWizardStep] = react.useState(0);
         const [taskDraft, setTaskDraft] = react.useState({ when: "", kind: "message", text: "" });
         const [taskNotice, setTaskNotice] = react.useState(undefined);
         // Which step each "run again" button will take: a day, a week or a month. Kept per row so
@@ -721,6 +747,20 @@ window.__ModuleLoader__.load({
          * All of it goes through `/tasks`, which is the same three operations the `/task` command exposes;
          * creation stays in the chat, because a schedule is a sentence ("每天 8 点"), not a form.
          */
+        /** Finish or skip the wizard: both just record that it is done. */
+        async function endWizard() {
+          setBusy(true);
+          try {
+            await api("/prefs?wizardDone=true");
+            setWizardStep(0);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Save the office directory. An empty value means "back to the bridge's own directory". */
         async function setOfficeDir(value) {
           setBusy(true);
@@ -849,6 +889,67 @@ window.__ModuleLoader__.load({
         };
 
         return h("div", { className: "dswxCard" }, [
+          // Onboarding: four screens that end in the same place as the config below, so a first run has an
+          // order and a second run has a button that makes it stop.
+          snapshot?.prefs?.wizardDone !== true ? h("div", { key: "wizard", className: "dswxCard dswxWizard" }, [
+            h("div", { key: "head", className: "dswxRow" }, [
+              h("strong", { key: "t" }, `${t("wizard", "新手向导")} ${wizardStep + 1}/4`),
+              h("span", { key: "m", className: "dswxMeta" }, t("wizardHint", "四步，随时可以跳过")),
+              h("button", { key: "skip", type: "button", className: "dswxBtn", disabled: busy, onClick: endWizard },
+                t("wizardSkip", "跳过（我熟）")),
+            ]),
+            // Step 1: which transports are alive right now.
+            wizardStep === 0 ? h("div", { key: "s1" }, [
+              h("div", { key: "a", className: "dswxMeta" },
+                `微信：${(snapshot?.accounts ?? []).length} 个账号 · 企业微信：${snapshot?.wecom?.bot?.connected ? "✅" : "❌"} · 飞书：${snapshot?.feishu?.connection?.connected ? "✅" : "❌"}`),
+              h("div", { key: "b", className: "dswxMeta" }, t("wizardStep1", "先接一个通道：微信点上面的「Add an account」扫码；企业微信/飞书在下面的卡片里填机器人或应用凭据。")),
+            ]) : null,
+            // Step 2: who may talk to it.
+            wizardStep === 1 ? h("div", { key: "s2" }, [
+              h("label", { key: "a", className: "dswxMeta" }, [
+                h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.prefs?.requireAllowlist), disabled: busy, onChange: (event) => setAllowlist(event.target.checked) }),
+                " " + t("wizardStep2a", "只接受白名单里的会话（默认关）"),
+              ]),
+              h("label", { key: "b", className: "dswxMeta" }, [
+                h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.prefs?.friendOnly), disabled: busy, onChange: (event) => setFriendOnly(event.target.checked) }),
+                " " + t("wizardStep2b", "只回答一对一，忽略群（默认关）"),
+              ]),
+            ]) : null,
+            // Step 3: the two capabilities that touch this machine.
+            wizardStep === 2 ? h("div", { key: "s3" }, [
+              h("label", { key: "a", className: "dswxMeta" }, [
+                h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.prefs?.desktopControl), disabled: busy, onChange: (event) => setDesktop(event.target.checked) }),
+                " " + t("wizardStep3a", "桌面控制：鼠标、键盘、截图（默认关）"),
+              ]),
+              h("label", { key: "b", className: "dswxMeta" }, [
+                h("input", { key: "c", type: "checkbox", checked: Boolean(snapshot?.tasks?.commandEnabled), disabled: busy, onChange: (event) => setTaskCommand(event.target.checked) }),
+                " " + t("wizardStep3b", "允许定时任务执行本机命令（默认关）"),
+              ]),
+            ]) : null,
+            // Step 4: where generated documents go.
+            wizardStep === 3 ? h("div", { key: "s4" }, [
+              h("div", { key: "a", className: "dswxRow" }, [
+                h("span", { key: "k", className: "dswxName" }, t("officeDir", "保存到")),
+                h("input", {
+                  key: "i",
+                  className: "dswxInput",
+                  placeholder: t("officeDirHint", "absolute folder; empty = the bridge's own directory"),
+                  value: officeDirInput ?? snapshot?.office?.dir ?? "",
+                  disabled: busy,
+                  onChange: (event) => setOfficeDirInput(event.target.value),
+                }),
+                h("button", { key: "s", type: "button", className: "dswxBtn", disabled: busy, onClick: () => setOfficeDir(officeDirInput ?? snapshot?.office?.dir ?? "") }, t("save", "Save")),
+              ]),
+              h("div", { key: "b", className: "dswxMeta" }, t("wizardStep4", "做完文档可以直接发到聊天里；这里的目录决定相对路径落在哪。")),
+            ]) : null,
+            h("div", { key: "nav", className: "dswxRow" }, [
+              h("button", { key: "p", type: "button", className: "dswxBtn", disabled: busy || wizardStep === 0, onClick: () => setWizardStep(Math.max(0, wizardStep - 1)) }, t("wizardPrev", "上一步")),
+              wizardStep < 3
+                ? h("button", { key: "n", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: () => setWizardStep(Math.min(3, wizardStep + 1)) }, t("wizardNext", "下一步"))
+                : h("button", { key: "f", type: "button", className: "dswxBtn dswxPrimary", disabled: busy, onClick: endWizard }, t("wizardFinish", "完成")),
+            ]),
+          ]) : null,
+
           h("div", { key: "head", className: "dswxRow" }, [
             h("strong", { key: "t" }, t("title", "WeChat bridge")),
             h("span", { key: "s", className: "dswxMeta" }, status),

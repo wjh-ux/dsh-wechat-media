@@ -587,6 +587,28 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(clientSource, /setOfficeDir\(""\)/, "and can go back to the default");
 });
 
+await test("the wizard shows once and then stays away", () => {
+  // A wizard that cannot be dismissed is a nag; one that comes back after every restart is worse, because
+  // the second time it is a bug. So: shown only when the stored preference says it is not done, and both
+  // "skip" and "done" write that preference.
+  const clientSource = readFileSync(join(root, "client.js"), "utf8");
+  const stateSource = readFileSync(join(root, "state.js"), "utf8");
+  assert.match(stateSource, /wizardDone: false/, "the preference exists and defaults to not done");
+  assert.match(host, /patch\.wizardDone = asBool\(body\.wizardDone\)/, "and the route can set it");
+  assert.match(clientSource, /snapshot\?\.prefs\?\.wizardDone !== true \? h\("div", \{ key: "wizard"/, "the card is gated on it");
+  assert.match(clientSource, /async function endWizard\(\)/, "there is one way to finish");
+  assert.match(clientSource, /await api\("\/prefs\?wizardDone=true"\)/, "which writes the preference");
+  // Four steps, and the same switches the rest of the card uses - a wizard with its own copies would drift.
+  for (const step of ["wizardStep === 0", "wizardStep === 1", "wizardStep === 2", "wizardStep === 3"]) {
+    assert.match(clientSource, new RegExp(step.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${step} exists`);
+  }
+  assert.match(clientSource, /setAllowlist\(event\.target\.checked\)/, "step 2 reuses the allowlist switch");
+  assert.match(clientSource, /setDesktop\(event\.target\.checked\)/, "step 3 reuses the desktop switch");
+  assert.match(clientSource, /setTaskCommand\(event\.target\.checked\)/, "and the command switch");
+  assert.match(clientSource, /setOfficeDir\(officeDirInput/, "step 4 reuses the office directory writer");
+  assert.match(clientSource, /t\("wizardSkip", "跳过（我熟）"\)|t\("wizardSkip"/, "the skip button exists");
+});
+
 await test("the retry switch is reachable from the command, the host and the Web UI", () => {
   // The feature is only real if all three can reach it: a `/retry` command in a chat, the preference the
   // host reads before each turn, and a checkbox in the Web UI panel.

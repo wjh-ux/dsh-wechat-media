@@ -6061,6 +6061,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // The desktop switch goes through the same route as everything else: the Web UI panel and a
           // plain GET link both write here, and only an explicit boolean arms it.
           if (asBool(body.desktopControl) !== null) patch.desktopControl = asBool(body.desktopControl);
+          // The wizard's "skip" and "finish" both land here, so there is one answer to "is it done".
+          if (asBool(body.wizardDone) !== null) patch.wizardDone = asBool(body.wizardDone);
           // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
           if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
           // The Feishu block of the Web UI panel writes here. It is handled before the reply because a

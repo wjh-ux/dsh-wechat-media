@@ -305,6 +305,10 @@ export class WechatState {
       // Where relative paths from the office tools land. Empty means "the bridge's working directory",
       // which is what it did before there was a setting; `/office dir <path>` fills it in.
       officeDir: "",
+      // The wizard shows until it is finished or skipped. Stored, not remembered in the browser: someone who
+      // closes the tab halfway should not be asked again, and someone who uninstalls and reinstalls is a new
+      // user who should be.
+      wizardDone: false,
 
       ...(file && typeof file === "object" ? file : {}),
     };

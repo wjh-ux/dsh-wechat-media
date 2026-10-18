@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.36.0
+
+- **A four-step wizard on the card, with a one-click skip.** Step 1 asks which transport is alive (it reads the
+  current state rather than asking you to retype it), step 2 covers who may talk to the bot, step 3 the two
+  capabilities that touch this machine (desktop control, command tasks), step 4 the office save directory. Every
+  control **reuses the same handler as the full card** - a wizard with its own copies of the switches would drift from
+  the panel within a release.
+- **`wizardDone` is stored, not remembered in the browser**: finishing and skipping write the same preference, so
+  closing a tab halfway does not ask again, and a reinstall is a new user who should be asked.
+- Guard: the card is gated on that preference, every step exists, and each step's control is the shared handler.
+- 30 suites / 521 cases.
+
 ## 0.35.0
 
 - **The Web UI card has an Office section.** It shows whether the two programs were found (Python for docx/xlsx/pptx,
