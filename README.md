@@ -419,6 +419,46 @@ Three things are deliberate:
 `desktop_screen` also reports the size of the `INPUT` struct the C# compiled, so a wrong layout (which makes
 `SendInput` silently do nothing) is visible rather than guessed at.
 
+## Web search (Tavily) / 联网搜索
+
+A `tavily_search` tool lets a WeChat, WeCom or Feishu conversation ask about something current and get real titles,
+links and snippets. The shapes were copied from the user's own working plugin (`wjh-ux/dsh-mcp-tavily`, cited line by
+line in `tavily.js`) rather than guessed, and the live API was called to check them: with a key, three results came
+back in about three seconds - and **keyless mode works too**, so search functions before a key is configured.
+
+The key is set in the panel's Tavily block and takes effect on the next search with no restart, because the tool
+re-reads the saved settings before every call. It is never echoed back: `/state` reports `keySet` and nothing more,
+including for the case that used to leak - a Tavily-only prefs object with no Feishu block. A failure states its
+reason (`Tavily 搜索失败：…`) instead of returning an empty answer.
+
+| Parameter | Meaning |
+|---|---|
+| `query` | what to search for (required) |
+| `maxResults` | 1-20; defaults to the configured value |
+| `searchDepth` | `basic` (default), `advanced` or `fast` |
+| `includeDomains` / `excludeDomains` | comma-separated domains to restrict to, or leave out |
+
+## Browser automation / 浏览器自动化
+
+Six tools drive a **real browser** - the Chrome or Edge already on the machine, over the Chrome DevTools Protocol -
+with **no third-party dependency**: Node's own global `WebSocket` carries CDP. There is nothing to install: no npx, no
+npm install, no config file. The panel chooses the channel, the debugging port and whether it runs headless.
+
+| Tool | Does |
+|---|---|
+| `browser_open` | open a URL and return the page title |
+| `browser_text` | the page's title, URL and visible text |
+| `browser_click` | click an element by CSS selector (a real mouse event) |
+| `browser_type` | type into an element by CSS selector (real key input) |
+| `browser_screenshot` | PNG of the page into the shared inbox, path returned so it can be sent to the chat |
+| `browser_close` | close the browser this plugin started |
+
+It starts its own instance with a profile under `$DSH_HOME/browser-profile`, so **the browser a person actually
+browses with is never touched**; a browser already listening on the port is attached to instead of duplicated.
+Verified live against Chrome 155: a page received typed input (17 and 25) and a real mouse click and computed 42 by
+itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Feishu. Every failure states its reason
+(`browser_click 失败：nothing on the page matches the selector "…"`).
+
 ## Chat commands / 聊天里的命令
 
 A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and

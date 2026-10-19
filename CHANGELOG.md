@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.46.1
+## 0.47.0
+
+- **The README documents Tavily web search and browser automation.** Both shipped earlier - `tavily_search` in 0.23.22
+  and the six `browser_*` tools in 0.23.23 - but neither was ever written into the README, so a reader of the plugin's
+  documentation could not find out that either existed. Two sections now cover them, including what was verified
+  against the live systems rather than assumed: keyless Tavily mode, the dedicated `$DSH_HOME/browser-profile`, the
+  real click and type that computed 42 on a test page, and the 68,561-byte screenshot delivered to Feishu.
+- No behaviour changed. 26 suites / 440 cases.
 
 - **Fixed: the repair gave up where it could have acted, and did not say which profile it meant.** This machine has two
   profiles - `desktop` (with the block) and `web` (without) - so `/doctor` reported
