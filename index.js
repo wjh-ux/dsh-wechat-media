@@ -2138,7 +2138,7 @@ export function apply(ctx, config = {}) {
       // reply id at all. Counted, never hidden.
       counters.streamFallback += 1;
       const sent = chatId
-        ? wecomBot?.sendMessage(chatId, textBody(parts[index]))
+        ? wecomBot?.sendMessage(chatId, markdownBody(parts[index]))
         : wecomBot?.reply(frame, markdownBody(parts[index]));
       if (sent === false) throw new Error("the WeCom long connection is not writable right now");      }
     }

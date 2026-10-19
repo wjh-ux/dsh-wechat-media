@@ -308,7 +308,9 @@ await test("a refused close falls back to a proactive message, and a dead id is 
   // The fallback must be the proactive send (aibot_send_msg), which needs no reply id at all.
   assert.match(host, /export function isStaleReplyError/, "one place decides what a dead reply id means");
   assert.match(host, /if \(isStaleReplyError\(lastStreamFinalizeError\)\) break;/, "a dead id is not retried");
-  assert.match(host, /wecomBot\?\.sendMessage\(chatId, textBody\(parts\[index\]\)\)/, "the fallback must be the proactive path");
+  // This assertion used to demand `textBody(...)` - an identifier defined nowhere - so it pinned a bug rather than a
+  // behaviour: every fallback reply threw. The body it must send is the passive branch's own, which is the point.
+  assert.match(host, /wecomBot\?\.sendMessage\(chatId, markdownBody\(parts\[index\]\)\)/, "the fallback must be the proactive path");
   assert.match(host, /streamFinalizeErrors\.push\(lastStreamFinalizeError\)/, "the sequence of failures is recorded");
   assert.match(host, /finalizeErrors: \[\.\.\.streamFinalizeErrors\]/, "...and exposed in /state");
 });

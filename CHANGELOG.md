@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.47.0
+## 0.47.1
+
+- **WeCom replies work again.** `replyWecomInParts` called `textBody(...)`, an identifier defined nowhere, so every
+  reply that could not close its stream - the ordinary case when the platform refuses the closing frame - threw
+  `ReferenceError: textBody is not defined` and the answer never went out. It now sends the same body the passive
+  branch does. Found by pushing a synthetic inbound through the real path and reading the JSON it returned, not by
+  reading the code.
+- A guard pins it: the reply path may not call `textBody`, and its proactive branch must send the same body. Falsified
+  by putting `textBody` back, which fails it.
+- 32 suites / 549 cases.
 
 - **The README documents Tavily web search and browser automation.** Both shipped earlier - `tavily_search` in 0.23.22
   and the six `browser_*` tools in 0.23.23 - but neither was ever written into the README, so a reader of the plugin's
