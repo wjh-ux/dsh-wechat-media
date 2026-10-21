@@ -2024,6 +2024,28 @@ export function apply(ctx, config = {}) {
         }
         return true;
       }
+      if (sub === "cursor") {
+        // A visible pointer where each click lands. Purely a debugging aid - Chrome offers no cursor API, so the
+        // extension paints one into the page - and it works on both transports.
+        const wanted = String(arg ?? "").trim().toLowerCase();
+        if (!["on", "off"].includes(wanted)) {
+          await reply([
+            `鼠标光标显示：${browserSavedPrefs?.extensionCursor === true ? "开" : "关"}`,
+            "开启：/browser cursor on · 关闭：/browser cursor off",
+            "（点击时会画出红点和涟漪；纯覆盖层，不改页面逻辑）",
+          ].join("\n"));
+          return true;
+        }
+        const on = wanted === "on";
+        await state.savePrefs({ extensionCursor: on });
+        try {
+          const bridge = await ensureExtensionBridge();
+          bridge.setCursor(on);
+        } catch { /* the bridge starts on the next browser action anyway */ }
+        noteRoute("/command", { command: "browser", action: "cursor", on });
+        await reply(`鼠标光标显示已${on ? "开启" : "关闭"}。\n下次点击时${on ? "会在页面上画出红点" : "不再绘制"}（扩展需在线）。`);
+        return true;
+      }
       if (sub === "session") {
         // Which browser the tools drive: the plugin's own profile, the person's real Chrome (same logins), or a window
         // they started themselves. The third one exists because Chrome refuses a second instance on a live profile, and
@@ -3687,6 +3709,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     // after a restart instead of silently going back to the capable one.
     const startDriver = String(prefs?.extensionDriver ?? "").toLowerCase();
     extensionBridge.driver = ["script", "hybrid"].includes(startDriver) ? startDriver : "debugger";
+    extensionBridge.cursor = prefs?.extensionCursor === true;
     await extensionBridge.start();
     ctx.logger?.info?.("[dsh-wechat-media] browser extension bridge listening on 127.0.0.1:%s", port);
     return extensionBridge;
@@ -7050,6 +7073,27 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/extension-cursor",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const raw = body.on ?? body.enabled;
+          if (raw === undefined) return json(res, 400, { ok: false, error: "需要 on=1 或 on=0" });
+          const on = raw === true || ["1", "true", "on", "yes"].includes(String(raw).toLowerCase());
+          try {
+            await state.savePrefs({ extensionCursor: on });
+            const bridge = await ensureExtensionBridge();
+            const applied = bridge.setCursor(on);
+            noteRoute("/extension-cursor", { on: applied.cursor });
+            return json(res, 200, { ok: true, cursor: applied.cursor, connected: bridge.status().connected });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

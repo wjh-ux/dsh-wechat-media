@@ -45,6 +45,10 @@ export class ExtensionBridge {
     // `debugger` by default: it is the capable transport, and the banner it shows is Chrome's, not ours.
     this.driver = "debugger";
     this.driverSent = "";
+    // Draw a cursor where each click lands. Off by default: it is a debugging aid, not something to surprise people
+    // with on a page they are reading.
+    this.cursor = false;
+    this.cursorSent = "";
     // Which transport the last command used, and how many times the banner could have appeared: in hybrid mode this is
     // the difference between "it worked" and "it worked without flashing".
     this.lastDriver = "";
@@ -67,6 +71,7 @@ export class ExtensionBridge {
       driver: this.driver,
       lastDriver: this.lastDriver,
       debuggerUses: this.debuggerUses,
+      cursor: this.cursor,
     };
   }
 
@@ -87,6 +92,13 @@ export class ExtensionBridge {
     // Force the next poll to carry the switch, instead of waiting for a client that may not even be connected yet.
     this.driverSent = "";
     return { driver: wanted };
+  }
+
+  /** Draw (or stop drawing) a cursor where clicks land. Delivered on the next poll, like the driver. */
+  setCursor(on) {
+    this.cursor = Boolean(on);
+    this.cursorSent = "";
+    return { cursor: this.cursor };
   }
 
   /** The token, shown once in the panel so it can be pasted into the extension. */
@@ -179,6 +191,11 @@ export class ExtensionBridge {
     if (this.driver !== this.driverSent) {
       this.driverSent = this.driver;
       return Promise.resolve({ id: 0, method: "__driver", params: { mode: this.driver } });
+    }
+    // The same handshake for the cursor overlay: a setting the worker has to hold before it can draw anything.
+    if (this.cursor !== this.cursorSent) {
+      this.cursorSent = this.cursor;
+      return Promise.resolve({ id: 0, method: "__cursor", params: { on: this.cursor } });
     }
     const next = this.queue.shift();
     if (next) return Promise.resolve(next);

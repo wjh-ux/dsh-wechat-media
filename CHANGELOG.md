@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.55.0
+
+- **显示鼠标光标 - see where each click lands.** Chrome exposes no cursor API, so the extension paints one: a red dot
+  and a ripple at the click point, drawn from an isolated world (cannot collide with the page's variables) and removed
+  on a timer (a failed click leaves nothing behind). It works on **both** transports - the script path never touches
+  the debugger and the debugger path has no cursor to turn on - so turning it on does not change which driver runs.
+  - Panel: a **显示鼠标光标** checkbox beside 扩展驱动; chat: `/browser cursor on|off`.
+  - Off by default: a pointer appearing on a page somebody is reading is a surprise, not a feature.
+  - Route `GET/POST /dsh-wechat-media/extension-cursor?on=1|0`; the setting rides the same pre-work poll handshake as
+    the driver, so it is in force before the next click rather than one click later.
+- 36 suites / 587 cases.
+
 ## 0.54.1
 
 - **每一条命令都会报出它实际走了哪条通道.** Hybrid decides per command, so "did the banner flash?" used to be a guess.

@@ -932,6 +932,20 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Draw a cursor where clicks land: a page overlay, since Chrome exposes no cursor API. */
+        async function setExtensionCursor(on) {
+          setBusy(true);
+          try {
+            const answer = await api(`/extension-cursor?on=${on ? 1 : 0}`);
+            setBrowserNotice({ ok: true, text: answer.cursor ? "已开启光标显示：每次点击会在页面上画一个红点。" : "已关闭光标显示。" });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `设置光标失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Pull cookies / bookmarks out of the real Chrome into the profile the tools launch (Chrome must be closed). */
         async function importChromeLogin() {
           setBusy(true);
@@ -1989,6 +2003,17 @@ window.__ModuleLoader__.load({
                   h("option", { key: "s", value: "script" }, t("driverScript", "脚本注入（无提示，截图仅可见区域）")),
                   h("option", { key: "h", value: "hybrid" }, t("driverHybrid", "混合（脚本优先，必要时才用调试器）")),
                 ]),
+              ]),
+              // A visible pointer for the person watching: Chrome has no cursor API, so the extension paints one.
+              h("label", { key: "cursor", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  disabled: busy,
+                  checked: snapshot?.browser?.extension?.cursor === true,
+                  onChange: (event) => setExtensionCursor(event.target.checked),
+                }),
+                " " + t("extensionCursor", "显示鼠标光标（点击时在页面上画红点）"),
               ]),
               h("button", {
                 key: "extinstall",

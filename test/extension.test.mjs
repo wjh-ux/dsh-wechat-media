@@ -16,9 +16,10 @@ async function startBridge(options = {}) {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const bridge = new ExtensionBridge({ port, token: "t0ken", ...options });
   await bridge.start();
-  // Pretend the worker has already been told which transport to use: otherwise the first poll of every test would be the
-  // `__driver` handshake instead of the command under test. The driver test clears this deliberately.
+  // Pretend the worker has already been told which transport and cursor setting to use: otherwise the first poll of
+  // every test would be that handshake instead of the command under test. The handshake tests clear these deliberately.
   bridge.driverSent = bridge.driver;
+  bridge.cursorSent = bridge.cursor;
   return bridge;
 }
 
@@ -140,6 +141,25 @@ await test("the transport switch rides the next poll, before any command", async
     // Anything unrecognised falls back to the capable transport rather than inventing a fourth state.
     await bridge.setDriver("nonsense");
     assert.equal(bridge.status().driver, "debugger");
+  } finally { await bridge.stop(); }
+});
+
+await test("the cursor setting rides the poll too, and is off unless asked for", async () => {
+  // Chrome has no cursor API, so the pointer is a page overlay the worker paints. Like the driver, the setting must
+  // reach the worker before it can act on it - and it must never be on by surprise.
+  const bridge = await startBridge();
+  try {
+    assert.equal(bridge.status().cursor, false, "off by default");
+    bridge.cursorSent = "";
+    assert.equal(bridge.setCursor(true).cursor, true);
+    const polled = await call(bridge, "/poll");
+    assert.equal(polled.body.command.method, "__cursor");
+    assert.equal(polled.body.command.params.on, true);
+    assert.equal(bridge.status().cursor, true);
+
+    bridge.setCursor(false);
+    const off = await call(bridge, "/poll");
+    assert.equal(off.body.command.params.on, false);
   } finally { await bridge.stop(); }
 });
 

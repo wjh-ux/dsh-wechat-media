@@ -49,8 +49,17 @@ async function runCommand(command) {
     return { result: { driver: stored }, driver: "control" };
   }
 
+  if (command.method === "__cursor") {
+    await chrome.storage.local.set({ cursor: params.on === true || params.on === "true" });
+    return { result: { cursor: params.on === true || params.on === "true" }, driver: "control" };
+  }
+
   const tabId = wantedTab ?? await pickTab();
   if (!tabId) throw new Error("没有可操作的标签页");
+
+  // The pointer is painted before the click and removed afterwards, so it shows up on both transports: the script path
+  // never touches the debugger, and the debugger path has no cursor API of its own to turn on.
+  await paintCursor(tabId, command.method, params);
 
   const driver = await currentDriver();
   if (driver === "script") return { result: await runScriptCommand(command, tabId, params), driver: "script" };
@@ -86,6 +95,55 @@ async function runCommand(command) {
 async function currentDriver() {
   const { driver } = await chrome.storage.local.get({ driver: "debugger" });
   return ["script", "hybrid"].includes(driver) ? driver : "debugger";
+}
+
+/**
+ * Paint a pointer where the click will land, when the setting is on.
+ *
+ * Chrome exposes no cursor API, so the "cursor" is a small fixed-position dot painted into the page - from an isolated
+ * world, so it cannot clash with the page's own variables - with a ripple that fades out. It removes itself on a timer:
+ * the click path stays free of cleanup bookkeeping, and a click that fails leaves nothing behind.
+ */
+async function paintCursor(tabId, method, params) {
+  if (method !== "Input.dispatchMouseEvent") return;
+  // One dot per press/release pair: the event arrives twice and two ripples would look like a double click.
+  if (params.type !== "mousePressed") return;
+  const { cursor } = await chrome.storage.local.get({ cursor: false });
+  if (cursor !== true) return;
+  const x = Number(params.x) || 0;
+  const y = Number(params.y) || 0;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "ISOLATED",
+      args: [x, y],
+      func: (x, y) => {
+        const ID = "__dsh_cursor_dot";
+        let dot = document.getElementById(ID);
+        if (!dot) {
+          dot = document.createElement("div");
+          dot.id = ID;
+          dot.style.cssText = "position:fixed;left:0;top:0;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;"
+            + "background:rgba(255,64,64,.65);border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.35);"
+            + "pointer-events:none;z-index:2147483647;transition:transform .06s linear,opacity .3s ease;";
+          document.documentElement.appendChild(dot);
+        }
+        dot.style.opacity = "1";
+        dot.style.transform = `translate(${x}px, ${y}px)`;
+
+        const ring = document.createElement("div");
+        ring.style.cssText = "position:fixed;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;"
+          + "border:2px solid rgba(255,64,64,.85);pointer-events:none;z-index:2147483646;opacity:1;transition:all .5s ease-out;";
+        ring.style.left = x + "px";
+        ring.style.top = y + "px";
+        document.documentElement.appendChild(ring);
+        requestAnimationFrame(() => { ring.style.transform = "scale(3.5)"; ring.style.opacity = "0"; });
+        setTimeout(() => ring.remove(), 650);
+        setTimeout(() => { dot.style.opacity = "0"; }, 1000);
+        return true;
+      },
+    });
+  } catch { /* a page that forbids injection simply shows no pointer */ }
 }
 
 /**
