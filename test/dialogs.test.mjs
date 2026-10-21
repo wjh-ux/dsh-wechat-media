@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join as joinPath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const { psQuote, folderDialogScript, fileDialogScript, pickFolder, pickFile } = await import("../dialogs.js");
+const { psQuote, folderDialogScript, fileDialogScript, pickFolder, pickFile, parseDialogOutput } = await import("../dialogs.js");
 
 const passed = [];
 const failed = [];
@@ -50,6 +50,20 @@ await test("a chosen path comes back trimmed, and a cancel is an empty answer ra
 
   const file = await pickFile({ run: async () => ({ ok: true, path: "C:\\a\\b.csv" }) });
   assert.equal(file.path, "C:\\a\\b.csv");
+});
+
+await test("the dialog process is started with a window: windowsHide can hide the dialog itself", () => {
+  const source = readFileSync(new URL("../dialogs.js", import.meta.url), "utf8");
+  assert.match(source, /windowsHide: false/, "the child keeps a window, or the dialog never shows");
+  assert.doesNotMatch(source, /from "\.\/desktop\.js"/, "not the screenshot helper, which hides the window");
+  assert.match(source, /"-STA"/, "WinForms dialogs need a single-threaded apartment");
+});
+
+await test("the answer is the last JSON line, after whatever Add-Type printed", () => {
+  const noisy = "Add-Type: warning\n{\"ok\":true,\"path\":\"D:\\\\导出\"}\n";
+  const parsed = parseDialogOutput(noisy);
+  assert.equal(parsed.path, "D:\\导出");
+  assert.equal(parseDialogOutput("nothing useful"), null, "no JSON is null, not a crash");
 });
 
 // The wiring: a route the panel can call, a button that calls it, and the module shipped with the package.

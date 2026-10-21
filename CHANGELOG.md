@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.48.3
+
+- **The folder dialog is started with a window.** 0.48.2 ran it through `runDesktopScript`, which launches
+  `powershell.exe` with `windowsHide: true` - and a child without a usable window can show no dialog at all. The
+  lesson was already written down in this plugin (the inbox folder picker uses `windowsHide: false` for exactly this
+  reason), so `dialogs.js` now runs its own `-STA` process with `windowsHide: false` instead of borrowing the
+  screenshot helper. The last-JSON-line parsing is unchanged and still has its own test.
+- 34 suites / 572 cases.
+
 ## 0.48.2
 
 - **Browse for the export folder instead of typing it.** The panel's 流程导出目录 row now carries 浏览…, which opens the
