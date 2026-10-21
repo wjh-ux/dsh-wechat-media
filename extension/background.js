@@ -39,6 +39,10 @@ async function runCommand(command) {
   const params = { ...(command.params ?? {}) };
   const wantedTab = params.__tabId ?? null;
   delete params.__tabId;
+  // The per-command cursor flag, stripped before the command reaches Chrome: `chrome.debugger` rejects unknown
+  // parameters, so it must not travel any further than this function.
+  const wantCursor = params.__cursor === true;
+  delete params.__cursor;
 
   // The transport switch itself. It arrives on a poll, before the work it changes, so no command is ever run with the
   // wrong driver; id 0 is synthetic and its result is ignored.
@@ -59,7 +63,7 @@ async function runCommand(command) {
 
   // The pointer is painted before the click and removed afterwards, so it shows up on both transports: the script path
   // never touches the debugger, and the debugger path has no cursor API of its own to turn on.
-  await paintCursor(tabId, command.method, params);
+  await paintCursor(tabId, command.method, params, wantCursor);
 
   const driver = await currentDriver();
   if (driver === "script") return { result: await runScriptCommand(command, tabId, params), driver: "script" };
@@ -104,12 +108,18 @@ async function currentDriver() {
  * world, so it cannot clash with the page's own variables - with a ripple that fades out. It removes itself on a timer:
  * the click path stays free of cleanup bookkeeping, and a click that fails leaves nothing behind.
  */
-async function paintCursor(tabId, method, params) {
+async function paintCursor(tabId, method, params, enabled = false) {
   if (method !== "Input.dispatchMouseEvent") return;
   // One dot per press/release pair: the event arrives twice and two ripples would look like a double click.
   if (params.type !== "mousePressed") return;
-  const { cursor } = await chrome.storage.local.get({ cursor: false });
-  if (cursor !== true) return;
+  // The flag comes with the command (a stored setting can be one click stale); the stored value is only the fallback for
+  // an older plugin that still sends `__cursor` as a separate handshake.
+  let on = enabled === true;
+  if (!on) {
+    const { cursor } = await chrome.storage.local.get({ cursor: false });
+    on = cursor === true;
+  }
+  if (!on) return;
   const x = Number(params.x) || 0;
   const y = Number(params.y) || 0;
   try {

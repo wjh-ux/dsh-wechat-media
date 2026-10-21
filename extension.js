@@ -89,16 +89,29 @@ export class ExtensionBridge {
       ? String(mode).toLowerCase()
       : "debugger";
     this.driver = wanted;
-    // Force the next poll to carry the switch, instead of waiting for a client that may not even be connected yet.
-    this.driverSent = "";
+    this.driverSent = wanted;
+    this.#deliverSetting({ id: 0, method: "__driver", params: { mode: wanted } });
     return { driver: wanted };
   }
 
-  /** Draw (or stop drawing) a cursor where clicks land. Delivered on the next poll, like the driver. */
+  /** Draw (or stop drawing) a cursor where clicks land. */
   setCursor(on) {
     this.cursor = Boolean(on);
-    this.cursorSent = "";
+    this.cursorSent = this.cursor;
+    this.#deliverSetting({ id: 0, method: "__cursor", params: { on: this.cursor } });
     return { cursor: this.cursor };
+  }
+
+  /**
+   * Hand a setting change to the worker now, not at the next natural poll.
+   *
+   * A poll is held open for up to 25 s; without waking it, a switch turned on in the panel could sit undelivered for
+   * that long - which reads as "the checkbox does nothing". The synthetic command goes to the front of the queue and
+   * wakes a waiting poll immediately; its reply (id 0) is ignored, as no caller is waiting for it.
+   */
+  #deliverSetting(command) {
+    this.queue.unshift(command);
+    this.#wake();
   }
 
   /** The token, shown once in the panel so it can be pasted into the extension. */
@@ -299,7 +312,14 @@ export function extensionSession(bridge, { tabId = null } = {}) {
   return {
     kind: "extension",
     tabId,
-    send: (method, params = {}) => bridge.call(method, { ...params, __tabId: tabId }, { timeoutMs: method === "Page.navigate" ? 45_000 : 30_000 }),
+    send: (method, params = {}) => {
+      const payload = { ...params, __tabId: tabId };
+      // The cursor flag rides *this* command rather than a stored setting: a setting has to be synchronised, and a
+      // synchronised setting can be one click stale - which is exactly what the first version did ("the dot never
+      // appeared" until the next poll). A flag on the command cannot go stale.
+      if (method === "Input.dispatchMouseEvent") payload.__cursor = bridge.cursor === true;
+      return bridge.call(method, payload, { timeoutMs: method === "Page.navigate" ? 45_000 : 30_000 });
+    },
     once: () => Promise.reject(new Error("扩展桥没有协议事件")),
     close: () => {},
   };

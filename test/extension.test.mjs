@@ -163,6 +163,38 @@ await test("the cursor setting rides the poll too, and is off unless asked for",
   } finally { await bridge.stop(); }
 });
 
+await test("the cursor flag rides the click command, so it cannot be one click stale", async () => {
+  // The first version stored the setting and delivered it on a poll; the dot then appeared one click late (or after the
+  // next poll, up to 25 s). A flag on the command itself has no such window.
+  const bridge = await startBridge();
+  try {
+    bridge.cursor = true;
+    bridge.cursorSent = true; // the handshake already happened; only the per-command flag is under test
+    const session = extensionSession(bridge);
+    const pending = session.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 12, y: 34 });
+    const polled = await call(bridge, "/poll");
+    assert.equal(polled.body.command.method, "Input.dispatchMouseEvent");
+    assert.equal(polled.body.command.params.__cursor, true, "the click carries the flag");
+    await call(bridge, "/result", { method: "POST", body: { id: polled.body.command.id, ok: true, result: {} } });
+    await pending;
+
+    bridge.cursor = false;
+    bridge.cursorSent = false;
+    const second = session.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 1, y: 2 });
+    const polled2 = await call(bridge, "/poll");
+    assert.equal(polled2.body.command.params.__cursor, false, "and it says so when off");
+
+    // Non-click commands do not carry it at all, so stripping it stays a click-path concern.
+    const third = session.send("Runtime.evaluate", { expression: "1" });
+    const polled3 = await call(bridge, "/poll");
+    assert.equal("__cursor" in polled3.body.command.params, false);
+    for (const [pendingCall, id] of [[second, polled2], [third, polled3]]) {
+      await call(bridge, "/result", { method: "POST", body: { id: id.body.command.id, ok: true, result: 1 } });
+      await pendingCall;
+    }
+  } finally { await bridge.stop(); }
+});
+
 await test("the answer says which transport ran the command, so a flash is explainable afterwards", async () => {
   const bridge = await startBridge();
   try {

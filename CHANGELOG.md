@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.55.1
+
+- **The cursor flag now rides the click instead of a stored setting.** 0.55.0 kept `cursor` in extension storage, delivered
+  by a poll handshake - and the first live test showed no dot at all, because a setting has to be synchronised and the
+  handshake can lag behind the click (a held poll waits up to 25 s). The flag is now part of every
+  `Input.dispatchMouseEvent`: nothing to synchronise, nothing to go stale, and the worker strips `__cursor` before the
+  command reaches Chrome (which rejects unknown parameters).
+  - Setting changes also **wake a held poll** now, so switching the driver or the cursor in the panel takes effect at
+    once rather than at the next natural poll.
+- 36 suites / 588 cases.
+
 ## 0.55.0
 
 - **显示鼠标光标 - see where each click lands.** Chrome exposes no cursor API, so the extension paints one: a red dot
