@@ -40,12 +40,7 @@ async function runCommand(command) {
   const wantedTab = params.__tabId ?? null;
   delete params.__tabId;
 
-  let tabId = wantedTab;
-  if (!tabId) {
-    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    const [any] = await chrome.tabs.query({});
-    tabId = active?.id ?? any?.id;
-  }
+  const tabId = wantedTab ?? await pickTab();
   if (!tabId) throw new Error("没有可操作的标签页");
 
   try {
@@ -63,6 +58,23 @@ async function runCommand(command) {
     // `Page.navigate` leaves the target mid-load; detaching is what keeps a later attach from failing.
     await chrome.debugger.detach({ tabId }).catch(() => {});
   }
+}
+
+/**
+ * Which tab to drive when the plugin did not name one.
+ *
+ * Prefer the active tab, but never a `chrome://` or `chrome-extension://` one: the debugger refuses those ("Cannot
+ * access a chrome:// URL"), and the tab in front is very often the settings page a person just opened to install this
+ * extension. Fall back to any ordinary page, and create a blank one if the window is all browser UI.
+ */
+async function pickTab() {
+  const usable = (tab) => Boolean(tab?.id) && (/^https?:\/\//i.test(tab.url ?? "") || tab.url === "about:blank");
+  const all = await chrome.tabs.query({});
+  const candidates = all.filter(usable);
+  const active = candidates.find((tab) => tab.active) ?? candidates[0];
+  if (active) return active.id;
+  const created = await chrome.tabs.create({ url: "about:blank", active: false });
+  return created?.id ?? null;
 }
 
 /** One poll round: fetch a command, run it, post the answer. */

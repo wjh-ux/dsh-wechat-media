@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.51.1
+
+- **Two failures from the first live run of the extension transport.**
+  - `Cannot access a chrome:// URL`: the worker drove the active tab, which was the `chrome://extensions` page a person
+    had just used to install it, and `chrome.debugger` refuses browser UI. It now prefers an `http(s)` or
+    `about:blank` tab - creating a blank one when the window is all browser UI.
+  - A command handed to a poll whose service worker had been suspended went into a response nobody read, and the
+    caller timed out 30 s later with no clue. A command with no answer is now **re-queued once** before failing, so
+    the restarted worker's next poll picks it up. A test states it: the first deadline passes with nobody polling, and
+    the command still arrives - and is answered - on the next poll.
+- 36 suites / 583 cases.
+
 ## 0.51.0
 
 - **Browser-extension transport: drive the Chrome you are already using.** Two Chrome changes closed the earlier roads:

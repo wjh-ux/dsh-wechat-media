@@ -69,6 +69,20 @@ await test("a failing command rejects with the extension's reason, and an unknow
   } finally { await bridge.stop(); }
 });
 
+await test("a command handed to a poll that died is re-delivered once instead of being lost", async () => {
+  // Measured live: the service worker was suspended mid-poll, the command went into a response nobody read, and the
+  // caller timed out 30 s later with no clue. One re-queue is enough - the restarted worker's next poll takes it.
+  const bridge = await startBridge();
+  try {
+    const pending = bridge.call("Runtime.evaluate", { expression: "1" }, { timeoutMs: 120 });
+    await new Promise((resolve) => setTimeout(resolve, 180)); // the first deadline passes with nobody polling
+    const polled = await call(bridge, "/poll");
+    assert.equal(polled.status, 200, "the command comes back on the next poll");
+    await call(bridge, "/result", { method: "POST", body: { id: polled.body.command.id, ok: true, result: 1 } });
+    assert.equal(await pending, 1);
+  } finally { await bridge.stop(); }
+});
+
 await test("a silent extension times out instead of hanging the tool", async () => {
   const bridge = await startBridge();
   try {

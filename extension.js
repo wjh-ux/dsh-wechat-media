@@ -89,15 +89,32 @@ export class ExtensionBridge {
     this.client = null;
   }
 
-  /** Queue one CDP command for the extension and wait for its answer. */
+  /**
+   * Queue one CDP command for the extension and wait for its answer.
+   *
+   * A command handed to a poll that has already gone away (the service worker suspended mid-poll, or was reloaded) is
+   * otherwise lost forever: the response goes nowhere, the queue entry is gone, and the caller times out with no clue.
+   * So a command with no answer is **re-queued once** before the error is reported - the second poll almost always
+   * comes from the restarted worker.
+   */
   call(method, params = {}, { timeoutMs = 30_000 } = {}) {
     const id = this.nextId++;
     const pending = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const settleTimer = (attempts) => setTimeout(() => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        if (attempts < 1) {
+          // Put it back at the head: the next poll gets it, and the deadline starts again for one more round.
+          entry.attempts = attempts + 1;
+          entry.timer = settleTimer(attempts + 1);
+          this.queue.unshift({ id, method, params });
+          this.#wake();
+          return;
+        }
         this.pending.delete(id);
         reject(new Error(`扩展 ${Math.round(timeoutMs / 1000)}s 内没有回应 ${method}（浏览器扩展没在运行？）`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method });
+      this.pending.set(id, { resolve, reject, timer: settleTimer(0), method, attempts: 0 });
       this.queue.push({ id, method, params });
       this.#wake();
     });
