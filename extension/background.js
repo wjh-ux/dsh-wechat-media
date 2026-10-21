@@ -43,8 +43,10 @@ async function runCommand(command) {
   // The transport switch itself. It arrives on a poll, before the work it changes, so no command is ever run with the
   // wrong driver; id 0 is synthetic and its result is ignored.
   if (command.method === "__driver") {
-    await chrome.storage.local.set({ driver: params.mode === "script" ? "script" : "debugger" });
-    return { driver: params.mode };
+    const mode = String(params.mode ?? "").toLowerCase();
+    const stored = ["script", "hybrid"].includes(mode) ? mode : "debugger";
+    await chrome.storage.local.set({ driver: stored });
+    return { driver: stored };
   }
 
   const tabId = wantedTab ?? await pickTab();
@@ -52,6 +54,14 @@ async function runCommand(command) {
 
   const driver = await currentDriver();
   if (driver === "script") return runScriptCommand(command, tabId, params);
+  if (driver === "hybrid") {
+    // Hybrid: the script path is cheaper and leaves no banner, so it goes first; the debugger is the fallback for what
+    // scripting genuinely cannot do (native input events, full-page capture, a click that found no element). The banner
+    // therefore appears only on the commands that need it, instead of on every command.
+    try {
+      return await runScriptCommand(command, tabId, params);
+    } catch { /* fall through to the debugger for this one command */ }
+  }
 
   try {
     await chrome.debugger.attach({ tabId }, ATTACH.version);
@@ -74,7 +84,7 @@ async function runCommand(command) {
 /** The driver in force, defaulting to the capable one. */
 async function currentDriver() {
   const { driver } = await chrome.storage.local.get({ driver: "debugger" });
-  return driver === "script" ? "script" : "debugger";
+  return ["script", "hybrid"].includes(driver) ? driver : "debugger";
 }
 
 /**
@@ -133,7 +143,7 @@ async function runScriptCommand(command, tabId, params) {
     case "Input.dispatchMouseEvent": {
       // One click per press/release pair: the mouse event arrives twice, and clicking twice would double-activate.
       if (params.type !== "mouseReleased") return {};
-      await chrome.scripting.executeScript({
+      const [clicked] = await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
         args: [Number(params.x) || 0, Number(params.y) || 0],
@@ -143,6 +153,9 @@ async function runScriptCommand(command, tabId, params) {
           return Boolean(el);
         },
       });
+      // Nothing at that point means the scripted click could not land - exactly the case hybrid mode should hand to the
+      // debugger, whose mouse event is real and may hit something the DOM lookup missed (an overlay, a frame).
+      if (clicked?.result === false) throw new Error("脚本模式在该坐标没有找到可点击的元素");
       return {};
     }
     default:

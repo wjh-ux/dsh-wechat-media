@@ -485,8 +485,10 @@ itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Fei
   **扩展驱动 (the debugging banner).** Chrome draws "已开始调试此浏览器" whenever `chrome.debugger` attaches, and no
   extension can hide it - so the panel offers the choice instead: `debugger` (real input, full-page captures, any
   frame; the banner flashes while a command runs) or `script` (`chrome.scripting` in the page, **no banner ever**, and
-  `captureVisibleTab` still returns a screenshot of the visible viewport - what it gives up is native input and
-  full-page capture). The switch is stored and delivered before the next command runs.
+  `captureVisibleTab` still gives you a screenshot of the visible viewport - what it gives up is native input and
+  full-page capture), or `hybrid` (script first, and the debugger only for the command that scripting cannot finish -
+  a click that found nothing, a frame-scoped operation - so routine work leaves no trace in Chrome's UI). The switch is
+  stored and delivered before the next command runs.
 
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the

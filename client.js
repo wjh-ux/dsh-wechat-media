@@ -909,8 +909,8 @@ window.__ModuleLoader__.load({
          * Switch the extension's transport.
          *
          * `debugger` is capable but Chrome draws its own "已开始调试此浏览器" banner, which no extension may hide;
-         * `script` never attaches the debugger, so no banner appears, at the cost of native input and screenshots.
-         * That is a real trade-off, so it is a visible switch rather than something decided for the person.
+         * `script` never attaches the debugger, so no banner appears; `hybrid` tries script first and reaches for the
+         * debugger only on the commands scripting cannot do. A real trade-off, so it is a visible switch.
          */
         async function setExtensionDriver(mode) {
           setBusy(true);
@@ -919,8 +919,10 @@ window.__ModuleLoader__.load({
             setBrowserNotice({
               ok: true,
               text: answer.driver === "script"
-                ? "已切到脚本注入：不会再出现「已开始调试此浏览器」，但截图和真实鼠标事件不可用。"
-                : "已切到调试器：能力完整，Chrome 会显示「已开始调试此浏览器」（这是浏览器自己的提示，扩展关不掉）。",
+                ? "已切到脚本注入：不会再出现「已开始调试此浏览器」，截图只能截可见区域。"
+                : answer.driver === "hybrid"
+                  ? "已切到混合模式：默认走脚本注入，只有脚本办不到的那一步才临时用调试器（横幅只在必要时出现）。"
+                  : "已切到调试器：能力完整，Chrome 会显示「已开始调试此浏览器」（这是浏览器自己的提示，扩展关不掉）。",
             });
             await refresh();
           } catch (problem) {
@@ -1982,7 +1984,8 @@ window.__ModuleLoader__.load({
                   onChange: (event) => setExtensionDriver(event.target.value),
                 }, [
                   h("option", { key: "d", value: "debugger" }, t("driverDebugger", "调试器（能力全，会出现调试提示）")),
-                  h("option", { key: "s", value: "script" }, t("driverScript", "脚本注入（无提示，截图/真实输入不可用）")),
+                  h("option", { key: "s", value: "script" }, t("driverScript", "脚本注入（无提示，截图仅可见区域）")),
+                  h("option", { key: "h", value: "hybrid" }, t("driverHybrid", "混合（脚本优先，必要时才用调试器）")),
                 ]),
               ]),
               h("button", {

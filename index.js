@@ -3685,7 +3685,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     extensionBridge = new ExtensionBridge({ port, token });
     // The transport is saved as a pref, so a machine that must avoid Chrome's debugging banner keeps avoiding it
     // after a restart instead of silently going back to the capable one.
-    extensionBridge.driver = String(prefs?.extensionDriver ?? "").toLowerCase() === "script" ? "script" : "debugger";
+    const startDriver = String(prefs?.extensionDriver ?? "").toLowerCase();
+    extensionBridge.driver = ["script", "hybrid"].includes(startDriver) ? startDriver : "debugger";
     await extensionBridge.start();
     ctx.logger?.info?.("[dsh-wechat-media] browser extension bridge listening on 127.0.0.1:%s", port);
     return extensionBridge;
@@ -7062,8 +7063,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
           const body = await readArgs(req);
           const wanted = String(body.mode ?? "debugger").toLowerCase();
-          if (!["debugger", "script"].includes(wanted)) {
-            return json(res, 400, { ok: false, error: `mode 只能是 debugger / script，收到 ${wanted}` });
+          if (!["debugger", "script", "hybrid"].includes(wanted)) {
+            return json(res, 400, { ok: false, error: `mode 只能是 debugger / script / hybrid，收到 ${wanted}` });
           }
           try {
             await state.savePrefs({ extensionDriver: wanted });

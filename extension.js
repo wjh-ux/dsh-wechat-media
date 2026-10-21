@@ -65,15 +65,18 @@ export class ExtensionBridge {
   }
 
   /**
-   * Switch the extension between the two transports.
+   * Switch the extension's transport.
    *
    * `debugger` is the capable one - real mouse events, screenshots, any frame - at the cost of Chrome's own
    * "已开始调试此浏览器" banner, which no extension can hide. `script` never touches the debugger, so the banner never
-   * appears; it drives the page with `chrome.scripting` instead, which is enough to read, scroll, click and type, and
-   * not enough to capture the screen or send input Chrome considers native.
+   * appears; it drives the page with `chrome.scripting` instead. `hybrid` runs a command through the script path first
+   * and only reaches for the debugger when that path cannot do it - so the banner appears exactly when it is needed,
+   * not on every command.
    */
   async setDriver(mode) {
-    const wanted = String(mode ?? "").toLowerCase() === "script" ? "script" : "debugger";
+    const wanted = ["debugger", "script", "hybrid"].includes(String(mode ?? "").toLowerCase())
+      ? String(mode).toLowerCase()
+      : "debugger";
     this.driver = wanted;
     // Force the next poll to carry the switch, instead of waiting for a client that may not even be connected yet.
     this.driverSent = "";

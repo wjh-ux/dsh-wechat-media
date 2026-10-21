@@ -131,6 +131,15 @@ await test("the transport switch rides the next poll, before any command", async
     assert.equal(third.body.command.method, "Runtime.evaluate");
     await call(bridge, "/result", { method: "POST", body: { id: third.body.command.id, ok: true, result: 1 } });
     assert.equal(await pending, 1);
+
+    // Hybrid is the third choice: script first, the debugger only for what scripting cannot do.
+    await bridge.setDriver("hybrid");
+    const fourth = await call(bridge, "/poll");
+    assert.equal(fourth.body.command.params.mode, "hybrid");
+    assert.equal(bridge.status().driver, "hybrid");
+    // Anything unrecognised falls back to the capable transport rather than inventing a fourth state.
+    await bridge.setDriver("nonsense");
+    assert.equal(bridge.status().driver, "debugger");
   } finally { await bridge.stop(); }
 });
 

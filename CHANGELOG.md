@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.54.0
+
+- **混合模式 (hybrid) - the banner only when it is actually needed.** The third choice in 扩展驱动: every command goes
+  through `chrome.scripting` first, and only the commands that path cannot finish fall back to `chrome.debugger` for
+  that one command:
+  - a click whose `elementFromPoint` found nothing now **throws** instead of returning quietly, which is what hands it
+    to the real mouse event (an overlay, a frame, a canvas the DOM lookup cannot see);
+  - an unsupported method (`Page.captureScreenshot` full-page work, frame-scoped commands) raises the same way;
+  - everything else - navigation, reading, scrolling, typing, visible-viewport screenshots - stays on the script path,
+    so the banner does not appear at all.
+  The result: routine work leaves no trace in Chrome's UI, and the debugger appears exactly on the operations that
+  need it.
+- `driver` accepts `debugger` / `script` / `hybrid` everywhere (bridge, route, panel); an unknown value still falls back
+  to `debugger`.
+- 36 suites / 585 cases.
+
 ## 0.53.1
 
 - **Script mode is stronger than its first description claimed, and its navigation was one step behind.**
