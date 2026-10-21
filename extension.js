@@ -211,8 +211,7 @@ export class ExtensionBridge {
   }
 }
 
-/** Read a JSON body, capped: a bridge that accepts an unbounded body is a memory leak with a port. */
-async function readJson(req) {
+/** Read a JSON body, capped: a bridge that accepts an unbounded body is a memory leak with a port. */async function readJson(req) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -244,4 +243,52 @@ export function extensionSession(bridge, { tabId = null } = {}) {
     once: () => Promise.reject(new Error("扩展桥没有协议事件")),
     close: () => {},
   };
+}
+
+/**
+ * Package the extension folder as a .zip, for the panel's "one-click install" button.
+ *
+ * Chrome cannot be made to install an extension silently from a page - that is a deliberate security rule, not a gap
+ * this plugin can close - so "one click" means: hand the user a zip, open `chrome://extensions` already focused, and
+ * put the token on the clipboard. Three steps become two clicks.
+ *
+ * Uses `Compress-Archive`, which ships with Windows PowerShell; a machine without it gets a sentence, not a stack.
+ */
+export async function packExtension({ dir, zipPath, execFileImpl } = {}) {
+  const source = String(dir ?? "").trim();
+  const target = String(zipPath ?? "").trim();
+  if (!source || !target) throw new Error("打包扩展需要源目录和目标 zip 路径");
+  if (process.platform !== "win32") throw new Error("扩展打包目前用 Windows 的 Compress-Archive 实现");
+  const exec = execFileImpl ?? (await import("node:child_process")).execFile;
+  const script = `Compress-Archive -Path ${psQuote(`${source}\\*`)} -DestinationPath ${psQuote(target)} -Force`;
+  await new Promise((resolve, reject) => {
+    exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 60_000 }, (error, _out, err) => {
+      if (error) reject(new Error(String(err ?? "").trim().split(/\r?\n/)[0] || String(error.message).split("\n")[0]));
+      else resolve();
+    });
+  });
+  return { dir: source, zip: target };
+}
+
+/** Single-quote a value for PowerShell: the only escaping a literal needs is a doubled quote. */
+function psQuote(value) {
+  return `'${String(value ?? "").replace(/'/g, "''")}'`;
+}
+
+/**
+ * Ask the desktop to open Chrome's extensions page.
+ *
+ * A page cannot navigate to `chrome://` (the plugin's own `browser_open` refuses it too, and rightly), so the host
+ * asks Windows to start the browser with that URL - which is exactly what clicking a shortcut does.
+ */
+export async function openExtensionsPage({ execFileImpl } = {}) {
+  if (process.platform !== "win32") throw new Error("打开 chrome://extensions 目前只在 Windows 上实现");
+  const exec = execFileImpl ?? (await import("node:child_process")).execFile;
+  await new Promise((resolve, reject) => {
+    exec("cmd.exe", ["/c", "start", "", "chrome://extensions"], { windowsHide: true, timeout: 15_000 }, (error) => {
+      if (error) reject(new Error(String(error.message).split("\n")[0]));
+      else resolve();
+    });
+  });
+  return { opened: true };
 }

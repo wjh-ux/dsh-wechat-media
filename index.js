@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
 import { expandHome, resolveExportPath } from "./flow.js";
 import { importChromeProfile } from "./profile.js";
-import { ExtensionBridge, bridgeToken, extensionSession } from "./extension.js";
+import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "./extension.js";
 import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -7046,6 +7046,34 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/extension-install",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          try {
+            const bridge = await ensureExtensionBridge();
+            const dir = join(PLUGIN_ROOT, "extension");
+            const zip = join(dshHome, "exports", "dsh-bridge-extension.zip");
+            const packed = await packExtension({ dir, zipPath: zip });
+            // Opening the page is the part a web page cannot do for itself, and it is what makes this "one click".
+            const opened = await openExtensionsPage().then(() => true).catch(() => false);
+            noteRoute("/extension-install", { zip: packed.zip, opened });
+            return json(res, 200, {
+              ok: true,
+              zip: packed.zip,
+              dir: packed.dir,
+              token: bridge.tokenForDisplay(),
+              url: `http://127.0.0.1:${bridge.port}`,
+              opened,
+              connected: bridge.status().connected,
+            });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

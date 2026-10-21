@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.52.0
+
+- **一键安装扩展 (one click toward a loaded extension).** Chrome will not let a page install an extension silently -
+  that is a security rule, not a gap this plugin can close - so the panel now does the three things a page *can*:
+  pack `extension/` into `$DSH_HOME/exports/dsh-bridge-extension.zip` (`Compress-Archive`), open
+  `chrome://extensions` focused through the desktop (`cmd /c start`, because a page cannot navigate to `chrome://`),
+  and put the token on the clipboard. The remaining two steps - developer mode, "load unpacked", then paste - are
+  printed in one sentence in the panel.
+  - `POST /dsh-wechat-media/extension-install` returns the zip, the folder, the address and the token, so the button
+    is also usable from a script.
+  - `packExtension` / `openExtensionsPage` live in `extension.js` with an injectable `execFile`, so the command they
+    build is asserted without opening anything - including the doubled quote a path like `C:\it's here` needs.
+- 36 suites / 584 cases.
+
 ## 0.51.1
 
 - **Two failures from the first live run of the extension transport.**

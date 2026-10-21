@@ -2,7 +2,7 @@
 // browser tools expect. A real HTTP server is started on an ephemeral port, because the handshake *is* HTTP - mocking
 // fetch client-side would test the mock, not the bridge.
 import assert from "node:assert/strict";
-import { ExtensionBridge, bridgeToken, extensionSession } from "../extension.js";
+import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "../extension.js";
 
 const passed = [];
 const failed = [];
@@ -108,6 +108,26 @@ await test("the session adapter speaks the CDP shape the browser tools use, and 
 await test("a token is 32 hex characters, so it can be pasted and not guessed", () => {
   assert.match(bridgeToken(), /^[0-9a-f]{32}$/);
   assert.notEqual(bridgeToken(), bridgeToken());
+});
+
+await test("the install helper packs the folder and opens the extensions page", async () => {
+  // Chrome cannot be told to install silently - that is a security rule, not a missing feature - so the panel does the
+  // three things a page can: package the folder, open chrome://extensions, put the token on the clipboard.
+  const calls = [];
+  const execFileImpl = (file, args, options, done) => { calls.push({ file, args, options }); done?.(null, ""); };
+  const packed = await packExtension({ dir: "C:\\plugins\\dsh-wechat-media\\extension", zipPath: "C:\\out\\ext.zip", execFileImpl });
+  assert.equal(packed.zip, "C:\\out\\ext.zip");
+  assert.equal(calls[0].file, "powershell.exe");
+  assert.match(calls[0].args.join(" "), /Compress-Archive/);
+  assert.match(calls[0].args.join(" "), /'C:\\plugins\\dsh-wechat-media\\extension\\\*'/);
+
+  const opened = await openExtensionsPage({ execFileImpl });
+  assert.equal(opened.opened, true);
+  assert.match(calls[1].args.join(" "), /chrome:\/\/extensions/);
+
+  const quoted = await packExtension({ dir: "C:\\it's here\\extension", zipPath: "C:\\out\\x.zip", execFileImpl });
+  assert.equal(quoted.zip, "C:\\out\\x.zip");
+  assert.match(calls[2].args.join(" "), /'C:\\it''s here\\extension\\\*'/, "an apostrophe in a path is doubled, not dropped");
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

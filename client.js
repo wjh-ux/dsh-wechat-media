@@ -878,6 +878,33 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /**
+         * One click toward a loaded extension.
+         *
+         * Chrome does not let a page install an extension silently, so this does the three things a page *can* do:
+         * pack the folder into a zip, open `chrome://extensions` focused, and put the token on the clipboard - then
+         * say the two remaining steps in one sentence.
+         */
+        async function installExtension() {
+          setBusy(true);
+          try {
+            const answer = await api("/extension-install");
+            let copied = false;
+            try { await navigator.clipboard.writeText(answer.token); copied = true; } catch { /* clipboard may be blocked */ }
+            setBrowserNotice({
+              ok: true,
+              text: `已打包到 ${answer.zip}${answer.opened ? "，并打开 chrome://extensions" : ""}。`
+                + `${copied ? "token 已复制到剪贴板。" : `token：${answer.token}。`}`
+                + `装法：开发者模式 → 加载已解压的扩展程序 → 选 ${answer.dir} → 扩展选项里填 ${answer.url} 和 token。`,
+            });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `安装助手失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Pull cookies / bookmarks out of the real Chrome into the profile the tools launch (Chrome must be closed). */
         async function importChromeLogin() {
           setBusy(true);
@@ -1919,6 +1946,14 @@ window.__ModuleLoader__.load({
                 onClick: importChromeLogin,
                 title: t("importLoginHint", "把 Chrome 的 Cookie、书签、已存密码复制进插件 profile；需要先完全退出 Chrome"),
               }, t("importLogin", "导入登录")),
+              h("button", {
+                key: "extinstall",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: installExtension,
+                title: t("installExtensionHint", "打包扩展、打开 chrome://extensions、把 token 放进剪贴板"),
+              }, t("installExtension", "一键安装扩展")),
               h("label", { key: "proxy", className: "dswxMeta" }, [
                 t("browserProxy", " 代理 ") + " ",
                 h("input", {
