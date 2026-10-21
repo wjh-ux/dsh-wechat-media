@@ -321,7 +321,8 @@ await test("the browser session can be the person's own Chrome, and a busy profi
   // browser next to the one the person actually uses. Three named sessions, one of which is their real profile.
   assert.match(host, /export const BROWSER_PROFILE_MODES = Object\.freeze\(\["own", "chrome", "attach"\]\)/);
   assert.match(host, /if \(settings\.profileMode === "attach"\)/, "attach adopts a window instead of replacing it");
-  assert.match(host, /if \(settings\.profileMode === "chrome"\)/, "chrome launches the real profile");
+  assert.match(host, /if \(settings\.profileMode === "chrome"\)/, "chrome imports the real state first");
+  assert.match(host, /importChromeProfile\(\{ from: settings\.chromeProfileDir, to: settings\.profileDir \}\)/, "into the profile we may debug");
   assert.match(host, /正在运行（\$\{running\} 个进程）/, "a busy Chrome is explained, not left as a timeout");
   assert.match(host, /browserChromeProfileDir: "chromeProfileDir"/, "the profile directory can be overridden");
   assert.match(panel, /browserProfileMode/, "the panel offers the three sessions");

@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
 import { expandHome, resolveExportPath } from "./flow.js";
+import { importChromeProfile } from "./profile.js";
 import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -1943,6 +1944,66 @@ export function apply(ctx, config = {}) {
         await reply(`「自动测试软件正在控制 Chrome」提示条已设为${hidden ? "隐藏" : "显示"}。\n下次打开浏览器时生效（已开的窗口要重开）。`);
         return true;
       }
+      if (sub === "import") {
+        // Pull cookies / saved passwords / bookmarks out of the real Chrome and into the profile we may debug. Chrome
+        // must be closed: it holds these files open, and a half-copied cookie database is worse than none.
+        const settings = browserConfig();
+        const running = await browserProcessCount(settings.channel);
+        if (running > 0) {
+          await reply(`你的 ${settings.channel === "edge" ? "Edge" : "Chrome"} 正在运行（${running} 个进程），导入会拿到写了一半的文件。\n先完全退出浏览器（任务栏右下角也退出），再发一次。`);
+          return true;
+        }
+        try {
+          const imported = await importChromeProfile({ from: settings.chromeProfileDir, to: settings.profileDir });
+          noteRoute("/command", { command: "browser", action: "import", copied: imported.copied.length });
+          await reply([
+            `已从 ${imported.from}`,
+            `导入到 ${imported.to}`,
+            `复制 ${imported.copied.length} 个文件（${Math.round(imported.bytes / 1024)} KB）：`,
+            ...imported.copied.map((file) => `  · ${file}`),
+            imported.missing.length ? `跳过 ${imported.missing.length} 个不存在的文件：${imported.missing.join("、")}` : "",
+            "",
+            "这是快照：之后两边的登录状态不会互相同步，需要时再发 /browser import。",
+          ].filter(Boolean).join("\n"));
+        } catch (error) {
+          await reply(`导入失败：${String(error?.message ?? error)}`);
+        }
+        return true;
+      }
+      if (sub === "launch") {
+        // Option C: one dedicated Chrome the person can also use day to day, started with the debugging port, then
+        // switched to `attach` so the tools drive exactly that window and never close it.
+        const settings = browserConfig();
+        const running = await browserProcessCount(settings.channel);
+        if (running > 0) {
+          await reply(`已经有 ${settings.channel === "edge" ? "Edge" : "Chrome"} 在运行（${running} 个进程），先完全退出，或者直接用 /browser session attach 接管它。`);
+          return true;
+        }
+        const mod = await import("./browser.js");
+        const profileDir = join(dshHome, "browser-profile-work");
+        try {
+          const launched = await mod.browserLaunch({
+            channel: settings.channel,
+            port: settings.port,
+            headless: false,
+            profileDir,
+            width: 1600,
+            height: 1000,
+            automation: true,
+            proxy: settings.proxy,
+          });
+          await applyBrowserPrefs({ browserProfileMode: "attach" });
+          noteRoute("/command", { command: "browser", action: "launch", port: launched.port });
+          await reply([
+            `已启动一个专用 Chrome（端口 ${launched.port}，配置目录 ${profileDir}）。`,
+            "会话已切到 attach：以后我就驱动这个窗口，而且不会关它。",
+            "你平时也可以直接用这个窗口——它就是你日常的那个浏览器。",
+          ].join("\n"));
+        } catch (error) {
+          await reply(`启动失败：${String(error?.message ?? error)}`);
+        }
+        return true;
+      }
       if (sub === "session") {
         // Which browser the tools drive: the plugin's own profile, the person's real Chrome (same logins), or a window
         // they started themselves. The third one exists because Chrome refuses a second instance on a live profile, and
@@ -1953,10 +2014,11 @@ export function apply(ctx, config = {}) {
           await reply([
             `浏览器会话：${current.profileMode}`,
             "  own    独立 profile（默认，插件自己的窗口）",
-            "  chrome 我的 Chrome（共用登录；需要先完全退出 Chrome）",
+            "  chrome 导入你 Chrome 的登录状态，再用插件窗口打开（需先完全退出 Chrome）",
             "  attach 接管已开的 Chrome（要带 --remote-debugging-port 启动）",
             "",
             "切换：/browser session own | chrome | attach",
+            "立即导入：/browser import · 起一个专用 Chrome：/browser launch",
           ].join("\n"));
           return true;
         }
@@ -2008,6 +2070,7 @@ export function apply(ctx, config = {}) {
         "",
         "切换：/browser mode headless | headed | erp",
         "会话：/browser session own | chrome | attach",
+        "导入登录：/browser import · 专用 Chrome：/browser launch",
         "代理：/browser proxy 127.0.0.1:7897 | off",
         "提示条：/browser bar off | on",
         "导出目录：/browser exportdir D:\\导出",
@@ -3181,8 +3244,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       keepOpen: mode.keepOpen,
       width: mode.width,
       height: mode.height,
-      // `attach` drives whatever is already on the port, so the profile here is only informational for it.
-      profileDir: profileMode === "chrome" ? (chromeProfileDir || mode.profileDir) : mode.profileDir,
+      // `chrome` imports that browser's cookies and bookmarks into the plugin's own profile and launches *that*: Chrome
+      // 136+ ignores `--remote-debugging-port` on a default profile directory, so the real instance can never be
+      // driven. `attach` drives whatever is already on the port, so the profile here is only informational for it.
+      profileDir: mode.profileDir,
     };
   }
 
@@ -5665,6 +5730,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         let pid = null;
         let started = false;
         let attached = false;
+        let imported = null;
         let replacedStale = false;
         let staleReason = "";
         if (settings.profileMode === "attach") {
@@ -5693,17 +5759,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             replacedStale = true;
           }
           if (settings.profileMode === "chrome") {
-            // Chrome forwards to the running instance instead of starting a second one on the same profile, so the
-            // debugging port would never open and the launch would time out saying nothing useful.
+            // "Same Chrome as mine", done the only way Chrome allows it: copy the state a person cares about (cookies,
+            // saved passwords, bookmarks) into the profile we are allowed to debug, then launch that. Chrome 136+
+            // ignores the debugging port on the default directory, so driving the real instance is not an option.
             const running = await browserProcessCount(settings.channel);
             if (running > 0) {
               throw new Error(
                 `你的 ${settings.channel === "edge" ? "Edge" : "Chrome"} 正在运行（${running} 个进程），`
-                + "它不允许第二个实例共用同一个配置目录。\n"
-                + "先完全退出浏览器（关掉所有窗口，任务栏右下角也退出），再让我打开；"
+                + "导入登录状态要求它完全退出。\n"
+                + "先关掉所有窗口（任务栏右下角也退出），再让我打开；"
                 + "或者把「浏览器会话」切回「独立 profile（默认）」。",
               );
             }
+            imported = await importChromeProfile({ from: settings.chromeProfileDir, to: settings.profileDir });
           }
           const hosts = await proxyHosts();
           const pacUrl = await writePacFile(hosts, settings.proxy);
@@ -5725,7 +5793,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const session = mod.createCdpSession(page.webSocketDebuggerUrl);
         await session.ready;
         await session.send("Page.enable");
-        browserLive = { session, port: settings.port, pid, started, attached, replacedStale, staleReason, url: String(page.url ?? "") };
+        browserLive = { session, port: settings.port, pid, started, attached, imported, replacedStale, staleReason, url: String(page.url ?? "") };
         return { mod, settings, live: browserLive };
       }
 
@@ -5764,7 +5832,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             : (live.attached
               ? `（接管的是你自己打开的浏览器，我不会关它）`
               : `（接管了端口 ${live.port} 上已开的浏览器）`);
-          return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${note}`;
+          const importedNote = live.imported?.copied?.length
+            ? `\n已从你的 Chrome 导入 ${live.imported.copied.length} 个文件（${Math.round((live.imported.bytes ?? 0) / 1024)} KB）：${live.imported.copied.join("、")}`
+            : "";
+          return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${note}${importedNote}`;
         },
       );
 
@@ -6894,6 +6965,29 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/import-profile",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          try {
+            const settings = browserConfig();
+            const running = await browserProcessCount(settings.channel);
+            if (running > 0) {
+              return json(res, 409, {
+                ok: false,
+                error: `你的 ${settings.channel === "edge" ? "Edge" : "Chrome"} 正在运行（${running} 个进程），先完全退出再导入`,
+              });
+            }
+            const imported = await importChromeProfile({ from: settings.chromeProfileDir, to: settings.profileDir });
+            noteRoute("/import-profile", { copied: imported.copied.length });
+            return json(res, 200, { ok: true, ...imported });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

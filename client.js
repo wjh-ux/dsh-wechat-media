@@ -878,6 +878,20 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Pull cookies / bookmarks out of the real Chrome into the profile the tools launch (Chrome must be closed). */
+        async function importChromeLogin() {
+          setBusy(true);
+          try {
+            const answer = await api("/import-profile");
+            setBrowserNotice({ ok: true, text: `已导入 ${answer?.copied?.length ?? 0} 个文件到插件 profile（下次打开浏览器就能带上登录）` });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `导入失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Save the directory a bare `save` lands in; empty restores $DSH_HOME/exports. */
         async function saveExportDir(text) {
           setBusy(true);
@@ -1887,6 +1901,14 @@ window.__ModuleLoader__.load({
                   h("option", { key: "a", value: "attach" }, t("browserSessionAttach", "接管已开的 Chrome")),
                 ]),
               ]),
+              h("button", {
+                key: "imp",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: importChromeLogin,
+                title: t("importLoginHint", "把 Chrome 的 Cookie、书签、已存密码复制进插件 profile；需要先完全退出 Chrome"),
+              }, t("importLogin", "导入登录")),
               h("label", { key: "proxy", className: "dswxMeta" }, [
                 t("browserProxy", " 代理 ") + " ",
                 h("input", {

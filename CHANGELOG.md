@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.50.0
+
+- **"Same Chrome as mine", done the only way Chrome allows.** Chrome 136+ silently ignores `--remote-debugging-port`
+  when `--user-data-dir` is the default profile - measured here on Chrome 155: the process started, the window
+  appeared, the port never listened. So `浏览器会话` / `browserProfileMode` now means three things, all reachable from
+  the panel **and** the chat:
+  - `own` - the plugin's own profile, unchanged;
+  - `chrome` - **import** the state that carries a login (`Local State`, `Cookies`, `Login Data`, `Bookmarks`,
+    `Preferences`) into the plugin's profile, then launch that. Refuses while Chrome is running: a half-written cookie
+    database is worse than none. `/browser import` re-runs it at any time;
+  - `attach` - drive a Chrome the person started with `--remote-debugging-port`, and never close it.
+    `/browser launch` starts such a Chrome on its own profile and switches to this mode, which is the "one browser for
+    everything" answer.
+- `profile.js` owns the copy and reports what moved: copied files, skipped files (an old Chrome has no
+  `Default/Network/Cookies`), and the bytes. History and extensions are deliberately left behind.
+- The panel gains a **导入登录** button beside the session select; the copy is a snapshot, not a sync, and the docs say
+  so.
+- 35 suites / 576 cases.
+
 ## 0.49.0
 
 - **"Why is this a different Chrome than mine?" - three named sessions.** The plugin always launched its own profile,
