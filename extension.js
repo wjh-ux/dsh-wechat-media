@@ -281,14 +281,16 @@ function psQuote(value) {
  * A page cannot navigate to `chrome://` (the plugin's own `browser_open` refuses it too, and rightly), so the host
  * asks Windows to start the browser with that URL - which is exactly what clicking a shortcut does.
  */
-export async function openExtensionsPage({ execFileImpl } = {}) {
-  if (process.platform !== "win32") throw new Error("打开 chrome://extensions 目前只在 Windows 上实现");
+export async function openExtensionsPage({ execFileImpl, channel = "chrome" } = {}) {
+  if (process.platform !== "win32") throw new Error("打开浏览器扩展页目前只在 Windows 上实现");
+  // Edge is Chromium with the same extension API and the same `chrome.debugger`; only its settings URL differs.
+  const page = String(channel).toLowerCase() === "edge" ? "edge://extensions" : "chrome://extensions";
   const exec = execFileImpl ?? (await import("node:child_process")).execFile;
   await new Promise((resolve, reject) => {
-    exec("cmd.exe", ["/c", "start", "", "chrome://extensions"], { windowsHide: true, timeout: 15_000 }, (error) => {
+    exec("cmd.exe", ["/c", "start", "", page], { windowsHide: true, timeout: 15_000 }, (error) => {
       if (error) reject(new Error(String(error.message).split("\n")[0]));
       else resolve();
     });
   });
-  return { opened: true };
+  return { opened: true, page };
 }

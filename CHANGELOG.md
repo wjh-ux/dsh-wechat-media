@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.52.1
+
+- **Edge is a first-class browser for the extension too.** The companion extension is plain MV3 plus
+  `chrome.debugger`, which Edge implements identically, so the same `extension/` folder loads unchanged from
+  `edge://extensions` - no second build, no manifest fork. Only the settings URL differs, and the install button now
+  opens the one for the configured channel (`browserChannel = edge` → `edge://extensions`) instead of always Chrome's.
+  The host side was already Edge-aware: `msedge.exe` lookup, `%LOCALAPPDATA%\Microsoft\Edge\User Data`, and
+  `msedge.exe` in the process check.
+- 36 suites / 584 cases.
+
 ## 0.52.0
 
 - **一键安装扩展 (one click toward a loaded extension).** Chrome will not let a page install an extension silently -

@@ -477,9 +477,10 @@ itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Fei
 - `extension` - **the one that reaches your real Chrome.** Load `extension/` as an unpacked extension
   (chrome://extensions → developer mode), put the address and token from the panel (or `/browser ext`) into its
   options, and every `browser_*` tool runs through `chrome.debugger` inside your own browser - your logins, your tabs,
-  no debugging port. The panel's **一键安装扩展** button packs the folder into `$DSH_HOME/exports`, opens
-  `chrome://extensions` and puts the token on the clipboard; Chrome does not allow a page to install an extension
-  silently, so those last two clicks stay yours.
+  no debugging port. **Edge works the same way**: the folder loads unchanged from `edge://extensions`. The panel's
+  **一键安装扩展** button packs the folder into `$DSH_HOME/exports`, opens the settings page of the configured channel
+  (`chrome://extensions` or `edge://extensions`) and puts the token on the clipboard; Chrome does not allow a page to
+  install an extension silently, so those last two clicks stay yours.
 
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the

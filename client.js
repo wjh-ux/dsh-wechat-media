@@ -893,7 +893,7 @@ window.__ModuleLoader__.load({
             try { await navigator.clipboard.writeText(answer.token); copied = true; } catch { /* clipboard may be blocked */ }
             setBrowserNotice({
               ok: true,
-              text: `已打包到 ${answer.zip}${answer.opened ? "，并打开 chrome://extensions" : ""}。`
+              text: `已打包到 ${answer.zip}${answer.opened ? `，并打开 ${answer.opened}` : ""}。`
                 + `${copied ? "token 已复制到剪贴板。" : `token：${answer.token}。`}`
                 + `装法：开发者模式 → 加载已解压的扩展程序 → 选 ${answer.dir} → 扩展选项里填 ${answer.url} 和 token。`,
             });

@@ -123,11 +123,17 @@ await test("the install helper packs the folder and opens the extensions page", 
 
   const opened = await openExtensionsPage({ execFileImpl });
   assert.equal(opened.opened, true);
+  assert.equal(opened.page, "chrome://extensions");
   assert.match(calls[1].args.join(" "), /chrome:\/\/extensions/);
+
+  // Edge is Chromium with the same extension API; only its settings page has another name.
+  const edge = await openExtensionsPage({ execFileImpl, channel: "edge" });
+  assert.equal(edge.page, "edge://extensions");
+  assert.match(calls[2].args.join(" "), /edge:\/\/extensions/);
 
   const quoted = await packExtension({ dir: "C:\\it's here\\extension", zipPath: "C:\\out\\x.zip", execFileImpl });
   assert.equal(quoted.zip, "C:\\out\\x.zip");
-  assert.match(calls[2].args.join(" "), /'C:\\it''s here\\extension\\\*'/, "an apostrophe in a path is doubled, not dropped");
+  assert.match(calls[3].args.join(" "), /'C:\\it''s here\\extension\\\*'/, "an apostrophe in a path is doubled, not dropped");
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

@@ -7063,7 +7063,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const zip = join(dshHome, "exports", "dsh-bridge-extension.zip");
             const packed = await packExtension({ dir, zipPath: zip });
             // Opening the page is the part a web page cannot do for itself, and it is what makes this "one click".
-            const opened = await openExtensionsPage().then(() => true).catch(() => false);
+            // Which page depends on the channel: Edge uses the same API and only renames its settings URL.
+            const opened = await openExtensionsPage({ channel: browserConfig().channel }).then((result) => result.page).catch(() => "");
             noteRoute("/extension-install", { zip: packed.zip, opened });
             return json(res, 200, {
               ok: true,
