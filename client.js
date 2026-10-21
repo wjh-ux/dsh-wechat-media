@@ -458,6 +458,7 @@ window.__ModuleLoader__.load({
         const [browserDraft, setBrowserDraft] = react.useState({});
         // The PAC host list: undefined until edited, so the field follows /state the rest of the time.
         const [proxyHostsDraft, setProxyHostsDraft] = react.useState(undefined);
+        const [exportDirDraft, setExportDirDraft] = react.useState(undefined);
         // The tasks form: one schedule line, one action and one payload. Creation from a chat stays the
         // normal path; this is for "I am already looking at the list".
         // undefined = "not edited yet", so the field follows /state until somebody types in it.
@@ -839,8 +840,7 @@ window.__ModuleLoader__.load({
           }
         }
 
-        /** Save the list of domains that should go through the proxy. Empty means "all of them". */
-        async function saveProxyHosts(text) {
+        /** Save the list of domains that should go through the proxy. Empty means "all of them". */        async function saveProxyHosts(text) {
           setBusy(true);
           try {
             await api(`/proxy-hosts?action=set&hosts=${encodeURIComponent(String(text ?? ""))}`);
@@ -848,6 +848,46 @@ window.__ModuleLoader__.load({
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
+         * Ask the machine for a folder.
+         *
+         * A page cannot learn an absolute path on its own - `showDirectoryPicker()` hides it and `webkitdirectory`
+         * only reports relative names - so the host opens the ordinary Windows dialog and answers with the path.
+         * `cancelled` is a normal answer: closing the dialog is not an error.
+         */
+        async function browseExportDir() {
+          setBusy(true);
+          try {
+            const answer = await api("/export-dir?action=browse");
+            if (answer?.cancelled) {
+              setBrowserNotice({ ok: true, text: "没有选择文件夹（保持原样）" });
+            } else if (answer?.dir) {
+              setExportDirDraft(undefined);
+              setBrowserNotice({ ok: true, text: `导出目录已设为：${answer.dir}` });
+            }
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `打开文件夹选择框失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /** Save the directory a bare `save` lands in; empty restores $DSH_HOME/exports. */
+        async function saveExportDir(text) {
+          setBusy(true);
+          try {
+            const answer = await api(`/export-dir?action=set&dir=${encodeURIComponent(String(text ?? ""))}`);
+            setExportDirDraft(undefined);
+            setBrowserNotice({ ok: true, text: `导出目录：${answer?.dir ?? "默认"}` });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `保存失败：${String(problem?.message ?? problem)}` });
           } finally {
             setBusy(false);
           }
@@ -1908,6 +1948,27 @@ window.__ModuleLoader__.load({
               ]),
               h("span", { key: "now", className: "dswxMeta" },
                 `${t("browserBarNow", "当前")}: ${snapshot?.browser?.hideAutomationBar === false ? "显示" : "隐藏"}`),
+            ]),
+            // Where a bare `save: "out.csv"` lands, with a real Windows folder dialog behind 浏览…: the page cannot
+            // know an absolute path, so the host asks the machine.
+            h("div", { key: "exportdir", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, t("flowExportDir", "流程导出目录")),
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("flowExportDirHint", "默认 $DSH_HOME/exports"),
+                disabled: busy,
+                value: exportDirDraft ?? (snapshot?.browser?.exportDir ?? ""),
+                onChange: (event) => setExportDirDraft(event.target.value),
+              }),
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: browseExportDir }, t("browse", "浏览…")),
+              h("button", {
+                key: "s",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: () => saveExportDir(exportDirDraft ?? snapshot?.browser?.exportDir ?? ""),
+              }, t("save", "Save")),
             ]),
             browserNotice ? h("p", { key: "browsernotice", className: "dswxMsg" }, browserNotice.text) : null,
             h("p", { key: "browserstate", className: "dswxMeta" }, snapshot?.browser

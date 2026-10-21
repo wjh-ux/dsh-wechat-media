@@ -511,6 +511,10 @@ step stops the run and says which step it was - and the rows collected before it
 directory, `$DSH_HOME/exports` unless `/browser exportdir D:\导出` says otherwise. `~` expands and the folder is
 created; the report always shows the absolute path that was written.
 
+The panel's 流程导出目录 row has **浏览…**, which opens the real Windows folder dialog on this machine and saves the
+choice as soon as it is made. The dialog runs in the host, not the page, because a browser cannot learn an absolute
+path: `showDirectoryPicker()` hides it and `webkitdirectory` reports only relative names.
+
 To build a flow without writing selectors by hand, `browser_record({action:"start"})`, do the task once, then
 `browser_record({action:"stop"})` returns the steps as JSON. The recorder captures clicks on links/buttons/inputs,
 value changes, Enter, and a debounced scroll (one step per pause, not one per pixel), and picks selectors by `#id`,

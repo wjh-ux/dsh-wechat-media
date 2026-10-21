@@ -300,7 +300,7 @@ await test("startup warms every cache /state reads, not just Feishu's", () => {
 
 const browserSource = readFileSync(joinPath(pluginDir, "browser.js"), "utf8");
 await test("the browser settings reach the panel, the route and the environment", () => {
-  assert.match(host, /browser: browserState\(\),/, "/state reports the browser settings");
+  assert.match(host, /browser: browserState\(\{ exportDir: flowExportDir\(/, "/state reports the browser settings, including the export folder");
   assert.match(host, /browserPatch = browserPrefsPatch\(browserArgs\)/, "/prefs accepts them");
   assert.match(host, /\.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode too");
   assert.match(host, /browser: applied\.browser, browserChanged: applied\.changed/, "and reports what changed");

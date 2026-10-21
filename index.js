@@ -94,6 +94,7 @@ import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
+import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
 import { openSessionAgent } from "./session.js";
@@ -155,6 +156,17 @@ const DEDUP_LIMIT = 500;
  * would answer twice (once through the tool, once through the relay).
  */
 const DELIVERY_TOOLS = new Set(["wechat_send_text", "wechat_send_file", "wechat_send_voice", "wecom_send_text", "wecom_send_file", "wecom_send_voice", "feishu_send_text", "feishu_send_file"]);
+/**
+ * Where a bare `save` lands: the folder somebody chose, or `$DSH_HOME/exports`.
+ *
+ * Module scope, not inside `apply`, because three different scopes ask the same question - the flow tool, the
+ * `/state` payload and the route the panel browses with. A helper only one of them can see is exactly how
+ * "flowExportBase is not defined" reaches a chat as a failed answer.
+ */
+export function flowExportDir(prefs, dshHome) {
+  const saved = String(prefs?.flowExportDir ?? "").trim();
+  return saved ? expandHome(saved) : join(dshHome, "exports");
+}
 /**
  * Which build this process is running.
  *
@@ -1908,7 +1920,7 @@ export function apply(ctx, config = {}) {
             await state.savePrefs({ flowExportDir: "" });
             noteRoute("/command", { command: "browser", action: "exportdir", dir: "" });
           }
-          const now = await flowExportBase();
+          const now = flowExportDir(await state.loadPrefs(), dshHome);
           await reply([
             `流程导出目录：${now}`,
             reset ? "已恢复默认。" : "",
@@ -1930,7 +1942,7 @@ export function apply(ctx, config = {}) {
         `  通道：${now.channel} · 端口：${now.port}`,
         `  代理：${now.proxy || "未设置"}`,
         `  自动化提示条：${now.hideAutomationBar ? "隐藏" : "显示"}`,
-        `  流程导出目录：${await flowExportBase()}`,
+        `  流程导出目录：${flowExportDir(await state.loadPrefs(), dshHome)}`,
         "",
         "切换：/browser mode headless | headed | erp",
         "代理：/browser proxy 127.0.0.1:7897 | off",
@@ -3491,7 +3503,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /** What a reader may know about the browser settings. */
-  function browserState() {
+  function browserState({ exportDir = "" } = {}) {
     const settings = browserConfig();
     const saved = browserSavedPrefs ?? {};
     const given = config.browser ?? {};
@@ -3502,6 +3514,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       mode: settings.mode,
       headless: settings.headless,
       hideAutomationBar: settings.hideAutomationBar,
+      // Where `browser_flow` writes when `save` is a bare name; the panel shows it and can browse for another.
+      exportDir,
       proxy: settings.proxy,
       proxyHosts: proxyHostsCache,
       proxyMode: proxyHostsCache.length ? "pac" : (settings.proxy ? "global" : "off"),
@@ -5801,21 +5815,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
-      /**
-       * Where a relative `save` lands.
-       *
-       * A relative path used to resolve against `process.cwd()`, which for a packaged app is the install directory:
-       * `save: "out.csv"` then wrote a file nobody could find. Now it resolves against the export directory, which is
-       * `$DSH_HOME/exports` unless the person chose another one (`/browser exportdir D:\导出`).
-       */
-      async function flowExportBase() {
-        try {
-          const prefs = await state.loadPrefs();
-          const saved = String(prefs?.flowExportDir ?? "").trim();
-          if (saved) return expandHome(saved);
-        } catch { /* a missing prefs file means the default, not an error */ }
-        return join(dshHome, "exports");
-      }
+      // Where a relative `save` lands is `flowExportDir(prefs, dshHome)` at module scope: the route, the /state
+      // payload and this tool all ask the same question, and they do not share a scope.
 
       /** `~`, `~/x` and `~\x` as the current user's home; everything else unchanged. */
       // (expandHome and resolveExportPath live in flow.js: the path rules are data handling, and a unit test can
@@ -5827,7 +5828,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
        * absolute so the chat can show exactly where the file went.
        */
       async function saveFlowRows(target, rows, { name = "flow" } = {}) {
-        const path = await resolveExportPath(target, { base: await flowExportBase(), name });
+        const path = await resolveExportPath(target, { base: flowExportDir(await state.loadPrefs(), dshHome), name });
         if (path.toLowerCase().endsWith(".csv")) {
           const columns = Object.keys(rows[0] ?? {});
           const cell = (value) => {
@@ -6583,7 +6584,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             feishu: await feishuState(),
             // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
             tavily: tavilyState(),
-            browser: browserState(),
+            browser: browserState({ exportDir: flowExportDir(await state.loadPrefs(), dshHome) }),
             desktop: desktopState(prefs),
             // How secrets are stored on disk, and anything still in the clear. A file that says
             // "plaintext" is honest; a file that said "encrypted" while storing plaintext would not be.
@@ -6786,6 +6787,40 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/export-dir",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "get");
+          try {
+            if (action === "browse") {
+              // The dialog runs on this machine because a page cannot learn an absolute path: `showDirectoryPicker`
+              // hides it and `webkitdirectory` only ever reports relative names. `path: ""` means cancelled.
+              const picked = await dialogs.pickFolder({
+                title: "选择流程导出文件夹",
+                initial: String(body.initial ?? "").trim() || (flowExportDir(await state.loadPrefs(), dshHome)),
+              });
+              if (!picked.path) return json(res, 200, { ok: true, cancelled: true, dir: flowExportDir(await state.loadPrefs(), dshHome) });
+              await state.savePrefs({ flowExportDir: picked.path });
+              noteRoute("/export-dir", { action: "browse", dir: picked.path });
+              return json(res, 200, { ok: true, dir: picked.path });
+            }
+            if (action === "set") {
+              const dir = String(body.dir ?? "").trim();
+              await state.savePrefs({ flowExportDir: dir });
+              noteRoute("/export-dir", { action: "set", dir });
+              return json(res, 200, { ok: true, dir: flowExportDir(await state.loadPrefs(), dshHome) });
+            }
+            if (action !== "get") return json(res, 400, { ok: false, error: `未知 action：${action}（get / set / browse）` });
+            return json(res, 200, { ok: true, dir: flowExportDir(await state.loadPrefs(), dshHome), fallback: join(dshHome, "exports") });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

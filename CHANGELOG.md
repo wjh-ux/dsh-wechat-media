@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.48.2
+
+- **Browse for the export folder instead of typing it.** The panel's 流程导出目录 row now carries 浏览…, which opens the
+  ordinary Windows folder dialog on this machine (`-STA`, seeded with the current folder) and saves what was chosen.
+  It has to run in the host: a page cannot learn an absolute path - `showDirectoryPicker()` deliberately hides it and
+  `webkitdirectory` reports only relative names - so `dialogs.js` builds the PowerShell script and
+  `/dsh-wechat-media/export-dir` serves `get` / `set` / `browse`. Cancelling is a normal answer (`cancelled: true`),
+  not an error.
+- `pickFile` / `OpenFileDialog` are there for the same dialog over a file, so a flow can be pointed at an existing
+  `.csv` later without another round of plumbing.
+- 34 suites / 570 cases.
+
 ## 0.48.1
 
 - **`save` now means a place, not "next to the installer".** A relative path resolved against `process.cwd()`, which
