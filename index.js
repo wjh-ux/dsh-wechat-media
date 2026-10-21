@@ -167,6 +167,39 @@ export function flowExportDir(prefs, dshHome) {
   const saved = String(prefs?.flowExportDir ?? "").trim();
   return saved ? expandHome(saved) : join(dshHome, "exports");
 }
+
+/** Where the browser session comes from: this plugin's own profile, the person's real one, or a window already open. */
+export const BROWSER_PROFILE_MODES = Object.freeze(["own", "chrome", "attach"]);
+
+/**
+ * The profile Chrome actually runs with - where the person's logins, cookies and bookmarks live.
+ *
+ * Empty rather than guessed when the platform or the environment cannot answer: a wrong path would start a *new*
+ * empty profile and silently log the person out of everything, which is worse than saying "I could not find it".
+ */
+export function chromeUserDataDir({ channel = "chrome", env = process.env, platform = process.platform } = {}) {
+  const local = String(env.LOCALAPPDATA ?? "").trim();
+  if (platform !== "win32" || !local) return "";
+  return channel === "edge" ? join(local, "Microsoft", "Edge", "User Data") : join(local, "Google", "Chrome", "User Data");
+}
+
+/**
+ * How many of that browser's processes are running.
+ *
+ * Chrome will not start a second instance on a profile that is already in use - it forwards the request to the
+ * running one and exits, so the debugging port never opens and the launch fails with a confusing timeout. Counting
+ * first turns that into a sentence a person can act on: quit Chrome, then try again.
+ */
+export async function browserProcessCount(channel = "chrome", { exec = execFile, platform = process.platform } = {}) {
+  if (platform !== "win32") return 0;
+  const image = channel === "edge" ? "msedge.exe" : "chrome.exe";
+  const stdout = await new Promise((resolve) => {
+    try {
+      exec("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/NH"], { windowsHide: true, timeout: 5000 }, (error, out) => resolve(error ? "" : String(out ?? "")));
+    } catch { resolve(""); }
+  });
+  return stdout.split(/\r?\n/).filter((line) => line.toLowerCase().includes(image)).length;
+}
 /**
  * Which build this process is running.
  *
@@ -1910,6 +1943,34 @@ export function apply(ctx, config = {}) {
         await reply(`「自动测试软件正在控制 Chrome」提示条已设为${hidden ? "隐藏" : "显示"}。\n下次打开浏览器时生效（已开的窗口要重开）。`);
         return true;
       }
+      if (sub === "session") {
+        // Which browser the tools drive: the plugin's own profile, the person's real Chrome (same logins), or a window
+        // they started themselves. The third one exists because Chrome refuses a second instance on a live profile, and
+        // the second exists because "same browser as mine" is what a person usually means by "open Chrome".
+        const wanted = String(arg ?? "").trim().toLowerCase();
+        if (!BROWSER_PROFILE_MODES.includes(wanted)) {
+          const current = browserConfig();
+          await reply([
+            `浏览器会话：${current.profileMode}`,
+            "  own    独立 profile（默认，插件自己的窗口）",
+            "  chrome 我的 Chrome（共用登录；需要先完全退出 Chrome）",
+            "  attach 接管已开的 Chrome（要带 --remote-debugging-port 启动）",
+            "",
+            "切换：/browser session own | chrome | attach",
+          ].join("\n"));
+          return true;
+        }
+        await applyBrowserPrefs({ browserProfileMode: wanted });
+        noteRoute("/command", { command: "browser", action: "session", mode: wanted });
+        const now = browserConfig();
+        const advice = now.profileMode === "chrome"
+          ? `\n共用配置目录：${now.profileDir}（先完全退出 Chrome，否则它不允许第二个实例）`
+          : now.profileMode === "attach"
+            ? `\n先这样启动你自己的 Chrome：chrome.exe --remote-debugging-port=${now.port}`
+            : "";
+        await reply(`浏览器会话：${now.profileMode}${advice}\n下次打开浏览器时生效（已开的窗口先 /browser close 或关掉）。`);
+        return true;
+      }
       if (sub === "exportdir" || sub === "exports") {
         // Where `browser_flow` writes when `save` is a bare file name. A file a person cannot find is a file that was
         // not exported, so the directory is theirs to choose - and it is printed back absolute.
@@ -1942,9 +2003,11 @@ export function apply(ctx, config = {}) {
         `  通道：${now.channel} · 端口：${now.port}`,
         `  代理：${now.proxy || "未设置"}`,
         `  自动化提示条：${now.hideAutomationBar ? "隐藏" : "显示"}`,
+        `  会话：${now.profileMode}${now.profileMode === "chrome" ? `（共用 ${now.profileDir}）` : ""}`,
         `  流程导出目录：${flowExportDir(await state.loadPrefs(), dshHome)}`,
         "",
         "切换：/browser mode headless | headed | erp",
+        "会话：/browser session own | chrome | attach",
         "代理：/browser proxy 127.0.0.1:7897 | off",
         "提示条：/browser bar off | on",
         "导出目录：/browser exportdir D:\\导出",
@@ -3096,8 +3159,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       dshHome,
       savedHeadless,
     });
+    const channel = (pick(saved.channel, given.channel, process.env.DSH_BROWSER_CHANNEL) || "chrome").toLowerCase();
+    // Which browser the person means: the plugin's own profile (default), their real Chrome (same logins), or a
+    // window they started themselves on the debugging port (`attach` - never closed by us).
+    const rawProfileMode = String(pick(saved.profileMode, given.profileMode, process.env.DSH_BROWSER_PROFILE_MODE) || "own").toLowerCase();
+    const profileMode = BROWSER_PROFILE_MODES.includes(rawProfileMode) ? rawProfileMode : "own";
+    const chromeProfileDir = pick(saved.chromeProfileDir, given.chromeProfileDir) || chromeUserDataDir({ channel });
     return {
-      channel: (pick(saved.channel, given.channel, process.env.DSH_BROWSER_CHANNEL) || "chrome").toLowerCase(),
+      channel,
       port: Number(pick(saved.port, given.port, process.env.DSH_BROWSER_PORT)) || 9222,
       // Normalised once, so the launcher and /state cannot disagree about what "127.0.0.1:7897" means.
       proxy: parseProxyAddress(pick(saved.proxy, given.proxy, process.env.DSH_BROWSER_PROXY)).proxy,
@@ -3106,11 +3175,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       // The "自动测试软件正在控制 Chrome" bar: hidden by default, because a person watching the ERP window reads it
       // as "something is wrong". Turning it off costs only `Browser.getBrowserCommandLine`, which nothing calls.
       hideAutomationBar: saved.hideAutomationBar !== false,
+      profileMode,
+      chromeProfileDir,
       visible: mode.visible,
       keepOpen: mode.keepOpen,
       width: mode.width,
       height: mode.height,
-      profileDir: mode.profileDir,
+      // `attach` drives whatever is already on the port, so the profile here is only informational for it.
+      profileDir: profileMode === "chrome" ? (chromeProfileDir || mode.profileDir) : mode.profileDir,
     };
   }
 
@@ -3122,10 +3194,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     // A string like the rest of these, so it is forwarded by the same list - v0.39.0 forgot to do that for the
     // mode and the setting saved nothing while answering "no change".
     browserProxy: "proxy",
+    browserChromeProfileDir: "chromeProfileDir",
   });
   const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless", browserHideAutomationBar: "hideAutomationBar" });
-  // `browserMode` is a string, not a switch: it carries the three named modes, and a boolean cannot say "erp".
-  const BROWSER_PREF_MODES = Object.freeze({ browserMode: "mode" });
+  // Both are strings, not switches: `erp` is not "not headless", and `attach` is not "not own".
+  const BROWSER_PREF_MODES = Object.freeze({
+    browserMode: { key: "mode", values: BROWSER_MODE_NAMES },
+    browserProfileMode: { key: "profileMode", values: BROWSER_PROFILE_MODES },
+  });
 
   /** Apply the browser fields from a request body; a boolean field is read as a boolean, not as the string "false". */
   function browserPrefsPatch(args = {}) {
@@ -3136,13 +3212,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       patch[key] = String(args[field] ?? "").trim();
       changed.push(key);
     }
-    for (const [field, key] of Object.entries(BROWSER_PREF_MODES)) {
+    for (const [field, spec] of Object.entries(BROWSER_PREF_MODES)) {
       if (args[field] === undefined) continue;
       const wanted = String(args[field] ?? "").trim().toLowerCase();
       if (!wanted) continue;
-      if (!BROWSER_MODE_NAMES.includes(wanted)) throw new Error(`browserMode 只能是 ${BROWSER_MODE_NAMES.join(" / ")}，收到 ${wanted}`);
-      patch[key] = wanted;
-      changed.push(key);
+      if (!spec.values.includes(wanted)) throw new Error(`${field} 只能是 ${spec.values.join(" / ")}，收到 ${wanted}`);
+      patch[spec.key] = wanted;
+      changed.push(spec.key);
     }
     for (const [field, key] of Object.entries(BROWSER_PREF_SWITCHES)) {
       if (args[field] === undefined) continue;
@@ -3514,6 +3590,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       mode: settings.mode,
       headless: settings.headless,
       hideAutomationBar: settings.hideAutomationBar,
+      // Which browser a tool action will drive: our own profile, the person's Chrome, or a window already open.
+      profileMode: settings.profileMode,
+      chromeProfileDir: settings.chromeProfileDir,
       // Where `browser_flow` writes when `save` is a bare name; the panel shows it and can browse for another.
       exportDir,
       proxy: settings.proxy,
@@ -5585,34 +5664,60 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         if (browserLive?.session) return { mod, settings, live: browserLive };
         let pid = null;
         let started = false;
+        let attached = false;
         let replacedStale = false;
         let staleReason = "";
-        try {
-          // Any browser still answering the port belongs to a *previous* run: the PAC it was launched with points at
-          // a server that died with that run, so adopting it means a window whose host list can never work again.
-          // So the first browser action of a run adopts nothing: it closes the leftover and starts its own. One
-          // owner per run is a rule this code can keep; comparing arguments meant racing the process being closed.
-          await mod.browserVersion({ port: settings.port, timeoutMs: 1200 });
-          staleReason = "上次运行遗留的浏览器";
-          ctx.logger?.info?.("[dsh-wechat-media] closing the browser left over from the previous run on port %s", settings.port);
-          await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
-          await waitForPortFree(settings.port);
-          replacedStale = true;
-          throw new Error("leftover browser closed");
-        } catch {
+        if (settings.profileMode === "attach") {
+          // Take over the window the person already has, and never close it: that window holds their logins, their
+          // tabs and possibly work in progress. Adopting is the whole point of the mode - so a port that answers is a
+          // success here, where every other mode treats it as a leftover to replace.
+          const version = await mod.browserVersion({ port: settings.port, timeoutMs: 1500 }).catch(() => null);
+          if (!version) {
+            throw new Error(
+              `端口 ${settings.port} 上没有可接管的浏览器。用你自己的 Chrome 这样启动一次：\n`
+              + `  chrome.exe --remote-debugging-port=${settings.port}\n`
+              + `或者在面板里把「浏览器会话」切回「独立 profile（默认）」或「我的 Chrome（共用登录）」。`,
+            );
+          }
+          attached = true;
+        } else {
+          let leftover = null;
+          try { leftover = await mod.browserVersion({ port: settings.port, timeoutMs: 1200 }); } catch { leftover = null; }
+          if (leftover) {
+            // Any browser still answering the port belongs to a *previous* run: the PAC it was launched with points at
+            // a server that died with that run, so adopting it means a window whose host list can never work again.
+            staleReason = "上次运行遗留的浏览器";
+            ctx.logger?.info?.("[dsh-wechat-media] closing the browser left over from the previous run on port %s", settings.port);
+            await mod.browserCloseBrowser({ port: settings.port }).catch(() => {});
+            await waitForPortFree(settings.port);
+            replacedStale = true;
+          }
+          if (settings.profileMode === "chrome") {
+            // Chrome forwards to the running instance instead of starting a second one on the same profile, so the
+            // debugging port would never open and the launch would time out saying nothing useful.
+            const running = await browserProcessCount(settings.channel);
+            if (running > 0) {
+              throw new Error(
+                `你的 ${settings.channel === "edge" ? "Edge" : "Chrome"} 正在运行（${running} 个进程），`
+                + "它不允许第二个实例共用同一个配置目录。\n"
+                + "先完全退出浏览器（关掉所有窗口，任务栏右下角也退出），再让我打开；"
+                + "或者把「浏览器会话」切回「独立 profile（默认）」。",
+              );
+            }
+          }
           const hosts = await proxyHosts();
-        const pacUrl = await writePacFile(hosts, settings.proxy);
-        const launched = await mod.browserLaunch({
-          channel: settings.channel,
-          port: settings.port,
-          headless: settings.headless,
-          profileDir: settings.profileDir,
-          width: settings.width,
-          height: settings.height,
-          proxy: settings.proxy,
-          pacUrl,
-          automation: !settings.hideAutomationBar,
-        });
+          const pacUrl = await writePacFile(hosts, settings.proxy);
+          const launched = await mod.browserLaunch({
+            channel: settings.channel,
+            port: settings.port,
+            headless: settings.headless,
+            profileDir: settings.profileDir,
+            width: settings.width,
+            height: settings.height,
+            proxy: settings.proxy,
+            pacUrl,
+            automation: !settings.hideAutomationBar,
+          });
           pid = launched.pid ?? null;
           started = true;
         }
@@ -5620,7 +5725,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const session = mod.createCdpSession(page.webSocketDebuggerUrl);
         await session.ready;
         await session.send("Page.enable");
-        browserLive = { session, port: settings.port, pid, started, replacedStale, staleReason, url: String(page.url ?? "") };
+        browserLive = { session, port: settings.port, pid, started, attached, replacedStale, staleReason, url: String(page.url ?? "") };
         return { mod, settings, live: browserLive };
       }
 
@@ -5656,7 +5761,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           live.url = opened.url;
           const note = live.started
             ? (live.replacedStale ? `（检测到旧配置的浏览器，已关闭并按当前设置重新打开${live.staleReason ? `：${live.staleReason}` : ""}）` : "")
-            : `（接管了端口 ${live.port} 上已开的浏览器，设置一致）`;
+            : (live.attached
+              ? `（接管的是你自己打开的浏览器，我不会关它）`
+              : `（接管了端口 ${live.port} 上已开的浏览器）`);
           return `已打开 ${opened.url}（标题：${opened.title || "（无）"}）${note}`;
         },
       );

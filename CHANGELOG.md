@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.49.0
+
+- **"Why is this a different Chrome than mine?" - three named sessions.** The plugin always launched its own profile,
+  so "open Chrome" produced a second, empty browser beside the one the person actually uses. `browserProfileMode`
+  now says which browser a tool drives:
+  - `own` (default) - the plugin's own profile under `$DSH_HOME`, exactly as before;
+  - `chrome` - **the person's real Chrome profile** (`%LOCALAPPDATA%\Google\Chrome\User Data`, overridable with
+    `browserChromeProfileDir`), so logins, bookmarks and extensions are there. Chrome refuses a second instance on a
+    live profile, so a running Chrome is detected first (`tasklist`) and reported as a sentence - "quit Chrome, then
+    try again" - instead of a launch that times out saying nothing;
+  - `attach` - take over a Chrome the person started with `--remote-debugging-port=9222`, and **never close it**.
+    This is the one mode where a port that already answers is a success rather than a leftover to replace.
+  Reachable from a panel select (`会话`), from `/browser session own|chrome|attach`, and reported by `/browser`
+  status and `/state`.
+- `browser_open` now says which of the three happened - launched, replaced a stale window, or "接管的是你自己打开的
+  浏览器，我不会关它".
+- 34 suites / 573 cases.
+
 ## 0.48.3
 
 - **The folder dialog is started with a window.** 0.48.2 ran it through `runDesktopScript`, which launches

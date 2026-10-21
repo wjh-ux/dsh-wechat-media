@@ -466,6 +466,12 @@ Verified live against Chrome 155: a page received typed input (17 and 25) and a 
 itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Feishu. Every failure states its reason
 (`browser_click 失败：nothing on the page matches the selector "…"`).
 
+**Which browser? (`会话` / `browserProfileMode`)** - `own` (default) is the plugin's own profile above; `chrome` starts
+**your** Chrome profile (`%LOCALAPPDATA%\Google\Chrome\User Data`, or `browserChromeProfileDir`), so your logins and
+bookmarks are there - quit Chrome first, because Chrome refuses a second instance on a live profile and the plugin says
+so instead of timing out; `attach` takes over a Chrome **you** started with `--remote-debugging-port=9222` and never
+closes it. Same settings from the chat: `/browser session own|chrome|attach`.
+
 ### Flow automation / 流程自动化（影刀式）
 
 `browser_flow` is the RPA part: a task is written **once** as JSON, and replayed on demand - open, search, click,

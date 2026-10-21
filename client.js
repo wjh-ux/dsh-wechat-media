@@ -1871,6 +1871,22 @@ window.__ModuleLoader__.load({
                   h("option", { key: "e", value: "erp" }, t("browserModeErp", "ERP 操作（可见 + 独立 profile）")),
                 ]),
               ]),
+              // Which browser the tools drive. "我的 Chrome" is the answer to "why is this a different Chrome than mine?":
+              // it launches the real profile, so the person's logins and bookmarks are there.
+              h("label", { key: "session", className: "dswxMeta" }, [
+                t("browserSession", " 会话 ") + " ",
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
+                  disabled: busy,
+                  value: browserDraft.browserProfileMode ?? snapshot?.browser?.profileMode ?? "own",
+                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProfileMode: event.target.value })),
+                }, [
+                  h("option", { key: "o", value: "own" }, t("browserSessionOwn", "独立 profile（默认）")),
+                  h("option", { key: "c", value: "chrome" }, t("browserSessionChrome", "我的 Chrome（共用登录）")),
+                  h("option", { key: "a", value: "attach" }, t("browserSessionAttach", "接管已开的 Chrome")),
+                ]),
+              ]),
               h("label", { key: "proxy", className: "dswxMeta" }, [
                 t("browserProxy", " 代理 ") + " ",
                 h("input", {

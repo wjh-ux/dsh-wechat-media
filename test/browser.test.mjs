@@ -314,6 +314,28 @@ await test("the browser settings reach the panel, the route and the environment"
   assert.match(panel, /snapshot\?\.browser\?\.channel/, "and the saved channel comes back after a reload");
 });
 
+const { chromeUserDataDir } = await import("../index.js");
+
+await test("the browser session can be the person's own Chrome, and a busy profile is reported as such", () => {
+  // Why this exists: the plugin used to always start its own profile, so "open Chrome" produced a second, empty
+  // browser next to the one the person actually uses. Three named sessions, one of which is their real profile.
+  assert.match(host, /export const BROWSER_PROFILE_MODES = Object\.freeze\(\["own", "chrome", "attach"\]\)/);
+  assert.match(host, /if \(settings\.profileMode === "attach"\)/, "attach adopts a window instead of replacing it");
+  assert.match(host, /if \(settings\.profileMode === "chrome"\)/, "chrome launches the real profile");
+  assert.match(host, /正在运行（\$\{running\} 个进程）/, "a busy Chrome is explained, not left as a timeout");
+  assert.match(host, /browserChromeProfileDir: "chromeProfileDir"/, "the profile directory can be overridden");
+  assert.match(panel, /browserProfileMode/, "the panel offers the three sessions");
+  assert.match(panel, /browserSessionChrome/, "including 我的 Chrome");
+
+  // The real profile path is read from the environment, never guessed.
+  assert.equal(chromeUserDataDir({ channel: "chrome", env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, platform: "win32" }),
+    joinPath("C:\\Users\\me\\AppData\\Local", "Google", "Chrome", "User Data"));
+  assert.equal(chromeUserDataDir({ channel: "edge", env: { LOCALAPPDATA: "C:\\L" }, platform: "win32" }),
+    joinPath("C:\\L", "Microsoft", "Edge", "User Data"));
+  assert.equal(chromeUserDataDir({ channel: "chrome", env: {}, platform: "win32" }), "", "no LOCALAPPDATA means no guess");
+  assert.equal(chromeUserDataDir({ channel: "chrome", env: { LOCALAPPDATA: "C:\\L" }, platform: "linux" }), "");
+});
+
 await test("the three browser modes differ where it matters", () => {
   const home = "C:\\dsh";
   const headless = browserModeSettings({ mode: "headless", dshHome: home });
