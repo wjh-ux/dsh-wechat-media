@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
+import { expandHome, resolveExportPath } from "./flow.js";
 import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -1897,6 +1898,30 @@ export function apply(ctx, config = {}) {
         await reply(`「自动测试软件正在控制 Chrome」提示条已设为${hidden ? "隐藏" : "显示"}。\n下次打开浏览器时生效（已开的窗口要重开）。`);
         return true;
       }
+      if (sub === "exportdir" || sub === "exports") {
+        // Where `browser_flow` writes when `save` is a bare file name. A file a person cannot find is a file that was
+        // not exported, so the directory is theirs to choose - and it is printed back absolute.
+        const rest = String(command.args ?? "").trim().replace(/^exports?dir?\s*/i, "").trim();
+        const reset = /^(default|reset|恢复默认)$/i.test(rest);
+        if (!rest || reset) {
+          if (reset) {
+            await state.savePrefs({ flowExportDir: "" });
+            noteRoute("/command", { command: "browser", action: "exportdir", dir: "" });
+          }
+          const now = await flowExportBase();
+          await reply([
+            `流程导出目录：${now}`,
+            reset ? "已恢复默认。" : "",
+            "设置：/browser exportdir D:\\导出（支持 ~ 和中文路径）",
+          ].filter(Boolean).join("\n"));
+          return true;
+        }
+        const wanted = expandHome(rest);
+        await state.savePrefs({ flowExportDir: wanted });
+        noteRoute("/command", { command: "browser", action: "exportdir", dir: wanted });
+        await reply(`流程导出目录已设为 ${wanted}\n下次 browser_flow 带 save 时生效。`);
+        return true;
+      }
       const now = browserConfig();
       await reply([
         `浏览器模式：${now.mode}`,
@@ -1905,10 +1930,12 @@ export function apply(ctx, config = {}) {
         `  通道：${now.channel} · 端口：${now.port}`,
         `  代理：${now.proxy || "未设置"}`,
         `  自动化提示条：${now.hideAutomationBar ? "隐藏" : "显示"}`,
+        `  流程导出目录：${await flowExportBase()}`,
         "",
         "切换：/browser mode headless | headed | erp",
         "代理：/browser proxy 127.0.0.1:7897 | off",
         "提示条：/browser bar off | on",
+        "导出目录：/browser exportdir D:\\导出",
       ].join("\n"));
       return true;
     }
@@ -5724,7 +5751,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         "Run a list of browser steps (goto / click / type / press / wait / waitFor / scroll / extract / each / eval / assert) and return a per-step report plus the rows they collected. This is the RPA-style runner: write the flow once, replay it as often as needed.",
         {
           flow: { type: "string", required: true, description: "Flow JSON: an array of steps, or {name, url, steps}." },
-          save: { type: "string", description: "Optional path: the collected rows are written there as JSON (or .csv)." },
+          save: { type: "string", description: "Where to write the rows: a file path (D:\\导出\\门店.csv), a folder (D:\\导出 - the flow name + timestamp name the file), or a bare name (out.csv - lands in the export directory). Absolute path is returned." },
         },
         async (args) => {
           const { live } = await browserEnsure();
@@ -5745,7 +5772,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const report = flowMod.formatFlowResult(result);
           const target = String(args.save ?? "").trim();
           if (!target || result.rows.length === 0) return report;
-          const saved = await saveFlowRows(target, result.rows);
+          const saved = await saveFlowRows(target, result.rows, { name: result.name });
           return `${report}\n\n已保存 ${result.rows.length} 条到 ${saved}`;
         },
       );
@@ -5775,13 +5802,32 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       );
 
       /**
-       * Write collected rows to a file. CSV for anything ending in `.csv` (with a BOM, so Excel opens Chinese
-       * correctly instead of guessing), JSON otherwise. Relative paths land under the working directory, which is
-       * where the person started the harness and therefore where they will look.
+       * Where a relative `save` lands.
+       *
+       * A relative path used to resolve against `process.cwd()`, which for a packaged app is the install directory:
+       * `save: "out.csv"` then wrote a file nobody could find. Now it resolves against the export directory, which is
+       * `$DSH_HOME/exports` unless the person chose another one (`/browser exportdir D:\导出`).
        */
-      async function saveFlowRows(target, rows) {
-        const path = isAbsolute(target) ? target : join(process.cwd(), target);
-        await mkdir(dirname(path), { recursive: true });
+      async function flowExportBase() {
+        try {
+          const prefs = await state.loadPrefs();
+          const saved = String(prefs?.flowExportDir ?? "").trim();
+          if (saved) return expandHome(saved);
+        } catch { /* a missing prefs file means the default, not an error */ }
+        return join(dshHome, "exports");
+      }
+
+      /** `~`, `~/x` and `~\x` as the current user's home; everything else unchanged. */
+      // (expandHome and resolveExportPath live in flow.js: the path rules are data handling, and a unit test can
+      // state them without starting a browser or a plugin.)
+
+      /**
+       * Write collected rows to a file. CSV for anything ending in `.csv` (with a BOM, so Excel opens Chinese
+       * correctly instead of guessing), JSON otherwise. The path is resolved by `resolveExportPath`, and returned
+       * absolute so the chat can show exactly where the file went.
+       */
+      async function saveFlowRows(target, rows, { name = "flow" } = {}) {
+        const path = await resolveExportPath(target, { base: await flowExportBase(), name });
         if (path.toLowerCase().endsWith(".csv")) {
           const columns = Object.keys(rows[0] ?? {});
           const cell = (value) => {

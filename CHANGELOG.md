@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.48.1
+
+- **`save` now means a place, not "next to the installer".** A relative path resolved against `process.cwd()`, which
+  in a packaged app is the install directory - so `save: "out.csv"` wrote a file nobody could find. Three shapes are
+  understood now: a file (`D:\导出\门店.csv`), a folder (`D:\导出` - existing, trailing separator, or no extension,
+  where `<flow>-<time>.csv` names the file), and a bare name (`out.csv`) that lands in the export directory. `~`
+  expands, Chinese paths pass through, the parent folder is created, and the **absolute** path is what the tool
+  reports back.
+- The export directory is `$DSH_HOME/exports` until somebody sets one: `/browser exportdir D:\导出` (with
+  `default`/`reset` to go back), and `/browser` status prints the directory in force.
+- `expandHome` / `exportFileName` / `resolveExportPath` are pure functions in `flow.js`, so the rules are stated by a
+  test rather than discovered by a file appearing in the wrong folder. 33 suites / 562 cases.
+
 ## 0.48.0
 
 - **Flow automation: the 影刀-shaped half of the browser.** A task is written once as JSON and replayed on demand.

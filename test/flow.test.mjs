@@ -3,7 +3,8 @@
 // browser - the shapes it sends are the same ones browser.js sends (see its header for the measured originals).
 import assert from "node:assert/strict";
 
-const { normalizeFlow, extractExpression, runFlow, formatFlowResult, startRecording, stopRecording, FLOW_STEP_TYPES } = await import("../flow.js");
+const { normalizeFlow, extractExpression, runFlow, formatFlowResult, startRecording, stopRecording, FLOW_STEP_TYPES, expandHome, exportFileName, resolveExportPath } = await import("../flow.js");
+import { join as joinPath0 } from "node:path";
 
 const passed = [];
 const failed = [];
@@ -140,6 +141,43 @@ await test("recording is started in the page and read back from sessionStorage",
   assert.equal(flow.steps[0].selector, "#a");
   // The recorded flow is runnable without editing: normalization accepts it as it is.
   assert.equal(normalizeFlow(flow).steps.length, 2);
+});
+
+// Where a `save` lands is a decision a person made once, so the rules are stated here rather than discovered by
+// writing a file into the install directory and wondering where it went.
+await test("a save path means what a person typed: file, folder, bare name, or ~", async () => {
+  const base = joinPath0(process.env.TEMP || "/tmp", "dsh-flow-exports");
+  assert.equal(expandHome("~", "C:\\Users\\me"), "C:\\Users\\me");
+  assert.equal(expandHome("~/x", "C:\\Users\\me"), joinPath0("C:\\Users\\me", "x"));
+  assert.equal(expandHome("D:\\导出", "C:\\Users\\me"), "D:\\导出", "a Windows path is not touched");
+
+  const made = [];
+  const mkdirImpl = async (dir) => { made.push(dir); };
+  const missing = async () => { throw new Error("missing"); };
+
+  const file = await resolveExportPath("out.csv", { base, mkdirImpl, statImpl: missing });
+  assert.equal(file, joinPath0(base, "out.csv"), "a bare name lands in the export directory");
+  assert.equal(made.at(-1), base, "and its folder is created");
+
+  const absolute = await resolveExportPath("D:\\导出\\门店.csv", { base, mkdirImpl, statImpl: missing });
+  assert.equal(absolute, "D:\\导出\\门店.csv", "an absolute file path is used as it is");
+
+  const folder = await resolveExportPath("D:\\导出", { base, name: "maps coffee", mkdirImpl, statImpl: missing });
+  assert.match(folder, /^D:\\导出\\maps-coffee-.*\.csv$/, "a path without an extension is a folder, named after the flow");
+
+  const existing = await resolveExportPath("D:\\已有", { base, name: "f", mkdirImpl, statImpl: async () => ({ isDirectory: () => true }) });
+  assert.match(existing, /^D:\\已有\\f-.*\.csv$/, "an existing folder is a folder even without a trailing slash");
+
+  const trailing = await resolveExportPath("D:\\导出\\", { base, name: "f", mkdirImpl, statImpl: missing });
+  assert.match(trailing, /^D:\\导出\\f-.*\.csv$/, "a trailing separator always means a folder");
+  await assert.rejects(() => resolveExportPath("   ", { base }), /save 是空的/);
+});
+
+await test("the export file name is safe on Windows and keeps the flow's name readable", () => {
+  const when = new Date("2026-10-21T05:12:33.000Z");
+  assert.equal(exportFileName("maps coffee", when), "maps-coffee-2026-10-21T05-12-33.csv");
+  assert.equal(exportFileName("a/b:c", when), "a-b-c-2026-10-21T05-12-33.csv", "characters Windows forbids are replaced");
+  assert.equal(exportFileName("", when), "flow-2026-10-21T05-12-33.csv", "an unnamed flow still gets a name");
 });
 
 // The plugin's own wiring: three new tools, one shared session, and the runner packaged with the plugin.

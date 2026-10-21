@@ -80,8 +80,8 @@ export const COMMANDS = [
   {
     name: "browser",
     aliases: ["浏览器"],
-    usage: "/browser [status|mode headless|headed|erp|proxy 127.0.0.1:7897|off|bar off|on|hosts add x.com]",
-    summary: "浏览器模式：headless 无窗口；headed 可见窗口；erp 可见窗口 + 独立持久 profile（登录态保留，适合操作 ERP 时人手接管）；bar off 隐藏「自动测试软件正在控制 Chrome」提示条",
+    usage: "/browser [status|mode headless|headed|erp|proxy 127.0.0.1:7897|off|bar off|on|exportdir D:\\导出|hosts add x.com]",
+    summary: "浏览器模式：headless 无窗口；headed 可见窗口；erp 可见窗口 + 独立持久 profile（登录态保留，适合操作 ERP 时人手接管）；bar off 隐藏「自动测试软件正在控制 Chrome」提示条；exportdir 设置流程导出的文件夹",
   },
   {
     name: "office",

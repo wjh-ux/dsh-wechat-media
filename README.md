@@ -506,6 +506,11 @@ row's own text). A column that matches nothing is `""`, never a missing key.
 the rows; `save` writes them as `.csv` (UTF-8 with a BOM, so Excel opens Chinese correctly) or `.json`. A failing
 step stops the run and says which step it was - and the rows collected before it are kept.
 
+`save` is a place, not just a name: a full path (`D:\导出\门店.csv`) is written as given, a folder
+(`D:\导出`, or a path with no extension) gets `<flow>-<time>.csv` inside it, and a bare name lands in the export
+directory, `$DSH_HOME/exports` unless `/browser exportdir D:\导出` says otherwise. `~` expands and the folder is
+created; the report always shows the absolute path that was written.
+
 To build a flow without writing selectors by hand, `browser_record({action:"start"})`, do the task once, then
 `browser_record({action:"stop"})` returns the steps as JSON. The recorder captures clicks on links/buttons/inputs,
 value changes, Enter, and a debounced scroll (one step per pause, not one per pixel), and picks selectors by `#id`,

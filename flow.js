@@ -18,6 +18,9 @@
  * for selectors. The last one is the escape hatch, not the way through.
  */
 
+import { stat, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { browserEvaluate, browserClick, browserOpen, browserType } from "./browser.js";
 
 /** Every step type a flow may contain, with the one field it cannot do without. */
@@ -404,4 +407,55 @@ export function formatFlowResult(result, { maxRows = 20 } = {}) {
   const values = Object.entries(result.values ?? {});
   if (values.length) lines.push("", `变量：${values.map(([name, value]) => `${name}=${summarize(value)}`).join("，")}`);
   return lines.join("\n");
+}
+
+/**
+ * `~`, `~/x` and `~\x` as the current user's home. Everything else comes back unchanged, so a Windows path or a
+ * Chinese path is passed through untouched.
+ */
+export function expandHome(value, home = homedir()) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (text === "~") return home;
+  if (text.startsWith("~/") || text.startsWith("~\\")) return join(home, text.slice(2));
+  return text;
+}
+
+/** A file name from a flow name and a time: `maps-coffee-2026-10-21T05-12-33.csv`, with the illegal bits removed. */
+export function exportFileName(name, now = new Date()) {
+  const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const slug = String(name ?? "flow")
+    .trim()
+    .replace(/[\\/:*?"<>|\s]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "flow";
+  return `${slug}-${stamp}.csv`;
+}
+
+/**
+ * Work out the file a `save` argument means.
+ *
+ * Three shapes are accepted, because three are what people type: a full path to a file (`D:\导出\门店.csv`), a folder
+ * - existing, trailing separator, or with no extension (`D:\导出`) - where the flow name and a timestamp name the
+ * file, and a bare name (`out.csv`) which lands in `base`. The result is always absolute, so the report can show
+ * exactly where the file went; `resolveExportPath` also creates the parent directory, because a save that fails on a
+ * missing folder is a save that never happened.
+ */
+export async function resolveExportPath(raw, { base = "", name = "flow", home, statImpl = stat, mkdirImpl = mkdir, now = new Date() } = {}) {
+  const wanted = expandHome(raw, home);
+  if (!wanted) throw new Error("save 是空的：给文件名（out.csv）、目录（D:\\导出）或完整路径");
+  let path = isAbsolute(wanted) ? wanted : join(base || process.cwd(), wanted);
+  const trailing = /[\\/]$/.test(wanted);
+  const hasExtension = /\.[a-z0-9]{1,8}$/i.test(wanted);
+  let isDirectory = trailing || !hasExtension;
+  if (!isDirectory) {
+    // A folder spelled without a trailing slash is still a folder, and writing "…/导出" as a file would be wrong.
+    try {
+      const info = await statImpl(path);
+      if (info.isDirectory()) isDirectory = true;
+    } catch { /* it does not exist yet: the extension decides */ }
+  }
+  if (isDirectory) path = join(path, exportFileName(name, now));
+  await mkdirImpl(dirname(path), { recursive: true });
+  return path;
 }
