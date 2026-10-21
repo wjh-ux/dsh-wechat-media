@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
 import { expandHome, resolveExportPath } from "./flow.js";
 import { importChromeProfile } from "./profile.js";
+import { ExtensionBridge, bridgeToken, extensionSession } from "./extension.js";
 import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
 /**
  * The Windows folder picker, run by the host on the user's own desktop. The browser
@@ -170,7 +171,7 @@ export function flowExportDir(prefs, dshHome) {
 }
 
 /** Where the browser session comes from: this plugin's own profile, the person's real one, or a window already open. */
-export const BROWSER_PROFILE_MODES = Object.freeze(["own", "chrome", "attach"]);
+export const BROWSER_PROFILE_MODES = Object.freeze(["own", "chrome", "attach", "extension"]);
 
 /**
  * The profile Chrome actually runs with - where the person's logins, cookies and bookmarks live.
@@ -1944,6 +1945,25 @@ export function apply(ctx, config = {}) {
         await reply(`「自动测试软件正在控制 Chrome」提示条已设为${hidden ? "隐藏" : "显示"}。\n下次打开浏览器时生效（已开的窗口要重开）。`);
         return true;
       }
+      if (sub === "ext" || sub === "extension") {
+        // The extension transport: where to point it, the token to paste, and whether it has connected.
+        try {
+          const bridge = await ensureExtensionBridge();
+          const status = bridge.status();
+          await reply([
+            `浏览器扩展：${status.connected ? `已连接（${status.name}，${status.tabs} 个标签页）` : "未连接"}`,
+            `  插件地址：http://127.0.0.1:${status.port}`,
+            `  Token：${bridge.tokenForDisplay()}`,
+            `  扩展目录：${join(PLUGIN_ROOT, "extension")}`,
+            "",
+            "装法：chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选上面这个目录 → 扩展选项里填地址和 token",
+            "用法：/browser session extension",
+          ].join("\n"));
+        } catch (error) {
+          await reply(`扩展桥启动失败：${String(error?.message ?? error)}`);
+        }
+        return true;
+      }
       if (sub === "import") {
         // Pull cookies / saved passwords / bookmarks out of the real Chrome and into the profile we may debug. Chrome
         // must be closed: it holds these files open, and a half-copied cookie database is worse than none.
@@ -2016,9 +2036,10 @@ export function apply(ctx, config = {}) {
             "  own    独立 profile（默认，插件自己的窗口）",
             "  chrome 导入你 Chrome 的登录状态，再用插件窗口打开（需先完全退出 Chrome）",
             "  attach 接管已开的 Chrome（要带 --remote-debugging-port 启动）",
+            "  extension 通过浏览器扩展驱动你自己的 Chrome（登录态就是你的）",
             "",
-            "切换：/browser session own | chrome | attach",
-            "立即导入：/browser import · 起一个专用 Chrome：/browser launch",
+            "切换：/browser session own | chrome | attach | extension",
+            "立即导入：/browser import · 起一个专用 Chrome：/browser launch · 扩展状态：/browser ext",
           ].join("\n"));
           return true;
         }
@@ -3643,8 +3664,32 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     }
   }
 
+  /**
+   * The extension bridge, started once per run and kept: the companion extension polls it continuously.
+   *
+   * Defined at this scope because three callers need it - the browser tools, `/state` (the panel shows whether the
+   * extension is connected) and the `/browser ext` command - and a helper only one of them can see is how
+   * "not defined" reaches a chat as a failed answer.
+   */
+  let extensionBridge = null;
+
+  async function ensureExtensionBridge() {
+    if (extensionBridge) { await extensionBridge.start(); return extensionBridge; }
+    const prefs = await state.loadPrefs();
+    let token = String(prefs?.extensionToken ?? "").trim();
+    if (!token) {
+      token = bridgeToken();
+      await state.savePrefs({ extensionToken: token });
+    }
+    const port = Number(prefs?.extensionPort) || 9339;
+    extensionBridge = new ExtensionBridge({ port, token });
+    await extensionBridge.start();
+    ctx.logger?.info?.("[dsh-wechat-media] browser extension bridge listening on 127.0.0.1:%s", port);
+    return extensionBridge;
+  }
+
   /** What a reader may know about the browser settings. */
-  function browserState({ exportDir = "" } = {}) {
+  function browserState({ exportDir = "", extension = null } = {}) {
     const settings = browserConfig();
     const saved = browserSavedPrefs ?? {};
     const given = config.browser ?? {};
@@ -3660,6 +3705,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       chromeProfileDir: settings.chromeProfileDir,
       // Where `browser_flow` writes when `save` is a bare name; the panel shows it and can browse for another.
       exportDir,
+      // The companion extension: whether it is connected, on which port, and the token to paste into it.
+      extension,
       proxy: settings.proxy,
       proxyHosts: proxyHostsCache,
       proxyMode: proxyHostsCache.length ? "pac" : (settings.proxy ? "global" : "off"),
@@ -5733,6 +5780,26 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         let imported = null;
         let replacedStale = false;
         let staleReason = "";
+        if (settings.profileMode === "extension") {
+          // The one transport that reaches the person's real Chrome: an extension inside it speaks `chrome.debugger`,
+          // which is CDP. No debugging port, no profile copy, and their logins are simply already there.
+          const bridge = await ensureExtensionBridge();
+          const status = bridge.status();
+          if (!status.connected) {
+            throw new Error(
+              `浏览器扩展还没连上（插件地址 http://127.0.0.1:${status.port}，token ${bridge.tokenForDisplay()}）。\n`
+              + `在 Chrome 打开 chrome://extensions → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 ${join(PLUGIN_ROOT, "extension")}，`
+              + "然后在扩展的选项里填上面这个地址和 token。",
+            );
+          }
+          const session = extensionSession(bridge);
+          await session.send("Page.enable");
+          browserLive = {
+            session, port: 0, pid: null, started: false, attached: false, imported: null,
+            replacedStale: false, staleReason: "", url: "", extension: true,
+          };
+          return { mod, settings, live: browserLive };
+        }
         if (settings.profileMode === "attach") {
           // Take over the window the person already has, and never close it: that window holds their logins, their
           // tabs and possibly work in progress. Adopting is the whole point of the mode - so a port that answers is a
@@ -5827,7 +5894,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!url) throw new Error("需要一个 url");
           const opened = await mod.browserOpen(live.session, url);
           live.url = opened.url;
-          const note = live.started
+          const note = live.extension
+            ? `（通过浏览器扩展，操作的是你自己的 Chrome）`
+            : live.started
             ? (live.replacedStale ? `（检测到旧配置的浏览器，已关闭并按当前设置重新打开${live.staleReason ? `：${live.staleReason}` : ""}）` : "")
             : (live.attached
               ? `（接管的是你自己打开的浏览器，我不会关它）`
@@ -6762,7 +6831,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             feishu: await feishuState(),
             // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
             tavily: tavilyState(),
-            browser: browserState({ exportDir: flowExportDir(await state.loadPrefs(), dshHome) }),
+            browser: browserState({
+              exportDir: flowExportDir(prefs, dshHome),
+              // The panel needs three things to configure the extension: where to point it, the token, and whether it
+              // has connected. Starting the bridge here is what makes the address knowable before the first tool call.
+              extension: await ensureExtensionBridge()
+                .then((bridge) => ({
+                  ...bridge.status(),
+                  token: bridge.tokenForDisplay(),
+                  url: `http://127.0.0.1:${bridge.port}`,
+                  dir: join(PLUGIN_ROOT, "extension"),
+                }))
+                .catch(() => null),
+            }),
             desktop: desktopState(prefs),
             // How secrets are stored on disk, and anything still in the clear. A file that says
             // "plaintext" is honest; a file that said "encrypted" while storing plaintext would not be.

@@ -300,7 +300,7 @@ await test("startup warms every cache /state reads, not just Feishu's", () => {
 
 const browserSource = readFileSync(joinPath(pluginDir, "browser.js"), "utf8");
 await test("the browser settings reach the panel, the route and the environment", () => {
-  assert.match(host, /browser: browserState\(\{ exportDir: flowExportDir\(/, "/state reports the browser settings, including the export folder");
+  assert.match(host, /browser: browserState\(\{\s*exportDir: flowExportDir\(/, "/state reports the browser settings, including the export folder");
   assert.match(host, /browserPatch = browserPrefsPatch\(browserArgs\)/, "/prefs accepts them");
   assert.match(host, /\.\.\.BROWSER_PREF_MODES \}\)/, "/prefs forwards the mode too");
   assert.match(host, /browser: applied\.browser, browserChanged: applied\.changed/, "and reports what changed");
@@ -319,7 +319,7 @@ const { chromeUserDataDir } = await import("../index.js");
 await test("the browser session can be the person's own Chrome, and a busy profile is reported as such", () => {
   // Why this exists: the plugin used to always start its own profile, so "open Chrome" produced a second, empty
   // browser next to the one the person actually uses. Three named sessions, one of which is their real profile.
-  assert.match(host, /export const BROWSER_PROFILE_MODES = Object\.freeze\(\["own", "chrome", "attach"\]\)/);
+  assert.match(host, /export const BROWSER_PROFILE_MODES = Object\.freeze\(\["own", "chrome", "attach", "extension"\]\)/);
   assert.match(host, /if \(settings\.profileMode === "attach"\)/, "attach adopts a window instead of replacing it");
   assert.match(host, /if \(settings\.profileMode === "chrome"\)/, "chrome imports the real state first");
   assert.match(host, /importChromeProfile\(\{ from: settings\.chromeProfileDir, to: settings\.profileDir \}\)/, "into the profile we may debug");

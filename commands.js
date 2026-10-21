@@ -80,8 +80,8 @@ export const COMMANDS = [
   {
     name: "browser",
     aliases: ["浏览器"],
-    usage: "/browser [status|mode headless|headed|erp|session own|chrome|attach|import|launch|proxy 127.0.0.1:7897|off|bar off|on|exportdir D:\\导出|hosts add x.com]",
-    summary: "浏览器：mode 管窗口形态；session 管用哪个浏览器（own 独立 profile / chrome 导入你 Chrome 的登录 / attach 接管已开的）；import 立即导入登录；launch 起一个专用 Chrome；bar 隐藏自动化提示条；exportdir 设置流程导出目录",
+    usage: "/browser [status|mode headless|headed|erp|session own|chrome|attach|extension|ext|import|launch|proxy 127.0.0.1:7897|off|bar off|on|exportdir D:\\导出|hosts add x.com]",
+    summary: "浏览器：mode 管窗口形态；session 管用哪个浏览器（own 独立 profile / chrome 导入书签 / attach 接管已开的 / extension 浏览器扩展驱动你现在的 Chrome）；ext 看扩展地址与 token；import 导入；launch 起专用 Chrome；bar 隐藏自动化提示条；exportdir 导出目录",
   },
   {
     name: "office",

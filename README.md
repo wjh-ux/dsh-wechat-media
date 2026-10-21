@@ -466,18 +466,22 @@ Verified live against Chrome 155: a page received typed input (17 and 25) and a 
 itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Feishu. Every failure states its reason
 (`browser_click 失败：nothing on the page matches the selector "…"`).
 
-**Which browser? (`会话` / `browserProfileMode`)** - three answers, because "same Chrome as mine" has three readings:
+**Which browser? (`会话` / `browserProfileMode`)** - four answers, because "same Chrome as mine" has four readings:
 
 - `own` (default) - the plugin's own profile above;
-- `chrome` - **import** what carries a login from the real Chrome (`Local State`, `Cookies`, `Login Data`, `Bookmarks`,
-  `Preferences`, from `%LOCALAPPDATA%\Google\Chrome\User Data` or `browserChromeProfileDir`) into the plugin's profile,
-  then launch that. Chrome must be closed: a half-written cookie database is worse than none. It is a **snapshot**, not
-  a sync - `/browser import` runs it again on demand;
+- `chrome` - import bookmarks and preferences from the real Chrome. Cookies and saved passwords **cannot** be brought
+  across: Chrome 127+ encrypts them with an app-bound key that dies with the profile (measured: 114 cookie rows in, 29
+  after one start). Kept for the files that do survive;
 - `attach` - drive a Chrome **you** started with `--remote-debugging-port=9222` and never close it. `/browser launch`
-  starts such a Chrome on its own profile and switches to this mode, which is the "one browser for everything" answer.
+  starts such a Chrome on its own profile and switches to this mode;
+- `extension` - **the one that reaches your real Chrome.** Load `extension/` as an unpacked extension
+  (chrome://extensions → developer mode), put the address and token from the panel (or `/browser ext`) into its
+  options, and every `browser_*` tool runs through `chrome.debugger` inside your own browser - your logins, your tabs,
+  no debugging port.
 
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
-the default one - measured on Chrome 155: process up, window visible, port never listening.
+the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the
+extension exists.
 
 ### Flow automation / 流程自动化（影刀式）
 

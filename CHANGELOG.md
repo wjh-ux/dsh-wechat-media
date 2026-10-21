@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.51.0
+
+- **Browser-extension transport: drive the Chrome you are already using.** Two Chrome changes closed the earlier roads:
+  136+ ignores `--remote-debugging-port` on the default profile, and 127+ drops cookies copied between profiles
+  (measured here: 114 rows in, 29 after one start). An extension runs *inside* that browser, and `chrome.debugger`
+  speaks the same DevTools protocol the tools already speak - so `browser_*` and `browser_flow` work unchanged, with
+  the person's real logins.
+  - `extension.js` - an HTTP long-poll bridge (Node ships a WebSocket client but no server, and this package has no
+    dependencies), bound to 127.0.0.1 and gated by a 32-hex token minted once and saved, so an extension configured
+    yesterday still connects after a restart. A long poll holds 25 s, so a command sent while one is open arrives at
+    once; a silent extension times out with a sentence instead of hanging the tool.
+  - `extension/` - MV3 manifest, a service worker that polls and executes through `chrome.debugger` (attaching,
+    retrying once when another debugger holds the tab, detaching after every command so a later attach cannot fail),
+    and an options page for the address and token.
+  - `browserProfileMode = "extension"`, `/browser session extension`, `/browser ext` (status + address + token +
+    directory), and the panel gains the fourth session option and the address/token line to copy from.
+- The session adapter hands the existing tools a CDP-shaped object whose `once` rejects immediately: the extension
+  returns results but not protocol events, and that rejection is what keeps `browser_open` from waiting 20 s for a
+  `Page.loadEventFired` that will never come.
+- 36 suites / 582 cases.
+
 ## 0.50.0
 
 - **"Same Chrome as mine", done the only way Chrome allows.** Chrome 136+ silently ignores `--remote-debugging-port`

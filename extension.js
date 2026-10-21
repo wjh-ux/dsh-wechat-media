@@ -1,0 +1,230 @@
+/**
+ * The browser-extension bridge: a small HTTP endpoint the companion extension polls, so DSH can drive the Chrome the
+ * person is already using.
+ *
+ * Why this exists: Chrome 136+ ignores `--remote-debugging-port` on the default profile directory, and Chrome 127+
+ * encrypts cookies with an app-bound key that dies with the profile, so neither "start their Chrome" nor "copy their
+ * logins" works. A Chrome extension is the one supported way in: it runs *inside* that browser, and `chrome.debugger`
+ * speaks the very protocol the rest of this plugin already speaks. So the extension becomes a transport, and every
+ * `browser_*` tool keeps working unchanged.
+ *
+ * Transport is deliberately HTTP polling rather than a WebSocket server: Node has a WebSocket *client* built in but no
+ * server, and this package has no dependencies. A long poll is one `fetch` the extension holds open for up to 25 s; a
+ * command sent during that window arrives immediately, and the round trip is roughly one poll interval.
+ *
+ * Auth: bound to 127.0.0.1 only, and the caller must present the token the plugin generated at startup. Loopback alone
+ * would let any local process drive the browser, which is too much to hand out by accident.
+ */
+
+import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
+
+/** How long a poll waits for a command before answering "nothing yet". */
+const POLL_HOLD_MS = 25_000;
+/** A client that has not polled for this long is treated as gone. */
+const STALE_MS = 45_000;
+
+/**
+ * One bridge: the queue of commands, the long-poll waiters, and the client that answers them.
+ *
+ * `call` returns whatever the extension reports, so a session adapter can hand it straight to the existing CDP-shaped
+ * code in browser.js.
+ */
+export class ExtensionBridge {
+  constructor({ port = 9339, token = "", host = "127.0.0.1", now = () => Date.now() } = {}) {
+    this.port = Number(port) || 9339;
+    this.host = host;
+    this.token = String(token ?? "");
+    this.now = now;
+    this.queue = [];
+    this.waiters = [];
+    this.pending = new Map();
+    this.nextId = 1;
+    this.client = null;
+    this.server = null;
+  }
+
+  /** What the panel and `/browser ext` report. */
+  status() {
+    const connected = Boolean(this.client) && this.now() - (this.client.lastSeen ?? 0) < STALE_MS;
+    return {
+      running: Boolean(this.server),
+      port: this.port,
+      connected,
+      name: connected ? this.client.name : "",
+      tabs: connected ? this.client.tabs : 0,
+      waiting: this.waiters.length,
+      pending: this.pending.size,
+    };
+  }
+
+  /** The token, shown once in the panel so it can be pasted into the extension. */
+  tokenForDisplay() {
+    return this.token;
+  }
+
+  /** Start listening. Re-starting on the same port is a no-op, so a tool call can be lazy about it. */
+  async start() {
+    if (this.server) return this.status();
+    const server = createServer((req, res) => { this.#handle(req, res).catch(() => { try { res.destroy(); } catch { /* gone */ } }); });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(this.port, this.host, () => { server.off("error", reject); resolve(); });
+    });
+    this.server = server;
+    return this.status();
+  }
+
+  async stop() {
+    for (const [id, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("浏览器扩展桥已关闭"));
+      this.pending.delete(id);
+    }
+    for (const waiter of this.waiters) waiter.resolve(null);
+    this.waiters = [];
+    const server = this.server;
+    this.server = null;
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    this.client = null;
+  }
+
+  /** Queue one CDP command for the extension and wait for its answer. */
+  call(method, params = {}, { timeoutMs = 30_000 } = {}) {
+    const id = this.nextId++;
+    const pending = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`扩展 ${Math.round(timeoutMs / 1000)}s 内没有回应 ${method}（浏览器扩展没在运行？）`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, method });
+      this.queue.push({ id, method, params });
+      this.#wake();
+    });
+    // A bridge that closes (or times out) with commands in flight must not take the process down with an unhandled
+    // rejection: the caller still sees the rejection, but the runtime is told somebody is listening.
+    pending.catch(() => {});
+    return pending;
+  }
+
+  /** Called by the extension after executing a command. */
+  resolveResult({ id, ok, result, error }) {
+    const entry = this.pending.get(Number(id));
+    if (!entry) return { accepted: false };
+    clearTimeout(entry.timer);
+    this.pending.delete(Number(id));
+    if (ok === false) entry.reject(new Error(String(error || `${entry.method} 失败（扩展未给原因）`)));
+    else entry.resolve(result ?? null);
+    return { accepted: true };
+  }
+
+  /** The long poll: resolve with a command, or with `null` after the hold. */
+  poll() {
+    const next = this.queue.shift();
+    if (next) return Promise.resolve(next);
+    return new Promise((resolve) => {
+      const waiter = { resolve: (value) => { clearTimeout(timer); resolve(value); } };
+      const timer = setTimeout(() => {
+        this.waiters = this.waiters.filter((item) => item !== waiter);
+        waiter.resolve(null);
+      }, POLL_HOLD_MS);
+      this.waiters.push(waiter);
+    });
+  }
+
+  /** After a poll: update what we know about the client. */
+  touch({ name, tabs } = {}) {
+    const previous = this.client ?? {};
+    this.client = {
+      name: String(name ?? previous.name ?? "Chrome 扩展"),
+      tabs: Number.isFinite(Number(tabs)) ? Number(tabs) : (previous.tabs ?? 0),
+      lastSeen: this.now(),
+      connectedAt: previous.connectedAt ?? this.now(),
+    };
+    return this.status();
+  }
+
+  #wake() {
+    const waiter = this.waiters.shift();
+    if (!waiter) return;
+    const next = this.queue.shift();
+    waiter.resolve(next ?? null);
+  }
+
+  /** Authorised only with the token the plugin minted at startup. */
+  #authorized(req) {
+    if (!this.token) return true;
+    const header = String(req.headers["x-dsh-token"] ?? "");
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const query = String(url.searchParams.get("token") ?? "");
+    return header === this.token || query === this.token;
+  }
+
+  async #handle(req, res) {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const send = (code, body) => {
+      const text = JSON.stringify(body);
+      res.writeHead(code, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "no-store" });
+      res.end(text);
+    };
+    // A preflight from a page the extension is not, is harmless and lets a quick manual test work.
+    if (req.method === "OPTIONS") { res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-dsh-token" }); res.end(); return; }
+    if (!this.#authorized(req)) { send(401, { ok: false, error: "token 不对（在面板里复制扩展 token）" }); return; }
+
+    if (url.pathname === "/status") { send(200, { ok: true, ...this.status() }); return; }
+
+    if (url.pathname === "/poll") {
+      const name = url.searchParams.get("name") ?? undefined;
+      const tabs = Number(url.searchParams.get("tabs")) || undefined;
+      this.touch({ name, tabs });
+      const command = await this.poll();
+      if (!command) { res.writeHead(204, { "access-control-allow-origin": "*" }); res.end(); return; }
+      send(200, { ok: true, command });
+      return;
+    }
+
+    if (url.pathname === "/result" && req.method === "POST") {
+      const body = await readJson(req);
+      this.touch({});
+      send(200, { ok: true, ...this.resolveResult(body ?? {}) });
+      return;
+    }
+
+    send(404, { ok: false, error: "unknown endpoint" });
+  }
+}
+
+/** Read a JSON body, capped: a bridge that accepts an unbounded body is a memory leak with a port. */
+async function readJson(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 2 * 1024 * 1024) throw new Error("body too large");
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return {}; }
+}
+
+/** A token for one run. 32 hex characters, so it is pasteable and unguessable. */
+export function bridgeToken() {
+  return randomBytes(16).toString("hex");
+}
+
+/**
+ * A session shaped like the CDP session `browser.js` expects, backed by the extension.
+ *
+ * `once` rejects immediately on purpose: the extension returns command results but not protocol events, and
+ * `browserOpen` waits for `Page.loadEventFired` with a 20-second timeout. Rejecting is what makes that wait collapse to
+ * zero instead of stalling every navigation.
+ */
+export function extensionSession(bridge, { tabId = null } = {}) {
+  return {
+    kind: "extension",
+    tabId,
+    send: (method, params = {}) => bridge.call(method, { ...params, __tabId: tabId }, { timeoutMs: method === "Page.navigate" ? 45_000 : 30_000 }),
+    once: () => Promise.reject(new Error("扩展桥没有协议事件")),
+    close: () => {},
+  };
+}

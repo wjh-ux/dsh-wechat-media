@@ -1899,8 +1899,18 @@ window.__ModuleLoader__.load({
                   h("option", { key: "o", value: "own" }, t("browserSessionOwn", "独立 profile（默认）")),
                   h("option", { key: "c", value: "chrome" }, t("browserSessionChrome", "我的 Chrome（共用登录）")),
                   h("option", { key: "a", value: "attach" }, t("browserSessionAttach", "接管已开的 Chrome")),
+                  h("option", { key: "e", value: "extension" }, t("browserSessionExtension", "浏览器扩展（驱动你现在的 Chrome）")),
                 ]),
               ]),
+              // The extension's address and token, shown so they can be pasted into it. The token is what stops any
+              // local process from driving the person's browser.
+              snapshot?.browser?.extension
+                ? h("p", { key: "extinfo", className: "dswxMeta" },
+                  `扩展：${snapshot.browser.extension.connected ? `已连接（${snapshot.browser.extension.tabs} 个标签页）` : "未连接"}`
+                  + ` · 地址 ${snapshot.browser.extension.url}`
+                  + ` · token ${snapshot.browser.extension.token}`
+                  + ` · 目录 ${snapshot.browser.extension.dir ?? ""}`)
+                : null,
               h("button", {
                 key: "imp",
                 type: "button",
