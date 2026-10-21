@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.54.1
+
+- **每一条命令都会报出它实际走了哪条通道.** Hybrid decides per command, so "did the banner flash?" used to be a guess.
+  The worker now returns `driver` with every answer; the bridge keeps `lastDriver` and a `debuggerUses` counter, and
+  the panel shows both (`最近命令 脚本/调试器 · 调试器用过 N 次`).
+- Measured while writing this: Baidu **does** accept a synthetic `keydown` Enter (the title changed to the search
+  result), but that is not a safe general assumption - a site that checks `isTrusted` would silently do nothing. So key
+  presses keep falling back to the debugger in hybrid mode instead of being switched to script on the strength of one
+  site.
+- 36 suites / 586 cases.
+
 ## 0.54.0
 
 - **混合模式 (hybrid) - the banner only when it is actually needed.** The third choice in 扩展驱动: every command goes

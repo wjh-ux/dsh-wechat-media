@@ -1963,6 +1963,8 @@ window.__ModuleLoader__.load({
                   `扩展：${snapshot.browser.extension.connected ? `已连接（${snapshot.browser.extension.tabs} 个标签页）` : "未连接"}`
                   + ` · 地址 ${snapshot.browser.extension.url}`
                   + ` · token ${snapshot.browser.extension.token}`
+                  + ` · 最近命令 ${snapshot.browser.extension.lastDriver === "debugger" ? "调试器" : snapshot.browser.extension.lastDriver === "script" ? "脚本" : "—"}`
+                  + ` · 调试器用过 ${snapshot.browser.extension.debuggerUses ?? 0} 次`
                   + ` · 目录 ${snapshot.browser.extension.dir ?? ""}`)
                 : null,
               h("button", {

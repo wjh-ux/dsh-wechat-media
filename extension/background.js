@@ -46,20 +46,21 @@ async function runCommand(command) {
     const mode = String(params.mode ?? "").toLowerCase();
     const stored = ["script", "hybrid"].includes(mode) ? mode : "debugger";
     await chrome.storage.local.set({ driver: stored });
-    return { driver: stored };
+    return { result: { driver: stored }, driver: "control" };
   }
 
   const tabId = wantedTab ?? await pickTab();
   if (!tabId) throw new Error("没有可操作的标签页");
 
   const driver = await currentDriver();
-  if (driver === "script") return runScriptCommand(command, tabId, params);
+  if (driver === "script") return { result: await runScriptCommand(command, tabId, params), driver: "script" };
   if (driver === "hybrid") {
     // Hybrid: the script path is cheaper and leaves no banner, so it goes first; the debugger is the fallback for what
     // scripting genuinely cannot do (native input events, full-page capture, a click that found no element). The banner
-    // therefore appears only on the commands that need it, instead of on every command.
+    // therefore appears only on the commands that need it, instead of on every command - and every answer says which
+    // path it took, so "did that flash?" is answerable after the fact.
     try {
-      return await runScriptCommand(command, tabId, params);
+      return { result: await runScriptCommand(command, tabId, params), driver: "script" };
     } catch { /* fall through to the debugger for this one command */ }
   }
 
@@ -73,7 +74,7 @@ async function runCommand(command) {
   }
 
   try {
-    return await chrome.debugger.sendCommand({ tabId }, command.method, params);
+    return { result: await chrome.debugger.sendCommand({ tabId }, command.method, params), driver: "debugger" };
   } finally {
     // `Page.navigate` leaves the target mid-load; detaching is what keeps a later attach from failing - and it is also
     // what makes Chrome's "已开始调试此浏览器" banner disappear again.
@@ -199,8 +200,8 @@ async function round() {
 
   let body;
   try {
-    const result = await runCommand(command);
-    body = { id: command.id, ok: true, result };
+    const { result, driver } = await runCommand(command);
+    body = { id: command.id, ok: true, result, driver };
   } catch (error) {
     body = { id: command.id, ok: false, error: String(error?.message ?? error) };
   }

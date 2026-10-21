@@ -143,6 +143,31 @@ await test("the transport switch rides the next poll, before any command", async
   } finally { await bridge.stop(); }
 });
 
+await test("the answer says which transport ran the command, so a flash is explainable afterwards", async () => {
+  const bridge = await startBridge();
+  try {
+    const pending = bridge.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter" }, { timeoutMs: 800 });
+    const polled = await call(bridge, "/poll");
+    await call(bridge, "/result", {
+      method: "POST",
+      body: { id: polled.body.command.id, ok: true, result: {}, driver: "debugger" },
+    });
+    await pending;
+    assert.equal(bridge.status().lastDriver, "debugger");
+    assert.equal(bridge.status().debuggerUses, 1, "the counter counts debugger runs only");
+
+    const second = bridge.call("Runtime.evaluate", {}, { timeoutMs: 800 });
+    const polled2 = await call(bridge, "/poll");
+    await call(bridge, "/result", {
+      method: "POST",
+      body: { id: polled2.body.command.id, ok: true, result: 1, driver: "script" },
+    });
+    await second;
+    assert.equal(bridge.status().lastDriver, "script");
+    assert.equal(bridge.status().debuggerUses, 1, "a script run does not increment it");
+  } finally { await bridge.stop(); }
+});
+
 await test("a token is 32 hex characters, so it can be pasted and not guessed", () => {
   assert.match(bridgeToken(), /^[0-9a-f]{32}$/);
   assert.notEqual(bridgeToken(), bridgeToken());

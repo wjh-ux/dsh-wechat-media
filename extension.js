@@ -45,6 +45,10 @@ export class ExtensionBridge {
     // `debugger` by default: it is the capable transport, and the banner it shows is Chrome's, not ours.
     this.driver = "debugger";
     this.driverSent = "";
+    // Which transport the last command used, and how many times the banner could have appeared: in hybrid mode this is
+    // the difference between "it worked" and "it worked without flashing".
+    this.lastDriver = "";
+    this.debuggerUses = 0;
   }
 
   /** What the panel and `/browser ext` report. */
@@ -61,6 +65,8 @@ export class ExtensionBridge {
       // Which transport the extension is using: `debugger` shows Chrome's "已开始调试此浏览器" bar, `script`
       // injects instead and shows nothing. The panel reports it so the trade-off is visible.
       driver: this.driver,
+      lastDriver: this.lastDriver,
+      debuggerUses: this.debuggerUses,
     };
   }
 
@@ -150,11 +156,17 @@ export class ExtensionBridge {
   }
 
   /** Called by the extension after executing a command. */
-  resolveResult({ id, ok, result, error }) {
+  resolveResult({ id, ok, result, error, driver }) {
     const entry = this.pending.get(Number(id));
     if (!entry) return { accepted: false };
     clearTimeout(entry.timer);
     this.pending.delete(Number(id));
+    // Which transport actually ran it. In hybrid mode the choice is made per command, so "did the banner flash?" is only
+    // answerable if the worker reports it back.
+    if (driver) {
+      this.lastDriver = String(driver);
+      if (driver === "debugger") this.debuggerUses += 1;
+    }
     if (ok === false) entry.reject(new Error(String(error || `${entry.method} 失败（扩展未给原因）`)));
     else entry.resolve(result ?? null);
     return { accepted: true };
