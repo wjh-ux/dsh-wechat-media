@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.48.0
+
+- **Flow automation: the 影刀-shaped half of the browser.** A task is written once as JSON and replayed on demand.
+  Three tools, one new module (`flow.js`) and no new dependency:
+  - `browser_flow` runs a step list - `goto` / `click` / `type` / `press` / `wait` / `waitFor` / `scroll` /
+    `extract` / `each` / `eval` / `assert` - and returns a per-step report (✓/✗, timing, what was read) plus the
+    rows the steps collected. `save: "out.csv"` writes them as UTF-8 with a BOM, so Excel opens Chinese correctly.
+  - `browser_record` records the person's own clicks, typed values, Enter presses and debounced scrolls into steps,
+    choosing selectors by `#id`, then `data-*`, then a short `tag:nth-of-type` path - never a generated class name,
+    which changes between two loads of the same app.
+  - `browser_eval` is the escape hatch: JavaScript in the page, value returned.
+  - Measured on Google Maps, not assumed: `scroll` × 3 then `each` over `div[role=feed] div[role=article]` returned
+    12 cafés with name, rating, address and link in 4.6 s, and the CSV opened with the addresses intact.
+  - A failing step stops the run, names its number and type, and keeps the rows collected before it - "it broke
+    after 12 rows" is the useful report, an empty error is not.
+- **The "自动测试软件正在控制 Chrome" bar is gone by default.** It came from `--enable-automation`, which existed
+  only so `Browser.getBrowserCommandLine` could answer - and nothing calls that any more: a leftover browser is found
+  by port. `browserLaunch({ automation })` now takes the flag as an option, `browserHideAutomationBar` decides it
+  (default: hidden), and it is reachable from a panel checkbox **and** from `/browser bar off|on`, because a switch
+  nobody can find is the same as no switch. Verified twice: a throwaway Chrome started without the flag has no bar,
+  and the plugin's own ERP window after the change has none either.
+- 33 suites / 560 cases.
+
 ## 0.47.1
 
 - **WeCom replies work again.** `replyWecomInParts` called `textBody(...)`, an identifier defined nowhere, so every

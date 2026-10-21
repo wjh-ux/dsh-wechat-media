@@ -440,9 +440,10 @@ reason (`Tavily 搜索失败：…`) instead of returning an empty answer.
 
 ## Browser automation / 浏览器自动化
 
-Six tools drive a **real browser** - the Chrome or Edge already on the machine, over the Chrome DevTools Protocol -
-with **no third-party dependency**: Node's own global `WebSocket` carries CDP. There is nothing to install: no npx, no
-npm install, no config file. The panel chooses the channel, the debugging port and whether it runs headless.
+Nine tools drive a **real browser** - the Chrome or Edge already on the machine, over the Chrome DevTools
+Protocol - with **no third-party dependency**: Node's own global `WebSocket` carries CDP. There is nothing to
+install: no npx, no npm install, no config file. The panel chooses the channel, the debugging port and whether it
+runs headless.
 
 | Tool | Does |
 |---|---|
@@ -451,13 +452,65 @@ npm install, no config file. The panel chooses the channel, the debugging port a
 | `browser_click` | click an element by CSS selector (a real mouse event) |
 | `browser_type` | type into an element by CSS selector (real key input) |
 | `browser_screenshot` | PNG of the page into the shared inbox, path returned so it can be sent to the chat |
+| `browser_eval` | run JavaScript in the page and return its value (the escape hatch when selectors are not enough) |
+| `browser_flow` | replay a list of steps and return the rows they collected (see below) |
+| `browser_record` | record the person's own clicks/typing/Enter into a replayable flow |
 | `browser_close` | close the browser this plugin started |
 
 It starts its own instance with a profile under `$DSH_HOME/browser-profile`, so **the browser a person actually
 browses with is never touched**; a browser already listening on the port is attached to instead of duplicated.
+The "自动测试软件正在控制 Chrome" bar is **hidden by default**: `--enable-automation` is passed only when the
+panel's `browserHideAutomationBar` box is unticked, and the single CDP call that required the flag
+(`Browser.getBrowserCommandLine`) is no longer used - a leftover browser is found by port, not by its command line.
 Verified live against Chrome 155: a page received typed input (17 and 25) and a real mouse click and computed 42 by
 itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Feishu. Every failure states its reason
 (`browser_click 失败：nothing on the page matches the selector "…"`).
+
+### Flow automation / 流程自动化（影刀式）
+
+`browser_flow` is the RPA part: a task is written **once** as JSON, and replayed on demand - open, search, click,
+scroll, read the list, loop over the rows, export. The same shape a 影刀 flow has, without the recorder UI: the steps
+are a text file, so they can be reviewed, edited and handed to somebody else.
+
+| Step | Fields | Does |
+|---|---|---|
+| `goto` | `url`, `ms?` | open a page and wait for load |
+| `click` | `selector` | a real mouse click on the element's centre |
+| `type` | `selector`, `text`, `clear?` | focus and type (clears first unless `clear: false`) |
+| `press` | `key` | `Enter`, `Tab`, `Escape`, `ArrowDown`, `PageDown`, `Space` |
+| `wait` | `ms` | a fixed pause (default 500) |
+| `waitFor` | `selector`, `ms?` | poll until the element appears (default 15 s), fail if it never does |
+| `scroll` | `to`, `times?`, `selector?`, `pauseMs?` | scroll a container or the window to bottom/top |
+| `extract` | `fields`, `selector?`, `single?`, `into?` | read one row (or the page) into a table |
+| `each` | `selector`, `fields`, `limit?`, `pauseMs?` | walk the matched elements, one row each, scrolled into view |
+| `eval` | `expression`, `into?` | run JavaScript and keep the value |
+| `assert` | `selector`, `text?` | stop the flow unless the page shows what was promised |
+
+A field value is `".title"` (that element's text inside the row), `".link@href"` (an attribute), or `"@text"` (the
+row's own text). A column that matches nothing is `""`, never a missing key.
+
+```json
+{
+  "name": "google-maps-cafes",
+  "url": "https://www.google.com/maps/search/coffee",
+  "steps": [
+    { "type": "waitFor", "selector": "[role=feed]" },
+    { "type": "scroll", "to": "bottom", "times": 3, "pauseMs": 800 },
+    { "type": "each", "selector": "[role=feed] > div", "limit": 20,
+      "fields": { "name": "h3", "rating": "span[role=img]@aria-label", "href": "a@href" } }
+  ]
+}
+```
+
+`browser_flow({ flow: "<the JSON>", save: "out.csv" })` returns a per-step report (✓/✗, timing, what was read) plus
+the rows; `save` writes them as `.csv` (UTF-8 with a BOM, so Excel opens Chinese correctly) or `.json`. A failing
+step stops the run and says which step it was - and the rows collected before it are kept.
+
+To build a flow without writing selectors by hand, `browser_record({action:"start"})`, do the task once, then
+`browser_record({action:"stop"})` returns the steps as JSON. The recorder captures clicks on links/buttons/inputs,
+value changes, Enter, and a debounced scroll (one step per pause, not one per pixel), and picks selectors by `#id`,
+then `data-*`, then a short `tag:nth-of-type` path - never a generated class name, which changes between two loads.
+
 
 ## Chat commands / 聊天里的命令
 

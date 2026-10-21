@@ -391,6 +391,11 @@ export async function browserLaunch({
   height = 900,
   proxy = "",
   pacUrl = "",
+  // `--enable-automation` is what Chrome needs before it will answer `Browser.getBrowserCommandLine`, and it is also
+  // what draws the "自动测试软件正在控制 Chrome" bar. Nothing in the plugin needs that command any more (the leftover
+  // browser is found by port, not by its command line), so the flag is optional: off means no bar, at the cost of one
+  // CDP call nobody makes.
+  automation = true,
   spawnImpl = spawn,
   fetchImpl = fetch,
   waitMs = 15000,
@@ -407,10 +412,8 @@ export async function browserLaunch({
     `--user-data-dir=${profile}`,
     "--no-first-run",
     "--no-default-browser-check",
-    // Chrome refuses `Browser.getBrowserCommandLine` (-32000) unless it was started with this flag, which made the
-    // stale-browser check a silent no-op: the plugin "could not read" the args and fell back to attaching to a window
-    // started with older settings. The cost is an infobar; the alternative is a check that never runs.
-    "--enable-automation",
+    // See the `automation` parameter: the flag is only passed when the caller wants `getBrowserCommandLine` back.
+    ...(automation ? ["--enable-automation"] : []),
     `--window-size=${Number(width) || 1280},${Number(height) || 900}`,
     ...(headless ? ["--headless=new"] : []),
     // `--proxy-pac-url` wins when a host list is configured: then the *browser* decides per request, which is what

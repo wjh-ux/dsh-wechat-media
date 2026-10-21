@@ -1879,6 +1879,24 @@ export function apply(ctx, config = {}) {
           : "浏览器代理已关闭。");
         return true;
       }
+      if (sub === "bar") {
+        // The "自动测试软件正在控制 Chrome" bar, reachable from the chat as well as the panel: a box a person cannot
+        // find is the same as no setting at all, and typing two words is the shortest path to it.
+        const wanted = String(arg ?? "").trim().toLowerCase();
+        if (!["on", "off", "hide", "show"].includes(wanted)) {
+          await reply([
+            `提示条：${browserConfig().hideAutomationBar ? "隐藏" : "显示"}`,
+            "隐藏：/browser bar off · 恢复：/browser bar on",
+            "（下次打开浏览器生效；已开的窗口需要重开）",
+          ].join("\n"));
+          return true;
+        }
+        const hidden = wanted === "off" || wanted === "hide";
+        await applyBrowserPrefs({ browserHideAutomationBar: hidden });
+        noteRoute("/command", { command: "browser", action: "bar", hidden });
+        await reply(`「自动测试软件正在控制 Chrome」提示条已设为${hidden ? "隐藏" : "显示"}。\n下次打开浏览器时生效（已开的窗口要重开）。`);
+        return true;
+      }
       const now = browserConfig();
       await reply([
         `浏览器模式：${now.mode}`,
@@ -1886,9 +1904,11 @@ export function apply(ctx, config = {}) {
         `  视口：${now.width}×${now.height} · profile：${now.profileDir}`,
         `  通道：${now.channel} · 端口：${now.port}`,
         `  代理：${now.proxy || "未设置"}`,
+        `  自动化提示条：${now.hideAutomationBar ? "隐藏" : "显示"}`,
         "",
         "切换：/browser mode headless | headed | erp",
         "代理：/browser proxy 127.0.0.1:7897 | off",
+        "提示条：/browser bar off | on",
       ].join("\n"));
       return true;
     }
@@ -3044,6 +3064,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       proxy: parseProxyAddress(pick(saved.proxy, given.proxy, process.env.DSH_BROWSER_PROXY)).proxy,
       mode: mode.mode,
       headless: mode.headless,
+      // The "自动测试软件正在控制 Chrome" bar: hidden by default, because a person watching the ERP window reads it
+      // as "something is wrong". Turning it off costs only `Browser.getBrowserCommandLine`, which nothing calls.
+      hideAutomationBar: saved.hideAutomationBar !== false,
       visible: mode.visible,
       keepOpen: mode.keepOpen,
       width: mode.width,
@@ -3061,7 +3084,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     // mode and the setting saved nothing while answering "no change".
     browserProxy: "proxy",
   });
-  const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless" });
+  const BROWSER_PREF_SWITCHES = Object.freeze({ browserHeadless: "headless", browserHideAutomationBar: "hideAutomationBar" });
   // `browserMode` is a string, not a switch: it carries the three named modes, and a boolean cannot say "erp".
   const BROWSER_PREF_MODES = Object.freeze({ browserMode: "mode" });
 
@@ -3451,6 +3474,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       port: settings.port,
       mode: settings.mode,
       headless: settings.headless,
+      hideAutomationBar: settings.hideAutomationBar,
       proxy: settings.proxy,
       proxyHosts: proxyHostsCache,
       proxyMode: proxyHostsCache.length ? "pac" : (settings.proxy ? "global" : "off"),
@@ -5546,6 +5570,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           height: settings.height,
           proxy: settings.proxy,
           pacUrl,
+          automation: !settings.hideAutomationBar,
         });
           pid = launched.pid ?? null;
           started = true;
@@ -5669,6 +5694,107 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
         },
       );
+
+      // ── Flow automation (the 影刀-shaped part: record once, replay on demand) ──────────────
+      //
+      // A flow is plain JSON, so the model can write one, a recording can produce one, and a person can edit it in
+      // Notepad. The runner lives in flow.js; these tools only supply the shared session and turn the result into a
+      // report. `browser_flow` deliberately returns the per-step report *and* the rows: a failed run that collected
+      // twelve rows is more useful than a bare error.
+      const browserEvalTool = browserTool(
+        "browser_eval",
+        "Run JavaScript in the current page and return its value (JSON-safe). The escape hatch for sites where CSS selectors are not enough — read data, scroll, or click by text.",
+        {
+          expression: { type: "string", required: true, description: "JavaScript expression; promises are awaited." },
+          maxChars: { type: "number", description: "Truncate the printed result (default 4000)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          const mod = await import("./browser.js");
+          const value = await mod.browserEvaluate(live.session, String(args.expression));
+          const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+          const limit = Math.max(200, Math.min(20000, Number(args.maxChars) || 4000));
+          const flat = String(text ?? "undefined");
+          return flat.length > limit ? `${flat.slice(0, limit)}\n…（已截断，共 ${flat.length} 字符）` : flat;
+        },
+      );
+
+      const browserFlowTool = browserTool(
+        "browser_flow",
+        "Run a list of browser steps (goto / click / type / press / wait / waitFor / scroll / extract / each / eval / assert) and return a per-step report plus the rows they collected. This is the RPA-style runner: write the flow once, replay it as often as needed.",
+        {
+          flow: { type: "string", required: true, description: "Flow JSON: an array of steps, or {name, url, steps}." },
+          save: { type: "string", description: "Optional path: the collected rows are written there as JSON (or .csv)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          const flowMod = await import("./flow.js");
+          let spec;
+          try {
+            spec = JSON.parse(String(args.flow ?? ""));
+          } catch {
+            throw new Error("flow 不是合法的 JSON（要一个步骤数组，或 {name,url,steps} 对象）");
+          }
+          let result;
+          try {
+            result = await flowMod.runFlow({ session: live.session, spec });
+          } catch (error) {
+            if (!error?.result) throw error;
+            return `${error.message}\n\n${flowMod.formatFlowResult(error.result)}`;
+          }
+          const report = flowMod.formatFlowResult(result);
+          const target = String(args.save ?? "").trim();
+          if (!target || result.rows.length === 0) return report;
+          const saved = await saveFlowRows(target, result.rows);
+          return `${report}\n\n已保存 ${result.rows.length} 条到 ${saved}`;
+        },
+      );
+
+      const browserRecordTool = browserTool(
+        "browser_record",
+        "Record the person's own clicks, typing and Enter presses into a replayable flow. action=start begins recording; action=stop returns the steps as JSON that browser_flow can run again.",
+        {
+          action: { type: "string", required: true, description: "start or stop." },
+          name: { type: "string", description: "Flow name to record under (default 录制的流程)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          const flowMod = await import("./flow.js");
+          const action = String(args.action ?? "").trim().toLowerCase();
+          if (action === "start") {
+            await flowMod.startRecording(live.session);
+            return "开始录制：现在你在浏览器里点击、输入、按回车都会被记下来（滚动也会记一步）。录完说“停止录制”。";
+          }
+          if (action === "stop") {
+            const flow = await flowMod.stopRecording(live.session, { name: String(args.name ?? "").trim() || undefined });
+            if (flow.steps.length === 0) return "录制已停止，但没录到任何操作（页面没加载完，或者这个页面禁止了脚本）。";
+            return `录制已停止，共 ${flow.steps.length} 步：\n${JSON.stringify(flow, null, 2)}`;
+          }
+          throw new Error("action 只能是 start 或 stop");
+        },
+      );
+
+      /**
+       * Write collected rows to a file. CSV for anything ending in `.csv` (with a BOM, so Excel opens Chinese
+       * correctly instead of guessing), JSON otherwise. Relative paths land under the working directory, which is
+       * where the person started the harness and therefore where they will look.
+       */
+      async function saveFlowRows(target, rows) {
+        const path = isAbsolute(target) ? target : join(process.cwd(), target);
+        await mkdir(dirname(path), { recursive: true });
+        if (path.toLowerCase().endsWith(".csv")) {
+          const columns = Object.keys(rows[0] ?? {});
+          const cell = (value) => {
+            const text = String(value ?? "");
+            return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+          };
+          const body = [columns.map(cell).join(","), ...rows.map((row) => columns.map((column) => cell(row[column])).join(","))].join("\r\n");
+          await writeFile(path, `\uFEFF${body}\r\n`, "utf8");
+        } else {
+          await writeFile(path, `${JSON.stringify(rows, null, 2)}\n`, "utf8");
+        }
+        return path;
+      }
 
       // ── Desktop control (mouse, keyboard, screenshot, windows) ──────────────
       //
@@ -6031,7 +6157,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

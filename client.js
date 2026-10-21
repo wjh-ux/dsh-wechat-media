@@ -1893,6 +1893,22 @@ window.__ModuleLoader__.load({
                 },
               }, t("browserSave", "保存浏览器设置")),
             ]),
+            // Its own row, not one more item in the crowded line above: a box squeezed between four inputs is a box
+            // nobody finds, which is exactly how this setting went missing the first time.
+            h("div", { key: "autobar", className: "dswxRow" }, [
+              h("label", { key: "l", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  disabled: busy,
+                  checked: browserDraft.browserHideAutomationBar ?? snapshot?.browser?.hideAutomationBar ?? true,
+                  onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserHideAutomationBar: event.target.checked })),
+                }),
+                " " + t("browserHideAutomationBar", "隐藏「自动测试软件正在控制 Chrome」提示条（下次打开浏览器生效）"),
+              ]),
+              h("span", { key: "now", className: "dswxMeta" },
+                `${t("browserBarNow", "当前")}: ${snapshot?.browser?.hideAutomationBar === false ? "显示" : "隐藏"}`),
+            ]),
             browserNotice ? h("p", { key: "browsernotice", className: "dswxMsg" }, browserNotice.text) : null,
             h("p", { key: "browserstate", className: "dswxMeta" }, snapshot?.browser
               ? `浏览器：${snapshot.browser.channel} · 端口 ${snapshot.browser.port} · ${snapshot.browser.headless ? "无头" : "有窗口"} · 配置目录 ${snapshot.browser.profileDir}`

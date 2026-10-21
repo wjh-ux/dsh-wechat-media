@@ -100,6 +100,20 @@ await test("launching waits for the port and reports where the browser is", asyn
   assert.ok(spawned.length >= 2);
 });
 
+await test("the automation bar can be turned off, because nothing needs getBrowserCommandLine any more", async () => {
+  const spawned = [];
+  const spawnImpl = (file, args) => { spawned.push(args); return { pid: 1, unref() {} }; };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ Browser: "Chrome/155" }) });
+  const executable = joinPath(process.env.TEMP || "/tmp", "fake-chrome.exe");
+  const profileDir = joinPath(process.env.TEMP || "/tmp", "dsh-browser-test-bar");
+
+  await browserLaunch({ executable, port: 9335, profileDir, spawnImpl, fetchImpl, automation: false });
+  assert.ok(!spawned[0].join(" ").includes("--enable-automation"), "no flag, so no infobar");
+
+  await browserLaunch({ executable, port: 9336, profileDir: joinPath(profileDir, "on"), spawnImpl, fetchImpl });
+  assert.match(spawned[1].join(" "), /--enable-automation/, "still the default, so the capability is not lost by accident");
+});
+
 await test("an unusable profile directory is reported, with the directory named", async () => {
   // Deterministic on every machine, which the first version of this test was not: it asserted that Edge was missing,
   // and this machine has Edge installed, so the premise - not the code - was wrong. A NUL byte cannot be a path
