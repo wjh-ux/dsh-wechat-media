@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.55.2
+
+- **The pointer stays for 2.5 s instead of 1 s.** The dot is a debugging aid: a person has to notice it, and a
+  one-second flash is easy to miss - measured by trying to screenshot it, which missed every time. The ripple now runs
+  0.9 s (was 0.65 s) so both are visible together.
+- 36 suites / 588 cases.
+
 ## 0.55.1
 
 - **The cursor flag now rides the click instead of a stored setting.** 0.55.0 kept `cursor` in extension storage, delivered

@@ -143,13 +143,15 @@ async function paintCursor(tabId, method, params, enabled = false) {
 
         const ring = document.createElement("div");
         ring.style.cssText = "position:fixed;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;"
-          + "border:2px solid rgba(255,64,64,.85);pointer-events:none;z-index:2147483646;opacity:1;transition:all .5s ease-out;";
+          + "border:2px solid rgba(255,64,64,.85);pointer-events:none;z-index:2147483646;opacity:1;transition:all .9s ease-out;";
         ring.style.left = x + "px";
         ring.style.top = y + "px";
         document.documentElement.appendChild(ring);
         requestAnimationFrame(() => { ring.style.transform = "scale(3.5)"; ring.style.opacity = "0"; });
-        setTimeout(() => ring.remove(), 650);
-        setTimeout(() => { dot.style.opacity = "0"; }, 1000);
+        setTimeout(() => ring.remove(), 1000);
+        // 2.5 s, not 1 s: the point is that a person watching can see where the click went, and a one-second flash is
+        // easy to miss - measured by trying to screenshot it.
+        setTimeout(() => { dot.style.opacity = "0"; }, 2500);
         return true;
       },
     });
