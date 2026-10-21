@@ -90,6 +90,9 @@ async function runScriptCommand(command, tabId, params) {
       return {};
     case "Page.navigate": {
       await chrome.tabs.update(tabId, { url: String(params.url ?? "about:blank") });
+      // `tabs.update` returns before the page loads, and the plugin reads the title immediately afterwards - without
+      // this wait the title would belong to the previous page, which looks like a navigation that did nothing.
+      await waitForLoad(tabId);
       return { frameId: "" };
     }
     case "Page.captureScreenshot": {
@@ -194,6 +197,24 @@ async function round() {
     body: JSON.stringify(body),
   }).catch(() => {});
   return true;
+}
+
+/**
+ * Wait until the tab reports `status: "complete"`.
+ *
+ * Gives up rather than throwing: a page that never finishes loading still has a title and a DOM worth reading, and a
+ * navigation that times out is better reported as "loaded slowly" than as a failed command.
+ */
+async function waitForLoad(tabId, { timeoutMs = 15000 } = {}) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab?.status === "complete") return true;
+    } catch { return false; }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
 }
 
 /** The polling loop. One at a time: parallel commands on one tab fight over the debugger. */

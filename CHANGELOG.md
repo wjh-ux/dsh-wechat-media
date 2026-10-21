@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.53.1
+
+- **Script mode is stronger than its first description claimed, and its navigation was one step behind.**
+  - `Page.navigate` in script mode now waits for the tab to report `status: "complete"` before answering. Measured
+    before the fix: `goto` returned in ~250 ms with the *previous* page's title, because `tabs.update` resolves before
+    the load and the plugin reads the title immediately after. After it: the new title, first try.
+  - A screenshot **does** work without the debugger - `chrome.tabs.captureVisibleTab` returns the visible viewport of
+    the active tab, verified on a live page. The earlier note said screenshots were unavailable; that was wrong, and
+    the docs now say what is actually true: script mode gives up native input (clicks are `element.click()`), full-page
+    capture, and per-frame control - not screenshots.
+- 36 suites / 585 cases.
+
 ## 0.53.0
 
 - **Chrome's "已开始调试此浏览器" banner is now a choice, not a side effect.** The banner is drawn by the browser
