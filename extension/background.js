@@ -40,8 +40,18 @@ async function runCommand(command) {
   const wantedTab = params.__tabId ?? null;
   delete params.__tabId;
 
+  // The transport switch itself. It arrives on a poll, before the work it changes, so no command is ever run with the
+  // wrong driver; id 0 is synthetic and its result is ignored.
+  if (command.method === "__driver") {
+    await chrome.storage.local.set({ driver: params.mode === "script" ? "script" : "debugger" });
+    return { driver: params.mode };
+  }
+
   const tabId = wantedTab ?? await pickTab();
   if (!tabId) throw new Error("没有可操作的标签页");
+
+  const driver = await currentDriver();
+  if (driver === "script") return runScriptCommand(command, tabId, params);
 
   try {
     await chrome.debugger.attach({ tabId }, ATTACH.version);
@@ -55,8 +65,85 @@ async function runCommand(command) {
   try {
     return await chrome.debugger.sendCommand({ tabId }, command.method, params);
   } finally {
-    // `Page.navigate` leaves the target mid-load; detaching is what keeps a later attach from failing.
+    // `Page.navigate` leaves the target mid-load; detaching is what keeps a later attach from failing - and it is also
+    // what makes Chrome's "已开始调试此浏览器" banner disappear again.
     await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+/** The driver in force, defaulting to the capable one. */
+async function currentDriver() {
+  const { driver } = await chrome.storage.local.get({ driver: "debugger" });
+  return driver === "script" ? "script" : "debugger";
+}
+
+/**
+ * The transport that never touches `chrome.debugger`, and therefore never shows Chrome's debugging banner.
+ *
+ * It is `chrome.scripting` in the page's own world: read, click, type and navigate all work; a screenshot cannot
+ * (there is no capture API outside the debugger) and input is DOM-level rather than native. Those limits are the price
+ * of the banner never appearing, and the error below says which command hit one.
+ */
+async function runScriptCommand(command, tabId, params) {
+  switch (command.method) {
+    case "Page.enable":
+      return {};
+    case "Page.navigate": {
+      await chrome.tabs.update(tabId, { url: String(params.url ?? "about:blank") });
+      return { frameId: "" };
+    }
+    case "Page.captureScreenshot": {
+      const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: "png" });
+      return { data: String(dataUrl).replace(/^data:image\/png;base64,/, "") };
+    }
+    case "Runtime.evaluate": {
+      const [out] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [String(params.expression ?? "")],
+        // `eval` in the page's world is what gives the plugin the same value it would get over CDP.
+        func: async (expression) => {
+          const value = eval(expression);
+          return value instanceof Promise ? await value : value;
+        },
+      });
+      return out?.result ?? null;
+    }
+    case "Input.insertText": {
+      const [out] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [String(params.text ?? "")],
+        func: (text) => {
+          const el = document.activeElement;
+          if (!el) return false;
+          if ("value" in el && el.value !== undefined) {
+            el.value = String(el.value ?? "") + text;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return true;
+          }
+          return document.execCommand("insertText", false, text);
+        },
+      });
+      return out?.result ?? true;
+    }
+    case "Input.dispatchMouseEvent": {
+      // One click per press/release pair: the mouse event arrives twice, and clicking twice would double-activate.
+      if (params.type !== "mouseReleased") return {};
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [Number(params.x) || 0, Number(params.y) || 0],
+        func: (x, y) => {
+          const el = document.elementFromPoint(x, y);
+          if (el && typeof el.click === "function") el.click();
+          return Boolean(el);
+        },
+      });
+      return {};
+    }
+    default:
+      throw new Error(`脚本模式不支持 ${command.method}（就为了不出现调试横幅；需要它请切回调试器模式）`);
   }
 }
 

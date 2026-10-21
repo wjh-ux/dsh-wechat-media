@@ -3683,6 +3683,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     }
     const port = Number(prefs?.extensionPort) || 9339;
     extensionBridge = new ExtensionBridge({ port, token });
+    // The transport is saved as a pref, so a machine that must avoid Chrome's debugging banner keeps avoiding it
+    // after a restart instead of silently going back to the capable one.
+    extensionBridge.driver = String(prefs?.extensionDriver ?? "").toLowerCase() === "script" ? "script" : "debugger";
     await extensionBridge.start();
     ctx.logger?.info?.("[dsh-wechat-media] browser extension bridge listening on 127.0.0.1:%s", port);
     return extensionBridge;
@@ -7046,6 +7049,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/extension-driver",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const wanted = String(body.mode ?? "debugger").toLowerCase();
+          if (!["debugger", "script"].includes(wanted)) {
+            return json(res, 400, { ok: false, error: `mode 只能是 debugger / script，收到 ${wanted}` });
+          }
+          try {
+            await state.savePrefs({ extensionDriver: wanted });
+            const bridge = await ensureExtensionBridge();
+            const applied = await bridge.setDriver(wanted);
+            noteRoute("/extension-driver", { mode: applied.driver });
+            return json(res, 200, { ok: true, driver: applied.driver, connected: bridge.status().connected });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

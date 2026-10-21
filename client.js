@@ -905,6 +905,31 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /**
+         * Switch the extension's transport.
+         *
+         * `debugger` is capable but Chrome draws its own "已开始调试此浏览器" banner, which no extension may hide;
+         * `script` never attaches the debugger, so no banner appears, at the cost of native input and screenshots.
+         * That is a real trade-off, so it is a visible switch rather than something decided for the person.
+         */
+        async function setExtensionDriver(mode) {
+          setBusy(true);
+          try {
+            const answer = await api(`/extension-driver?mode=${encodeURIComponent(String(mode ?? ""))}`);
+            setBrowserNotice({
+              ok: true,
+              text: answer.driver === "script"
+                ? "已切到脚本注入：不会再出现「已开始调试此浏览器」，但截图和真实鼠标事件不可用。"
+                : "已切到调试器：能力完整，Chrome 会显示「已开始调试此浏览器」（这是浏览器自己的提示，扩展关不掉）。",
+            });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `切换失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Pull cookies / bookmarks out of the real Chrome into the profile the tools launch (Chrome must be closed). */
         async function importChromeLogin() {
           setBusy(true);
@@ -1946,6 +1971,20 @@ window.__ModuleLoader__.load({
                 onClick: importChromeLogin,
                 title: t("importLoginHint", "把 Chrome 的 Cookie、书签、已存密码复制进插件 profile；需要先完全退出 Chrome"),
               }, t("importLogin", "导入登录")),
+              // The trade-off Chrome forces: a capable debugger (and its banner) or no banner (and script-only reach).
+              h("label", { key: "driver", className: "dswxMeta" }, [
+                t("extensionDriver", " 扩展驱动 ") + " ",
+                h("select", {
+                  key: "s",
+                  className: "dswxInput",
+                  disabled: busy,
+                  value: snapshot?.browser?.extension?.driver ?? "debugger",
+                  onChange: (event) => setExtensionDriver(event.target.value),
+                }, [
+                  h("option", { key: "d", value: "debugger" }, t("driverDebugger", "调试器（能力全，会出现调试提示）")),
+                  h("option", { key: "s", value: "script" }, t("driverScript", "脚本注入（无提示，截图/真实输入不可用）")),
+                ]),
+              ]),
               h("button", {
                 key: "extinstall",
                 type: "button",

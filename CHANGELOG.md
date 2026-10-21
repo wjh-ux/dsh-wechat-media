@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.53.0
+
+- **Chrome's "已开始调试此浏览器" banner is now a choice, not a side effect.** The banner is drawn by the browser
+  whenever `chrome.debugger` attaches, and no extension can hide it - so the panel's **扩展驱动** switch picks the
+  transport instead:
+  - `debugger` (default) - real mouse events, screenshots, any frame. The banner appears while a command runs and goes
+    away when the worker detaches (it detaches after every command);
+  - `script` - `chrome.scripting` in the page's own world: read, click, type, navigate. Never attaches the debugger, so
+    **no banner ever appears**; a screenshot or a native input event is refused with a sentence naming the trade-off.
+  - The switch rides the **next poll, before any command**, so nothing ever runs with the wrong driver; it is stored as
+    a pref (`extensionDriver`), so a machine that must avoid the banner keeps avoiding it after a restart.
+  - Route: `/dsh-wechat-media/extension-driver?mode=debugger|script`.
+- The extension manifest gains `scripting` and `<all_urls>` (required to inject into pages), version 1.1.0; loading the
+  reloaded folder asks Chrome to accept the new permission once.
+- 36 suites / 585 cases.
+
 ## 0.52.1
 
 - **Edge is a first-class browser for the extension too.** The companion extension is plain MV3 plus

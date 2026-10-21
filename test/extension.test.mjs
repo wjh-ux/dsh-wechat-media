@@ -16,6 +16,9 @@ async function startBridge(options = {}) {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const bridge = new ExtensionBridge({ port, token: "t0ken", ...options });
   await bridge.start();
+  // Pretend the worker has already been told which transport to use: otherwise the first poll of every test would be the
+  // `__driver` handshake instead of the command under test. The driver test clears this deliberately.
+  bridge.driverSent = bridge.driver;
   return bridge;
 }
 
@@ -102,6 +105,32 @@ await test("the session adapter speaks the CDP shape the browser tools use, and 
     assert.equal(await pending, "https://x");
     // `browserOpen` waits on Page.loadEventFired; rejecting at once is what turns that wait into zero.
     await assert.rejects(() => session.once("Page.loadEventFired"), /没有协议事件/);
+  } finally { await bridge.stop(); }
+});
+
+await test("the transport switch rides the next poll, before any command", async () => {
+  // Chrome's "已开始调试此浏览器" banner is drawn by the browser whenever `chrome.debugger` attaches; no extension can
+  // hide it. The way to have no banner is to not attach - so the worker is told which transport to use, first.
+  const bridge = await startBridge();
+  try {
+    bridge.driverSent = "";
+    assert.equal(bridge.status().driver, "debugger", "the capable transport is the default");
+    const first = await call(bridge, "/poll");
+    assert.equal(first.body.command.method, "__driver");
+    assert.equal(first.body.command.params.mode, "debugger");
+
+    await bridge.setDriver("script");
+    const second = await call(bridge, "/poll");
+    assert.equal(second.body.command.method, "__driver", "the switch comes before work");
+    assert.equal(second.body.command.params.mode, "script");
+    assert.equal(bridge.status().driver, "script");
+
+    // Once delivered, it is not repeated on every poll.
+    const pending = bridge.call("Runtime.evaluate", {}, { timeoutMs: 800 });
+    const third = await call(bridge, "/poll");
+    assert.equal(third.body.command.method, "Runtime.evaluate");
+    await call(bridge, "/result", { method: "POST", body: { id: third.body.command.id, ok: true, result: 1 } });
+    assert.equal(await pending, 1);
   } finally { await bridge.stop(); }
 });
 

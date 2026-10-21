@@ -42,6 +42,9 @@ export class ExtensionBridge {
     this.nextId = 1;
     this.client = null;
     this.server = null;
+    // `debugger` by default: it is the capable transport, and the banner it shows is Chrome's, not ours.
+    this.driver = "debugger";
+    this.driverSent = "";
   }
 
   /** What the panel and `/browser ext` report. */
@@ -55,7 +58,26 @@ export class ExtensionBridge {
       tabs: connected ? this.client.tabs : 0,
       waiting: this.waiters.length,
       pending: this.pending.size,
+      // Which transport the extension is using: `debugger` shows Chrome's "已开始调试此浏览器" bar, `script`
+      // injects instead and shows nothing. The panel reports it so the trade-off is visible.
+      driver: this.driver,
     };
+  }
+
+  /**
+   * Switch the extension between the two transports.
+   *
+   * `debugger` is the capable one - real mouse events, screenshots, any frame - at the cost of Chrome's own
+   * "已开始调试此浏览器" banner, which no extension can hide. `script` never touches the debugger, so the banner never
+   * appears; it drives the page with `chrome.scripting` instead, which is enough to read, scroll, click and type, and
+   * not enough to capture the screen or send input Chrome considers native.
+   */
+  async setDriver(mode) {
+    const wanted = String(mode ?? "").toLowerCase() === "script" ? "script" : "debugger";
+    this.driver = wanted;
+    // Force the next poll to carry the switch, instead of waiting for a client that may not even be connected yet.
+    this.driverSent = "";
+    return { driver: wanted };
   }
 
   /** The token, shown once in the panel so it can be pasted into the extension. */
@@ -137,6 +159,12 @@ export class ExtensionBridge {
 
   /** The long poll: resolve with a command, or with `null` after the hold. */
   poll() {
+    // A driver change is delivered on the next poll, before any work: the worker has to know *how* to run the command
+    // it is about to receive. Id 0 is synthetic - no caller is waiting, and a result for it is simply ignored.
+    if (this.driver !== this.driverSent) {
+      this.driverSent = this.driver;
+      return Promise.resolve({ id: 0, method: "__driver", params: { mode: this.driver } });
+    }
     const next = this.queue.shift();
     if (next) return Promise.resolve(next);
     return new Promise((resolve) => {

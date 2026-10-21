@@ -482,6 +482,11 @@ itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Fei
   (`chrome://extensions` or `edge://extensions`) and puts the token on the clipboard; Chrome does not allow a page to
   install an extension silently, so those last two clicks stay yours.
 
+  **扩展驱动 (the debugging banner).** Chrome draws "已开始调试此浏览器" whenever `chrome.debugger` attaches, and no
+  extension can hide it - so the panel offers the choice instead: `debugger` (real input, screenshots, any frame; the
+  banner flashes while a command runs) or `script` (`chrome.scripting` in the page, **no banner ever**, but no
+  screenshot and DOM-level input only). The switch is stored and delivered before the next command runs.
+
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the
 extension exists.
