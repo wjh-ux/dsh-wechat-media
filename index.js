@@ -7485,10 +7485,40 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const body = await readArgs(req);
           const prompt = String(body.prompt ?? "").trim();
           if (!prompt) return json(res, 400, { ok: false, error: "prompt 是空的" });
+          // A client that sends its body as ANSI turns every Chinese character into `?` - measured: `只回答四个字符：ABC9`
+          // arrived as `????????:ABC9`, and the model then spent a whole answer discussing mojibake instead of answering.
+          // Saying so here is cheaper than that, and it names the fix.
+          if (/\?{3,}/.test(prompt) && !/[\u3400-\u9fff]/.test(prompt)) {
+            return json(res, 400, {
+              ok: false,
+              error: "prompt 里的中文变成了问号：请求体不是 UTF-8。用 UTF-8 发送（PowerShell 里先 chcp 65001，或用 --data-binary 传字节）",
+            });
+          }
           // The same machinery a chat uses: one pseudo conversation named "VS Code", so the editor gets a real agent
           // turn - the same model, tools and context - rather than a second, weaker path.
           try {
             const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            // `trace=1` records which inbox events this session actually receives. It exists because the first live run
+            // answered `not-claimed` - a message queued but never taken - and guessing at that from outside is exactly
+            // how the wrong fix gets written. Only attached on request, so the normal path pays nothing.
+            const trace = [];
+            if (String(body.trace ?? "") === "1") {
+              const startedAt = Date.now();
+              for (const event of ["agent/inbox/inserted", "agent/inbox/claimed", "agent/inbox/discarded", "agent/error", "agent/status"]) {
+                ctx.on(event, (payload) => {
+                  if (trace.length > 40) return;
+                  const id = String(payload?.agent?.session?.id ?? payload?.agent?.id ?? "");
+                  if (id && id !== sessionId) return;
+                  trace.push({
+                    event,
+                    ms: Date.now() - startedAt,
+                    messageId: payload?.message?.id ?? null,
+                    turn: payload?.turn ?? null,
+                    status: payload?.status ?? null,
+                  });
+                });
+              }
+            }
             const message = await userMessage(prompt);
             const waiting = collectors.wait(sessionId, message?.id);
             await agent.followup(message);
@@ -7500,6 +7530,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               stopReason: answer.stopReason,
               error: answer.error ?? null,
               sessionId,
+              ...(trace.length ? { trace } : {}),
             });
           } catch (error) {
             noteRoute("/vscode", { action: "ask", error: String(error?.message ?? error) });

@@ -25,6 +25,18 @@ await test("the editor gets a real agent turn, not a second weaker path", () => 
   assert.match(host, /await agent\.followup\(message\)/, "so tools, model and context are identical");
   assert.match(host, /path: "\/dsh-vscode\/status"/, "the status route exists");
   assert.match(host, /vscodeEnabled === false/, "and the bridge can be switched off");
+  // Verified live: trace shows inserted → claimed → turn, and a UTF-8 request came back with the exact answer.
+  assert.match(host, /body\.trace === "1"|String\(body\.trace/, "an opt-in trace of the inbox events");
+});
+
+await test("a request whose Chinese arrived as question marks is refused, not answered", () => {
+  // Measured: `只回答四个字符：ABC9` sent by an ANSI-encoded client became `????????:ABC9`, and the model then wrote a
+  // whole answer about mojibake instead of answering. The bridge says which client is broken instead.
+  assert.match(host, /\\\?\{3,\}/, "it looks for runs of question marks");
+  assert.match(host, /\[\\u3400-\\u9fff\]/, "and checks there is no CJK left to prove it");
+  assert.match(host, /请求体不是 UTF-8/, "naming the actual fix");
+  const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
+  assert.match(client, /application\/json; charset=utf-8/, "and the editor client states its charset");
 });
 
 await test("the extension parses, activates, and ships with the package", () => {

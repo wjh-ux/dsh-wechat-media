@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.64.0
+
+- **The VS Code bridge works, and the earlier `not-claimed` was not the bridge.** With an opt-in trace
+  (`{"prompt": "…", "trace": "1"}`) the inbox timeline for the editor's session is now visible:
+  `inserted → status: running → claimed (turn 2)` in **2 ms**, and the answer comes back with `stopReason: completed`.
+  `只回答四个字符：ABC9` returned exactly `ABC9`.
+- **A request whose Chinese arrived as question marks is refused, not answered.** Measured during that same session:
+  `只回答四个字符：ABC9` sent by an ANSI client reached the plugin as `????????:ABC9`, and the model then spent a whole
+  answer discussing mojibake instead of answering - a real cost, paid twice. The route now answers `400` with the actual
+  fix ("请求体不是 UTF-8：先 chcp 65001，或用 --data-binary 传字节"), and the editor client states
+  `application/json; charset=utf-8`.
+- 38 suites / 600 cases.
+
 ## 0.63.0
 
 - **The Maps card reader recognises fields by shape, not by position.** The 220-row export exposed two defects that the

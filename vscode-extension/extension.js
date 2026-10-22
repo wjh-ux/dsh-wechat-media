@@ -53,7 +53,7 @@ function request(method, endpointPath, body, { timeoutMs = 180000 } = {}) {
         port: url.port,
         path: url.pathname + url.search,
         method,
-        headers: payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {},
+        headers: payload ? { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) } : {},
         timeout: timeoutMs,
       },
       (res) => {
@@ -127,7 +127,11 @@ async function ask(prompt, { sessionHint = "" } = {}) {
   if (!text) throw new Error("问题是空的");
   const body = { prompt: sessionHint ? `${text}\n\n（上下文：${sessionHint}）` : text };
   const answer = await request("POST", "/dsh-vscode/ask", body);
-  return String(answer.text ?? "");
+  const reply = String(answer.text ?? "").trim();
+  // An empty answer is not a success: the route reports *why* (`stopReason`), and that reason is the only thing that
+  // makes the failure fixable - showing a blank bubble would look like the model said nothing.
+  if (!reply) throw new Error(`DSH 没有给出内容（stopReason: ${answer.stopReason ?? "unknown"}）`);
+  return reply;
 }
 
 /**
