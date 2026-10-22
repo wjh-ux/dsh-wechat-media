@@ -51,6 +51,22 @@ await test("streaming is a real turn written as it arrives, filtered by session"
   assert.match(client, /class="msg dsh streaming"|dsh streaming/, "and the panel paints into a growing bubble");
 });
 
+await test("the open project can be sent as context", () => {
+  const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
+  const manifest = JSON.parse(readFileSync(new URL("../vscode-extension/package.json", import.meta.url), "utf8"));
+  assert.match(client, /async function projectSnapshot/, "there is a snapshot builder");
+  assert.match(client, /PROJECT_IGNORES/, "with an ignore list");
+  assert.match(client, /node_modules/, "that skips dependencies - a tree full of them is not context");
+  assert.match(client, /maxEntries/, "and a bound on how much it walks");
+  assert.match(client, /raw === "项目"/, "@项目 is recognised");
+  assert.match(client, /projectSnapshot\(\)/, "and expands to the snapshot");
+  assert.match(client, /KEY_FILES/, "including the files that explain the project");
+  assert.match(client, /没有打开的工作区/, "with a sentence when nothing is open, not a crash");
+  const ids = manifest.contributes.commands.map((command) => command.command);
+  assert.ok(ids.includes("dsh.project"), "the command is declared");
+  assert.match(client, /id="project"/, "the panel has a 项目 button");
+});
+
 await test("an @file reference becomes real content, and a missing file is reported", () => {
   const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
   assert.match(client, /async function expandFileRefs/, "there is an expander");

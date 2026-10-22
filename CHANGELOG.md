@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.66.0
+
+- **The open project can be sent as context.** `@file` only answers about a file you already know about; "what is this
+  project" needs the shape. Three ways to ask it:
+  - **项目** button in the panel (inserts `@项目`),
+  - `@项目` (or `@project`) typed directly,
+  - command palette: **DSH: 读取当前项目**, pre-filled with "总结这个项目的结构、技术栈和入口文件，并指出我该先看哪几个文件".
+  The snapshot is the folder name, a file tree (depth 4, 300 entries), and the files that explain a project
+  (`package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `README.md`, …), capped at 24 KB total. `node_modules`,
+  `.git`, `dist`, `build`, `target`, `.venv`, `__pycache__` and friends are skipped - a tree that includes dependencies is
+  not context, it is a denial of service on the prompt budget. No workspace open gives a sentence, not a crash.
+- 38 suites / 603 cases.
+
 ## 0.65.1
 
 - **Streaming had no chunks, because it listened to the wrong event.** First live probe of `/dsh-vscode/stream`: `status

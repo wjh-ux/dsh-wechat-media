@@ -15,6 +15,7 @@
     "commands": [
       { "command": "dsh.ask", "title": "DSH: 提问…" },
       { "command": "dsh.askSelection", "title": "DSH: 用选中内容提问" },
+      { "command": "dsh.project", "title": "DSH: 读取当前项目" },
       { "command": "dsh.showStatus", "title": "DSH: 显示连接状态" },
       { "command": "dsh.openChat", "title": "DSH: 打开聊天面板" }
     ],

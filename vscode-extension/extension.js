@@ -217,11 +217,91 @@ function streamAsk(prompt, { onDelta = () => {}, onStart = () => {}, timeoutMs =
 }
 
 /**
+ * A snapshot of the open project: folder, file tree, the files that explain it.
+ *
+ * The point is that `@file` only answers about a file you already know about. "What is this project" needs the shape:
+ * which folders exist, what the build file says, where the entry points are. All of it bounded - a snapshot that drags
+ * in `node_modules` is not context, it is a denial of service on the prompt budget.
+ */
+const PROJECT_IGNORES = new Set([
+  "node_modules", ".git", "dist", "out", "build", "target", ".venv", "venv", "__pycache__", ".next", ".nuxt",
+  "coverage", ".idea", ".vscode", "vendor", "bin", "obj", ".gradle", ".dart_tool", "Pods",
+]);
+
+const KEY_FILES = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "README.md", "README", "requirements.txt", "tsconfig.json"];
+
+/** Walk the workspace, breadth-first, skipping the folders nobody wants in a prompt. */
+async function projectTree(root, { maxEntries = 300, maxDepth = 4 } = {}) {
+  const lines = [];
+  const queue = [{ uri: root, depth: 0, prefix: "" }];
+  let truncated = false;
+  while (queue.length) {
+    const { uri, depth, prefix } = queue.shift();
+    let entries;
+    try {
+      entries = await vscode.workspace.fs.readDirectory(uri);
+    } catch {
+      continue;
+    }
+    entries.sort((a, b) => (a[1] === b[1] ? a[0].localeCompare(b[0]) : a[1] === 2 ? -1 : 1));
+    for (const [name, kind] of entries) {
+      if (lines.length >= maxEntries) { truncated = true; break; }
+      if (name.startsWith(".") && name !== ".env.example") continue;
+      if (PROJECT_IGNORES.has(name)) continue;
+      const isDir = kind === 2;
+      lines.push(`${prefix}${isDir ? name + "/" : name}`);
+      if (isDir && depth < maxDepth) queue.push({ uri: vscode.Uri.joinPath(uri, name), depth: depth + 1, prefix: prefix + "  " });
+    }
+    if (truncated) break;
+  }
+  return { lines, truncated };
+}
+
+/** The text a `@项目` reference expands into. */
+async function projectSnapshot({ maxChars = 24000 } = {}) {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) throw new Error("没有打开的工作区：先用「文件 → 打开文件夹」打开一个项目");
+  const root = folders[0].uri;
+  const name = folders[0].name;
+  const { lines, truncated } = await projectTree(root);
+
+  const parts = [`项目：${name}（${root.fsPath}）`, "", "文件树（已省略依赖与构建目录）：", "```", ...lines, truncated ? "…（已截断）" : "", "```"];
+
+  // The files that explain the project, capped so one lockfile cannot eat the whole budget.
+  const included = [];
+  for (const candidate of KEY_FILES) {
+    const uri = vscode.Uri.joinPath(root, candidate);
+    try {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.size > 8000) continue;
+      const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+      parts.push("", `文件 ${candidate}：`, "```", text.slice(0, 4000), "```");
+      included.push(candidate);
+      if (parts.join("\n").length > maxChars) break;
+    } catch {
+      // Not every project has every build file.
+    }
+  }
+
+  const active = vscode.window.activeTextEditor?.document?.fileName;
+  if (active) parts.push("", `当前打开的文件：${vscode.workspace.asRelativePath(active, false)}`);
+
+  const text = parts.join("\n");
+  return {
+    text: text.length > maxChars ? text.slice(0, maxChars) + "\n…（快照已截断）" : text,
+    name,
+    files: lines.length,
+    keyFiles: included,
+  };
+}
+
+/**
  * Expand `@file` references in a prompt into real file content.
  *
  * A path is taken literally (quoted or not) and resolved against the workspace folder first, then as an absolute path.
  * The content is fenced and labelled, so the model can tell where each block came from - and a missing file is reported
- * as a sentence instead of silently sending a dangling `@`.
+ * as a sentence instead of silently sending a dangling `@`. `@项目` (or `@project`) is special: it expands to the
+ * project snapshot above, which is the one reference a person cannot type as a path.
  */
 async function expandFileRefs(text) {
   const source = String(text ?? "");
@@ -235,6 +315,16 @@ async function expandFileRefs(text) {
   for (const match of matches) {
     const raw = (match[1] ?? match[2] ?? "").trim();
     if (!raw) continue;
+    if (raw === "项目" || /^project$/i.test(raw)) {
+      try {
+        const snapshot = await projectSnapshot();
+        attached.push({ path: `项目 ${snapshot.name}`, chars: snapshot.text.length });
+        prompt = prompt.replace(match[0], `\n\n${snapshot.text}\n`);
+      } catch (error) {
+        problems.push(String(error?.message ?? error));
+      }
+      continue;
+    }
     const candidates = [];
     if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("\\\\")) candidates.push(vscode.Uri.file(raw));
     else if (root) candidates.push(vscode.Uri.joinPath(root, raw));
@@ -355,6 +445,7 @@ function chatHtml() {
   <div id="log"></div>
   <div id="row">
     <textarea id="input" placeholder="问 DSH…（Ctrl+Enter 发送，@文件 附上文件内容）"></textarea>
+    <button id="project" class="secondary" title="附上当前项目（插入 @项目）">项目</button>
     <button id="file" class="secondary" title="附上文件（插入 @路径）">＋文件</button>
     <button id="send">发送</button>
   </div>
@@ -390,6 +481,10 @@ function chatHtml() {
 
   send.addEventListener("click", submit);
   document.getElementById("file").addEventListener("click", () => vscode.postMessage({ type: "pick" }));
+  document.getElementById("project").addEventListener("click", () => {
+    input.value = (input.value ? input.value.trimEnd() + " " : "") + "@项目 ";
+    input.focus();
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
   });
@@ -460,6 +555,27 @@ function activate(context) {
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "DSH 正在回答…" }, async () => {
         try {
           showAnswer(text, (await ask(text)).reply);
+        } catch (error) {
+          vscode.window.showErrorMessage(`DSH：${error.message}`);
+        }
+      });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dsh.project", async () => {
+      // The one question a project snapshot is always good for, with an escape hatch for anything else.
+      const question = await vscode.window.showInputBox({
+        prompt: "关于当前项目问什么？",
+        placeHolder: "总结这个项目的结构、技术栈和入口文件",
+        value: "总结这个项目的结构、技术栈和入口文件，并指出我该先看哪几个文件",
+      });
+      if (question === undefined) return;
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "DSH 正在读取项目…" }, async () => {
+        try {
+          const result = await ask(`@项目 ${question || "总结这个项目的结构、技术栈和入口文件"}`);
+          showAnswer(`[@项目] ${question}`, result.reply);
+          if (result.problems?.length) channel.appendLine(`（${result.problems.join("；")}）`);
         } catch (error) {
           vscode.window.showErrorMessage(`DSH：${error.message}`);
         }
