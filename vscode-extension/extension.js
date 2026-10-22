@@ -29,20 +29,38 @@ function stateDir() {
 function endpoint() {
   const manual = String(vscode.workspace.getConfiguration("dsh").get("endpoint") ?? "").trim().replace(/\/$/, "");
   if (manual) return manual;
+  return endpointCandidates()[0] ?? "";
+}
+
+/**
+ * Every address worth trying, newest first.
+ *
+ * `gui-port.json` is written by the plugin, but it can lag one restart behind - measured: it said 1826 while the GUI was
+ * on 63295, and the extension showed a bare "DSH" forever. The file keeps a `previousPort` and a short `history`, so the
+ * fix is to try them rather than to trust one number.
+ */
+function endpointCandidates() {
+  const ports = [];
+  const push = (value) => {
+    const port = Number(value);
+    if (Number.isInteger(port) && port > 0 && !ports.includes(port)) ports.push(port);
+  };
   try {
-    const file = path.join(stateDir(), "gui-port.json");
-    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
-    const port = Number(saved?.port);
-    if (Number.isInteger(port) && port > 0) return `http://127.0.0.1:${port}`;
+    const saved = JSON.parse(fs.readFileSync(path.join(stateDir(), "gui-port.json"), "utf8"));
+    push(saved?.port);
+    push(saved?.previousPort);
+    for (const entry of (Array.isArray(saved?.history) ? saved.history : []).slice(-6).reverse()) push(entry?.port);
   } catch {
     // No file yet: DSH has not written one, or the state directory is elsewhere.
   }
-  return "";
+  return ports.map((port) => `http://127.0.0.1:${port}`);
 }
 
+/** The base URL that last answered, so a poll does not re-probe six ports every time. */
+let activeBase = "";
+
 /** One HTTP request to the plugin, with a timeout that fails as a sentence rather than a hang. */
-function request(method, endpointPath, body, { timeoutMs = 180000 } = {}) {
-  const base = endpoint();
+function request(method, endpointPath, body, { timeoutMs = 180000, base = activeBase || endpoint() } = {}) {
   if (!base) return Promise.reject(new Error("找不到 DSH 地址：先启动 DSH，或在设置里填 dsh.endpoint"));
   const url = new URL(base + endpointPath);
   const payload = body === undefined ? "" : JSON.stringify(body);
@@ -88,9 +106,9 @@ function renderStatus(status) {
   if (!statusItem) return;
   statusItem.show();
   if (!status) {
-    statusItem.text = "$(circle-slash) DSH";
+    statusItem.text = "$(circle-slash) DSH 未连接";
     statusItem.tooltip = "DSH 未连接（点击查看状态）";
-    statusItem.backgroundColor = undefined;
+    statusItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     return;
   }
   const bits = [];
@@ -109,16 +127,23 @@ function renderStatus(status) {
 
 /** Poll the plugin so the status bar tells the truth without the person asking. */
 async function refreshStatus({ quiet = true } = {}) {
-  try {
-    lastStatus = await request("GET", "/dsh-vscode/status", undefined, { timeoutMs: 4000 });
-    renderStatus(lastStatus);
-    return lastStatus;
-  } catch (error) {
-    lastStatus = null;
-    renderStatus(null);
-    if (!quiet) vscode.window.showErrorMessage(`DSH：${error.message}`);
-    return null;
+  const tried = [];
+  for (const base of [activeBase, endpoint(), ...endpointCandidates()].filter(Boolean)) {
+    if (tried.includes(base)) continue;
+    tried.push(base);
+    try {
+      lastStatus = await request("GET", "/dsh-vscode/status", undefined, { timeoutMs: 4000, base });
+      activeBase = base;
+      renderStatus(lastStatus);
+      return lastStatus;
+    } catch (error) {
+      if (!quiet && tried.length === 1) vscode.window.showErrorMessage(`DSH：${error.message}`);
+    }
   }
+  lastStatus = null;
+  activeBase = "";
+  renderStatus(null);
+  return null;
 }
 
 /** Ask the plugin a question and return its answer text. */

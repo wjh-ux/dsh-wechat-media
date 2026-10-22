@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.64.1
+
+- **The editor finds DSH again after a restart.** `gui-port.json` said port 1826 while the GUI had moved to 63295, so the
+  VS Code status bar sat on a bare `DSH` forever - measured by installing it and reading the status bar. Two fixes:
+  - the plugin refreshes that file from the two routes the extension actually calls (`/dsh-vscode/status`, `/ask`);
+  - the extension tries the file's `port`, then `previousPort`, then its `history`, and remembers whichever answers.
+  When nothing answers it now says `DSH 未连接` with a warning background instead of an ambiguous label.
+- **A `.vsix` is built and installed for real.** `code --install-extension <folder>` does not work (the CLI answers "not
+  found"), and a folder dropped into `~/.vscode/extensions` is never loaded because `extensions.json` is the registry -
+  both verified. The extension is packaged by hand (`[Content_Types].xml` + `extension.vsixmanifest` + `extension/`) and
+  installed with the CLI; the status bar then reads `DSH · 微信 1 · 飞书 · 浏览器 chrome · 任务 4`.
+- 38 suites / 600 cases.
+
 ## 0.64.0
 
 - **The VS Code bridge works, and the earlier `not-claimed` was not the bridge.** With an opt-in trace

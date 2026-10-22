@@ -7457,6 +7457,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         path: "/dsh-vscode/status",
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          // A third party (the VS Code extension) reads `gui-port.json` to find this server, so the file has to be
+          // refreshed by the routes it is most likely to call. It was stale for two restarts - measured.
+          await noteGuiPort(req);
           const prefs = await state.loadPrefs();
           const build = await buildInfo();
           const ext = extensionBridge ? extensionBridge.status() : null;
@@ -7478,6 +7481,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         handler: async (req, res) => {
           if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
           if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          await noteGuiPort(req);
           const prefs = await state.loadPrefs();
           if (prefs?.vscodeEnabled === false) {
             return json(res, 403, { ok: false, error: "VS Code 桥已关闭（/vscode on 开启）" });
