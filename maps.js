@@ -27,7 +27,13 @@ export function mapsPlacesExpression({ limit = 200, stallRounds = 3, pauseMs = 9
     const PAUSE = ${Number(pauseMs) || 900};
     const DEADLINE = Date.now() + ${Number(timeoutMs) || 90_000};
 
-    const feed = document.querySelector('div[role="feed"]') || document.body;
+    // The feed appears a moment after navigation. Measured: scrolling before it existed collected 7 rows and stopped,
+    // because every scroll was aimed at a list that was not there yet.
+    let feed = document.querySelector('div[role="feed"]');
+    for (let i = 0; i < 60 && !feed; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      feed = document.querySelector('div[role="feed"]');
+    }
     const rows = new Map();
 
     const readCard = (card) => {
@@ -47,7 +53,7 @@ export function mapsPlacesExpression({ limit = 200, stallRounds = 3, pauseMs = 9
     };
 
     const collect = () => {
-      for (const card of feed.querySelectorAll('div[role="article"]')) {
+      for (const card of document.querySelectorAll('div[role="feed"] div[role="article"]')) {
         const row = readCard(card);
         if (row && row['名称'] && !rows.has(row['链接'])) rows.set(row['链接'], row);
       }
@@ -57,8 +63,12 @@ export function mapsPlacesExpression({ limit = 200, stallRounds = 3, pauseMs = 9
     let quiet = 0;
     let lastSize = rows.size;
     while (rows.size < LIMIT && quiet < STALL && Date.now() < DEADLINE) {
-      feed.scrollTop = feed.scrollHeight;
-      window.scrollTo(0, document.body.scrollHeight);
+      // The list loads when its *last card* comes into view: setting the feed's scrollTop alone was not enough, and
+      // scrolling body did nothing at all - both measured against the live page.
+      const cards = document.querySelectorAll('div[role="feed"] div[role="article"]');
+      const lastCard = cards[cards.length - 1];
+      if (lastCard) lastCard.scrollIntoView({ block: 'end' });
+      document.querySelector('div[role="feed"]')?.scrollTo?.({ top: 1e9 });
       await new Promise((resolve) => setTimeout(resolve, PAUSE));
       collect();
       if (rows.size === lastSize) quiet += 1;

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.61.1
+
+- **The Maps patch now waits for the list, and scrolls the list.** First live run returned 7 places and claimed it had
+  settled: the feed is rendered a moment after navigation, so every scroll was aimed at a list that did not exist yet,
+  and scrolling `body` never reached it. It now polls for `div[role="feed"]` for up to 15 s, scrolls the **last card**
+  into view (which is what actually loads more), and re-queries the feed each round because Maps replaces the node.
+  Verified with the same logic inline before touching the patch: 31 places from one search instead of 7.
+- A stray backtick inside the template string made `maps.js` a syntax error; caught by `node --check` before release.
+- 38 suites / 598 cases.
+
 ## 0.61.0
 
 - **谷歌地图专用补丁：`browser_maps_places`.** Maps is not like the sites the other tools are built for, and the
