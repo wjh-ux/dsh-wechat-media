@@ -337,6 +337,13 @@ await test("the browser session can be the person's own Chrome, and a busy profi
   assert.equal(chromeUserDataDir({ channel: "chrome", env: { LOCALAPPDATA: "C:\\L" }, platform: "linux" }), "");
 });
 
+await test("an explicit target that is not connected is refused, not quietly swapped", () => {
+  // The failure this prevents: the person picks Edge, Edge's extension is off, and the click lands in Chrome. Silently
+  // using "some connected browser" is exactly the confusion the target setting exists to remove.
+  assert.match(host, /目标浏览器 \$\{bridge\.target === "edge" \? "Edge" : "Chrome"\} 没有连接/);
+  assert.match(host, /nowBrowser === "edge" \? "Edge" : "Chrome"/, "and the open note names the browser actually used");
+});
+
 await test("the three browser modes differ where it matters", () => {
   const home = "C:\\dsh";
   const headless = browserModeSettings({ mode: "headless", dshHome: home });

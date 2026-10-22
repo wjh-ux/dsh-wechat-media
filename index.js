@@ -5851,9 +5851,20 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
           const session = extensionSession(bridge);
           await session.send("Page.enable");
+          const targetBrowser = bridge.effectiveTarget();
+          // An explicit target that is not connected must fail here, not quietly fall back to the browser that happens
+          // to be polling: the person picked one, and running the click in the other is the exact confusion this whole
+          // setting exists to remove.
+          if (bridge.target !== "auto" && !targetBrowser) {
+            throw new Error(
+              `目标浏览器 ${bridge.target === "edge" ? "Edge" : "Chrome"} 没有连接。\n`
+              + `在 ${bridge.target === "edge" ? "edge://extensions" : "chrome://extensions"} 确认扩展已启用，或把目标改成 auto。`,
+            );
+          }
           browserLive = {
             session, port: 0, pid: null, started: false, attached: false, imported: null,
             replacedStale: false, staleReason: "", url: "", extension: true,
+            browser: targetBrowser,
           };
           return { mod, settings, live: browserLive };
         }
@@ -5951,8 +5962,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!url) throw new Error("需要一个 url");
           const opened = await mod.browserOpen(live.session, url);
           live.url = opened.url;
+          // Asked again rather than cached: the target can change between two commands, and the note is the only place
+          // the answer is visible.
+          const nowBrowser = live.extension ? (await ensureExtensionBridge()).effectiveTarget() : "";
           const note = live.extension
-            ? `（通过浏览器扩展，操作的是你自己的 Chrome）`
+            ? `（通过浏览器扩展，操作的是你的 ${nowBrowser === "edge" ? "Edge" : "Chrome"}）`
             : live.started
             ? (live.replacedStale ? `（检测到旧配置的浏览器，已关闭并按当前设置重新打开${live.staleReason ? `：${live.staleReason}` : ""}）` : "")
             : (live.attached

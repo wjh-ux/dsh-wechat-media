@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.56.1
+
+- **An explicit target that is not connected is refused, not swapped.** Picking Edge while Edge's extension is off used
+  to fall back to whichever browser was polling - the click landed in Chrome, which is precisely the confusion the target
+  setting exists to remove. Now the command fails with the browser's name and where to enable the extension; `auto`
+  still resolves to whatever is connected.
+- `browser_open`'s note now names the browser that actually ran it (Chrome / Edge), asked at call time so it follows a
+  target switch instead of a value cached at session start.
+- 36 suites / 590 cases.
+
 ## 0.56.0
 
 - **两个浏览器同时开着，命令现在有明确的目标.** With the extension loaded in both Chrome and Edge, both poll the same
