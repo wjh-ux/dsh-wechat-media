@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.63.0
+
+- **The Maps card reader recognises fields by shape, not by position.** The 220-row export exposed two defects that the
+  row count hid: **53 rows had no rating** and the 地址 column was full of opening hours. Live cards, three in three:
+  `["4.6(14)", "咖啡店 · 淮海中路1856号"]`, `["5.0(1)", "咖啡馆 … 正在营业 · 结束营业时间：23:00"]`, and cards with no
+  rating at all. So now: the address is the `·`-separated block that is *not* about opening hours, and the rating falls
+  back to the `4.6(14)` text when there is no labelled image. A card with neither stays empty rather than inheriting
+  someone else's text.
+- 220 rows from eight searches, 220 unique links, 171 unique names - the duplicate names are different branches, which
+  is why the link is the key.
+- 38 suites / 599 cases.
+
 ## 0.62.2
 
 - **A search gets two minutes, not ninety seconds.** First merged live run reported 112 places from three searches, but

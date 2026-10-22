@@ -43,12 +43,23 @@ export function mapsPlacesExpression({ limit = 200, stallRounds = 5, pauseMs = 1
       if (!link) return null;
       const href = link.href || '';
       const name = (link.getAttribute('aria-label') || link.innerText || '').trim();
-      const score = card.querySelector('span[role="img"]');
-      const blocks = [...card.querySelectorAll('.W4Efsd')];
-      const address = (blocks.length ? blocks[blocks.length - 1].innerText : '').replace(/\\s+/g, ' ').trim();
+
+      // The card's blocks are not in a fixed order. Measured on a live page, three shapes in three cards:
+      //   ["4.6(14)", "咖啡店 · 淮海中路1856号", ...]              - rating as a block
+      //   ["5.0(1)", "咖啡馆 … 正在营业 · 结束营业时间：23:00"]     - opening hours where an address would be
+      //   and some cards simply have no rating at all (a place with no reviews).
+      // So both fields are recognised by what they look like, not by their position.
+      const blocks = [...card.querySelectorAll('.W4Efsd')].map((block) => block.innerText.replace(/\\s+/g, ' ').trim());
+      const timeish = /营业|打烊|即将|开始|结束|周[一二三四五六日]|分钟|小时/;
+      const addressBlock = blocks.find((text) => text.includes(' · ') && !timeish.test(text)) || '';
+      const address = addressBlock ? addressBlock.split(' · ').slice(1).join(' · ').trim() : '';
+
+      const labelled = (card.querySelector('span[role="img"]')?.getAttribute('aria-label') || '').trim();
+      const numeric = blocks.find((text) => /^\\d(\\.\\d)?\\(\\d+\\)$/.test(text)) || '';
+
       return {
         '名称': name,
-        '评分': (score?.getAttribute('aria-label') || '').trim(),
+        '评分': labelled || numeric,
         '地址': address,
         '链接': href,
       };
