@@ -1946,19 +1946,45 @@ export function apply(ctx, config = {}) {
         return true;
       }
       if (sub === "ext" || sub === "extension") {
-        // The extension transport: where to point it, the token to paste, and whether it has connected.
+        // The extension transport: where to point it, the token to paste, which browsers are connected, and which one
+        // the commands are going to. With two browsers open this is the switch that decides - not a race.
         try {
           const bridge = await ensureExtensionBridge();
+          const rest = String(command.args ?? "").trim().replace(/^ext(?:ension)?\s*/i, "").trim();
+          const [maybeTarget, targetArg] = rest.split(/\s+/).filter(Boolean);
+          if (maybeTarget === "target") {
+            const wanted = String(targetArg ?? "").toLowerCase();
+            if (!["auto", "chrome", "edge"].includes(wanted)) {
+              await reply(`用法：/browser ext target auto | chrome | edge\n当前：${bridge.status().target}`);
+              return true;
+            }
+            await state.savePrefs({ extensionTarget: wanted });
+            bridge.preferredBrowser = browserConfig().channel;
+            const applied = bridge.setTarget(wanted);
+            await reply(`扩展目标浏览器：${applied.target === "auto" ? `auto（跟随通道设置，现在是 ${applied.browser || "无"}）` : applied.target}\n下次命令生效。`);
+            return true;
+          }
           const status = bridge.status();
-          await reply([
-            `浏览器扩展：${status.connected ? `已连接（${status.name}，${status.tabs} 个标签页）` : "未连接"}`,
+          const lines = [
+            `浏览器扩展：${status.connected ? "已连接" : "未连接"}`,
+            `  目标：${status.target}${status.browser ? `（当前 ${status.browser}）` : ""}`,
+          ];
+          if (status.clients.length) {
+            lines.push("  已连接的浏览器：");
+            for (const client of status.clients) {
+              lines.push(`    · ${client.browser === "edge" ? "Edge" : "Chrome"} · ${client.tabs} 个标签页 · ${client.name}${client.browser === status.browser ? "  ← 正在使用" : ""}`);
+            }
+          }
+          lines.push(
             `  插件地址：http://127.0.0.1:${status.port}`,
             `  Token：${bridge.tokenForDisplay()}`,
             `  扩展目录：${join(PLUGIN_ROOT, "extension")}`,
             "",
-            "装法：chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选上面这个目录 → 扩展选项里填地址和 token",
+            "切换目标：/browser ext target auto | chrome | edge",
+            "装法：chrome://extensions（或 edge://extensions）→ 开发者模式 → 加载已解压的扩展程序 → 选上面这个目录 → 扩展选项里填地址和 token",
             "用法：/browser session extension",
-          ].join("\n"));
+          );
+          await reply(lines.join("\n"));
         } catch (error) {
           await reply(`扩展桥启动失败：${String(error?.message ?? error)}`);
         }
@@ -3710,6 +3736,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const startDriver = String(prefs?.extensionDriver ?? "").toLowerCase();
     extensionBridge.driver = ["script", "hybrid"].includes(startDriver) ? startDriver : "debugger";
     extensionBridge.cursor = prefs?.extensionCursor === true;
+    // Two browsers can be connected at once. The channel setting resolves `auto`; an explicit target wins over it.
+    extensionBridge.preferredBrowser = browserConfig().channel;
+    const startTarget = String(prefs?.extensionTarget ?? "").toLowerCase();
+    extensionBridge.target = ["chrome", "edge"].includes(startTarget) ? startTarget : "auto";
     await extensionBridge.start();
     ctx.logger?.info?.("[dsh-wechat-media] browser extension bridge listening on 127.0.0.1:%s", port);
     return extensionBridge;
@@ -7073,6 +7103,29 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               noteRoute("/proxy-hosts", { action, count: list.length });
             }
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-wechat-media/extension-target",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const wanted = String(body.mode ?? "auto").toLowerCase();
+          if (!["auto", "chrome", "edge"].includes(wanted)) {
+            return json(res, 400, { ok: false, error: `mode 只能是 auto / chrome / edge，收到 ${wanted}` });
+          }
+          try {
+            await state.savePrefs({ extensionTarget: wanted });
+            const bridge = await ensureExtensionBridge();
+            bridge.preferredBrowser = browserConfig().channel;
+            const applied = bridge.setTarget(wanted);
+            noteRoute("/extension-target", applied);
+            return json(res, 200, { ok: true, ...applied, ...bridge.status() });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
           }

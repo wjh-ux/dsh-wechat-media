@@ -490,6 +490,11 @@ itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Fei
   a click that found nothing, a frame-scoped operation - so routine work leaves no trace in Chrome's UI). The switch is
   stored and delivered before the next command runs.
 
+  **两个浏览器同时开着.** Every poll names its browser (`chrome` / `edge`) and installation, so the bridge knows both.
+  `目标浏览器` (`/browser ext target auto|chrome|edge`) picks which one receives commands; `auto` follows the channel
+  setting. The other browser keeps a standby poll and never gets work - without that, two open browsers race for every
+  command and the answer comes from whichever asked first.
+
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the
 extension exists.

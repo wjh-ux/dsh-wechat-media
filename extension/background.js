@@ -10,6 +10,17 @@
  */
 
 const DEFAULTS = { endpoint: "http://127.0.0.1:9339", token: "" };
+
+/**
+ * Which browser this is, and which installation.
+ *
+ * Chrome and Edge can both be open with the extension loaded. The plugin needs to tell them apart to send a command to
+ * the one the person chose - otherwise both poll the same queue and the answer comes from whichever asked first.
+ */
+const BROWSER = /Edg\//.test(navigator.userAgent) ? "edge" : "chrome";
+const CLIENT_ID = (() => {
+  try { return crypto.randomUUID(); } catch { return String(Date.now()) + Math.random(); }
+})();
 const ATTACH = { version: "1.3" };
 
 /** Current settings, with the defaults filled in. */
@@ -255,7 +266,9 @@ async function pickTab() {
 async function round() {
   const { endpoint, token } = await settings();
   const tabs = await tabCount();
-  const url = `${endpoint.replace(/\/$/, "")}/poll?tabs=${tabs}&name=${encodeURIComponent("Chrome 扩展")}`;
+  const url = `${endpoint.replace(/\/$/, "")}/poll?tabs=${tabs}`
+    + `&name=${encodeURIComponent(BROWSER === "edge" ? "Edge 扩展" : "Chrome 扩展")}`
+    + `&browser=${BROWSER}&id=${encodeURIComponent(CLIENT_ID)}`;
   let response;
   try {
     response = await fetch(url, { headers: headers(token), cache: "no-store" });

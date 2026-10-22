@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.56.0
+
+- **两个浏览器同时开着，命令现在有明确的目标.** With the extension loaded in both Chrome and Edge, both poll the same
+  queue and a command went to whichever asked first - so the same click could land in a window the person was not
+  talking about. Now:
+  - every poll carries `browser` (chrome/edge) and a per-install `id`, and the bridge tracks all connected browsers;
+  - `target` is `auto` / `chrome` / `edge`. `auto` follows the channel setting (`browserChannel`), falling back to the
+    first connected browser;
+  - a non-target browser only gets a 4 s **standby** poll and never receives work, and waking a waiter skips non-target
+    ones;
+  - switching the target **drops queued business commands** (the `__driver` / `__cursor` settings survive), so a command
+    queued a moment ago cannot land in the window just ruled out;
+  - panel: a 目标浏览器 select plus the list of connected browsers; chat: `/browser ext target auto|chrome|edge`, and
+    `/browser ext` now names each connected browser and marks the one in use.
+- 36 suites / 589 cases.
+
 ## 0.55.2
 
 - **The pointer stays for 2.5 s instead of 1 s.** The dot is a debugging aid: a person has to notice it, and a

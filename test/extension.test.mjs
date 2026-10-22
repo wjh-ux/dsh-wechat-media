@@ -195,6 +195,48 @@ await test("the cursor flag rides the click command, so it cannot be one click s
   } finally { await bridge.stop(); }
 });
 
+await test("with two browsers open, the target decides who runs the command", async () => {
+  // The reason this exists: Chrome and Edge both poll the same queue, so without a target the answer comes from
+  // whichever happened to poll first - and the command runs in a window the person was not talking about.
+  const bridge = new ExtensionBridge({ port: 20000 + Math.floor(Math.random() * 20000), token: "t0ken", holdMs: 60, standbyMs: 20 });
+  await bridge.start();
+  try {
+    bridge.driverSent = bridge.driver;
+    bridge.cursorSent = bridge.cursor;
+
+    const [chromeFirst, edgeFirst] = await Promise.all([
+      call(bridge, "/poll?browser=chrome&id=c1"),
+      call(bridge, "/poll?browser=edge&id=e1"),
+    ]);
+    assert.equal(chromeFirst.status, 204, "nobody had work to hand out");
+    assert.equal(edgeFirst.status, 204);
+
+    const status = bridge.status();
+    assert.equal(status.clients.length, 2, "both browsers are known");
+    assert.deepEqual(status.clients.map((client) => client.browser).sort(), ["chrome", "edge"]);
+
+    // `auto` follows the channel setting; an explicit target overrides it.
+    bridge.preferredBrowser = "edge";
+    assert.equal(bridge.effectiveTarget(), "edge");
+    bridge.setTarget("chrome");
+    assert.equal(bridge.effectiveTarget(), "chrome");
+    bridge.setTarget("auto");
+    assert.equal(bridge.effectiveTarget(), "edge");
+
+    // A command goes to the target only: the other browser's poll is told "nothing", never handed the work.
+    bridge.target = "edge";
+    const pending = bridge.call("Runtime.evaluate", { expression: "1" }, { timeoutMs: 1500 });
+    const edgePoll = await call(bridge, "/poll?browser=edge&id=e1");
+    assert.equal(edgePoll.status, 200, "the target receives the command");
+    assert.equal(edgePoll.body.command.method, "Runtime.evaluate");
+    const chromePoll = await call(bridge, "/poll?browser=chrome&id=c1");
+    assert.equal(chromePoll.status, 204, "the non-target browser stays idle");
+
+    await call(bridge, "/result", { method: "POST", body: { id: edgePoll.body.command.id, ok: true, result: 1 } });
+    assert.equal(await pending, 1);
+  } finally { await bridge.stop(); }
+});
+
 await test("the answer says which transport ran the command, so a flash is explainable afterwards", async () => {
   const bridge = await startBridge();
   try {

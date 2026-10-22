@@ -21,6 +21,8 @@ import { randomBytes } from "node:crypto";
 
 /** How long a poll waits for a command before answering "nothing yet". */
 const POLL_HOLD_MS = 25_000;
+/** How long a browser that is *not* the target holds its poll before being told "nothing". Short: it must stay ready. */
+const STANDBY_HOLD_MS = 4_000;
 /** A client that has not polled for this long is treated as gone. */
 const STALE_MS = 45_000;
 
@@ -31,17 +33,27 @@ const STALE_MS = 45_000;
  * code in browser.js.
  */
 export class ExtensionBridge {
-  constructor({ port = 9339, token = "", host = "127.0.0.1", now = () => Date.now() } = {}) {
+  constructor({ port = 9339, token = "", host = "127.0.0.1", now = () => Date.now(), standbyMs = STANDBY_HOLD_MS, holdMs = POLL_HOLD_MS } = {}) {
     this.port = Number(port) || 9339;
     this.host = host;
     this.token = String(token ?? "");
     this.now = now;
+    // How long a poll waits for work (`holdMs`) and how long a browser that is not the target holds its poll
+    // (`standbyMs`). Injectable so a test does not wait 25 seconds to prove "nothing happened".
+    this.holdMs = Number(holdMs) > 0 ? Number(holdMs) : POLL_HOLD_MS;
+    this.standbyMs = Number(standbyMs) > 0 ? Number(standbyMs) : STANDBY_HOLD_MS;
     this.queue = [];
     this.waiters = [];
     this.pending = new Map();
     this.nextId = 1;
-    this.client = null;
+    /** Every connected browser, keyed by the id the worker generates. Chrome and Edge can both be open at once. */
+    this.clients = new Map();
     this.server = null;
+    // Which browser commands go to: `auto` follows the configured channel, otherwise `chrome` / `edge` explicitly.
+    // Without this, two open browsers race for every command and the answer comes from whichever polled first.
+    this.target = "auto";
+    /** The channel from the browser settings, used to resolve `auto`. */
+    this.preferredBrowser = "chrome";
     // `debugger` by default: it is the capable transport, and the banner it shows is Chrome's, not ours.
     this.driver = "debugger";
     this.driverSent = "";
@@ -55,17 +67,61 @@ export class ExtensionBridge {
     this.debuggerUses = 0;
   }
 
+  /** The browsers that are still polling: anything unseen for a while is dropped rather than reported as connected. */
+  liveClients() {
+    const now = this.now();
+    for (const [id, client] of this.clients) {
+      if (now - (client.lastSeen ?? 0) > STALE_MS) this.clients.delete(id);
+    }
+    return [...this.clients.entries()].map(([id, client]) => ({ id, ...client }));
+  }
+
+  /**
+   * Which browser commands go to right now.
+   *
+   * `auto` prefers the browser named in the panel's channel setting, so the answer matches what the rest of the browser
+   * tools already mean by "the browser"; otherwise the first connected one. When two browsers are open and the target
+   * names one of them, the other simply gets no work.
+   */
+  effectiveTarget() {
+    const clients = this.liveClients();
+    if (clients.length === 0) return "";
+    if (this.target !== "auto") {
+      return clients.some((client) => client.browser === this.target) ? this.target : "";
+    }
+    if (clients.some((client) => client.browser === this.preferredBrowser)) return this.preferredBrowser;
+    return clients[0].browser;
+  }
+
+  /** Choose the browser: `auto`, `chrome` or `edge`. */
+  setTarget(mode) {
+    const wanted = ["auto", "chrome", "edge"].includes(String(mode ?? "").toLowerCase())
+      ? String(mode).toLowerCase()
+      : "auto";
+    this.target = wanted;
+    // A queued command belongs to whoever was in front a moment ago; dropping it is better than delivering it to the
+    // browser the person just asked us not to use.
+    this.queue = this.queue.filter((command) => String(command.method).startsWith("__"));
+    return { target: wanted, browser: this.effectiveTarget() };
+  }
+
   /** What the panel and `/browser ext` report. */
   status() {
-    const connected = Boolean(this.client) && this.now() - (this.client.lastSeen ?? 0) < STALE_MS;
+    const clients = this.liveClients();
+    const browser = this.effectiveTarget();
+    const active = clients.find((client) => client.browser === browser) ?? null;
     return {
       running: Boolean(this.server),
       port: this.port,
-      connected,
-      name: connected ? this.client.name : "",
-      tabs: connected ? this.client.tabs : 0,
+      connected: clients.length > 0,
+      name: active ? active.name : "",
+      tabs: active ? active.tabs : 0,
       waiting: this.waiters.length,
       pending: this.pending.size,
+      // Every connected browser, and which one is being driven: two open browsers otherwise race for each command.
+      clients,
+      target: this.target,
+      browser,
       // Which transport the extension is using: `debugger` shows Chrome's "已开始调试此浏览器" bar, `script`
       // injects instead and shows nothing. The panel reports it so the trade-off is visible.
       driver: this.driver,
@@ -197,8 +253,14 @@ export class ExtensionBridge {
     return { accepted: true };
   }
 
-  /** The long poll: resolve with a command, or with `null` after the hold. */
-  poll() {
+  /** The long poll: resolve with a command, or with `null` after the hold. `client` says who is asking. */
+  poll({ browser = "", id = "" } = {}) {
+    // A browser that is not the target gets no work: it holds a short standby poll instead of racing for commands.
+    // Without this, two open browsers take turns and an answer comes from whichever happened to poll first.
+    const target = this.effectiveTarget();
+    if (target && browser && browser !== target) {
+      return new Promise((resolve) => setTimeout(() => resolve(null), this.standbyMs));
+    }
     // A driver change is delivered on the next poll, before any work: the worker has to know *how* to run the command
     // it is about to receive. Id 0 is synthetic - no caller is waiting, and a result for it is simply ignored.
     if (this.driver !== this.driverSent) {
@@ -213,30 +275,36 @@ export class ExtensionBridge {
     const next = this.queue.shift();
     if (next) return Promise.resolve(next);
     return new Promise((resolve) => {
-      const waiter = { resolve: (value) => { clearTimeout(timer); resolve(value); } };
+      const waiter = { resolve: (value) => { clearTimeout(timer); resolve(value); }, browser, id };
       const timer = setTimeout(() => {
         this.waiters = this.waiters.filter((item) => item !== waiter);
         waiter.resolve(null);
-      }, POLL_HOLD_MS);
+      }, this.holdMs);
       this.waiters.push(waiter);
     });
   }
 
-  /** After a poll: update what we know about the client. */
-  touch({ name, tabs } = {}) {
-    const previous = this.client ?? {};
-    this.client = {
-      name: String(name ?? previous.name ?? "Chrome 扩展"),
+  /** After a poll: remember which browser this is, so the panel can name them and the target can be resolved. */
+  touch({ id = "", browser = "", name = "", tabs } = {}) {
+    const key = String(id || browser || "default");
+    const previous = this.clients.get(key) ?? {};
+    this.clients.set(key, {
+      browser: String(browser || previous.browser || "chrome"),
+      name: String(name || previous.name || "浏览器扩展"),
       tabs: Number.isFinite(Number(tabs)) ? Number(tabs) : (previous.tabs ?? 0),
       lastSeen: this.now(),
       connectedAt: previous.connectedAt ?? this.now(),
-    };
+    });
     return this.status();
   }
 
   #wake() {
-    const waiter = this.waiters.shift();
-    if (!waiter) return;
+    const target = this.effectiveTarget();
+    // Only the target browser may receive work; a waiter from the other one is skipped rather than fed a command it
+    // will run in the wrong window.
+    const index = this.waiters.findIndex((waiter) => !target || !waiter.browser || waiter.browser === target);
+    if (index < 0) return;
+    const [waiter] = this.waiters.splice(index, 1);
     const next = this.queue.shift();
     waiter.resolve(next ?? null);
   }
@@ -266,8 +334,10 @@ export class ExtensionBridge {
     if (url.pathname === "/poll") {
       const name = url.searchParams.get("name") ?? undefined;
       const tabs = Number(url.searchParams.get("tabs")) || undefined;
-      this.touch({ name, tabs });
-      const command = await this.poll();
+      const browser = String(url.searchParams.get("browser") ?? "").toLowerCase();
+      const id = String(url.searchParams.get("id") ?? "");
+      this.touch({ id, browser, name, tabs });
+      const command = await this.poll({ browser, id });
       if (!command) { res.writeHead(204, { "access-control-allow-origin": "*" }); res.end(); return; }
       send(200, { ok: true, command });
       return;

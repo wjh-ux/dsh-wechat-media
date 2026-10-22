@@ -932,6 +932,25 @@ window.__ModuleLoader__.load({
           }
         }
 
+        /** Which browser commands go to, when Chrome and Edge are both connected. */
+        async function setExtensionTarget(mode) {
+          setBusy(true);
+          try {
+            const answer = await api(`/extension-target?mode=${encodeURIComponent(String(mode ?? "auto"))}`);
+            setBrowserNotice({
+              ok: true,
+              text: answer.target === "auto"
+                ? `目标浏览器：auto（跟随通道设置，当前 ${answer.browser || "无连接"}）`
+                : `目标浏览器：${answer.target}${answer.browser === answer.target ? "（已连接）" : "（未连接）"}`,
+            });
+            await refresh();
+          } catch (problem) {
+            setBrowserNotice({ ok: false, text: `设置目标失败：${String(problem?.message ?? problem)}` });
+          } finally {
+            setBusy(false);
+          }
+        }
+
         /** Draw a cursor where clicks land: a page overlay, since Chrome exposes no cursor API. */
         async function setExtensionCursor(on) {
           setBusy(true);
@@ -1970,11 +1989,30 @@ window.__ModuleLoader__.load({
                   h("option", { key: "e", value: "extension" }, t("browserSessionExtension", "浏览器扩展（驱动你现在的 Chrome）")),
                 ]),
               ]),
+              // Which browser commands go to when Chrome and Edge are both connected: without this they race for every
+              // command and the answer comes from whichever polled first.
+              snapshot?.browser?.extension
+                ? h("label", { key: "target", className: "dswxMeta" }, [
+                  t("extensionTarget", " 目标浏览器 ") + " ",
+                  h("select", {
+                    key: "s",
+                    className: "dswxInput",
+                    disabled: busy,
+                    value: snapshot.browser.extension.target ?? "auto",
+                    onChange: (event) => setExtensionTarget(event.target.value),
+                  }, [
+                    h("option", { key: "a", value: "auto" }, t("targetAuto", "auto（跟随通道设置）")),
+                    h("option", { key: "c", value: "chrome" }, "Chrome"),
+                    h("option", { key: "e", value: "edge" }, "Edge"),
+                  ]),
+                ])
+                : null,
               // The extension's address and token, shown so they can be pasted into it. The token is what stops any
               // local process from driving the person's browser.
               snapshot?.browser?.extension
                 ? h("p", { key: "extinfo", className: "dswxMeta" },
-                  `扩展：${snapshot.browser.extension.connected ? `已连接（${snapshot.browser.extension.tabs} 个标签页）` : "未连接"}`
+                  `扩展：${snapshot.browser.extension.connected ? `已连接${(snapshot.browser.extension.clients ?? []).map((c) => c.browser === "edge" ? " Edge" : " Chrome").join("、")}` : "未连接"}`
+                  + ` · 目标 ${snapshot.browser.extension.browser || "—"}`
                   + ` · 地址 ${snapshot.browser.extension.url}`
                   + ` · token ${snapshot.browser.extension.token}`
                   + ` · 最近命令 ${snapshot.browser.extension.lastDriver === "debugger" ? "调试器" : snapshot.browser.extension.lastDriver === "script" ? "脚本" : "—"}`
