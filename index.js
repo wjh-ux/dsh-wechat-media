@@ -6067,6 +6067,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         }
       };
 
+      /**
+       * What the last capture collected.
+       *
+       * `stop` is the natural end of a capture and the usual next question is "show me what you got", so the entries
+       * outlive the command. Without this, `list` stopped a second time and answered "nothing" - measured on the first
+       * live run against api.github.com.
+       */
+      let lastCapture = { entries: [], at: "" };
+
       const browserCaptureTool = browserTool(
         "browser_capture",
         "Capture XHR/fetch JSON responses from the current tab (start / stop / list). This is how you get the data behind a page - the API payload, not the rendered cards.",
@@ -6090,6 +6099,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (action === "stop") {
             const result = await live.session.send("__netStop", {});
             const entries = Array.isArray(result?.entries) ? result.entries : [];
+            // Keep them: `stop` is the natural end of a capture, and the usual next question is "show me what you
+            // got". Without this, `list` called `stop` a second time and answered "nothing" - measured on the first
+            // live run.
+            lastCapture = { entries, at: new Date().toISOString() };
             if (entries.length === 0) return "捕获已停止：没有收到任何响应（页面没发起请求，或 pattern 太窄）。";
             const byType = new Map();
             for (const entry of entries) {
@@ -6109,10 +6122,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return lines.join("\n");
           }
           if (action === "list") {
-            const result = await live.session.send("__netStop", {});
-            const entries = Array.isArray(result?.entries) ? result.entries : [];
-            if (entries.length === 0) return "没有捕获到内容。";
-            return `${entries.length} 条响应：\n${JSON.stringify(entries, null, 2).slice(0, 12000)}`;
+            // `list` shows what the last capture collected, and only talks to the browser when there is nothing yet.
+            let entries = lastCapture.entries;
+            if (entries.length === 0) {
+              const result = await live.session.send("__netStop", {});
+              entries = Array.isArray(result?.entries) ? result.entries : [];
+              lastCapture = { entries, at: new Date().toISOString() };
+            }
+            if (entries.length === 0) return "没有捕获到内容（先 action=start，操作页面，再 action=stop）。";
+            return `${entries.length} 条响应（${lastCapture.at}）：\n${JSON.stringify(entries, null, 2).slice(0, 12000)}`;
           }
           throw new Error("action 只能是 start / stop / list");
         },

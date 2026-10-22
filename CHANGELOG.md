@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.58.1
+
+- **`browser_capture` now keeps what it captured.** First live run: `stop` reported 8 responses and `list` answered
+  "没有捕获到内容" - because `list` called `__netStop` a second time, and the bridge had already cleared its buffer. The
+  entries outlive the command now, and `list` only asks the browser when it has nothing yet.
+- Everything else in the network layer was verified live, not assumed: 8 responses (4 JSON) on bilibili, 14 cookies for
+  `www.bilibili.com`, a 6 KB JSON downloaded to `Downloads` through the browser's own cookie jar, 2 tabs listed, and a
+  `waitIdle` step that stepped over a settled page.
+- 37 suites / 593 cases.
+
 ## 0.58.0
 
 - **网络层 (the network layer).** Until now a page was only what it rendered: scrolling a feed, counting cards, parsing
