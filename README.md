@@ -499,6 +499,18 @@ Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-de
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the
 extension exists.
 
+### VS Code / 编辑器桥
+
+`vscode-extension/` is a small editor extension - plain CommonJS, no build step - with three ways in: a chat panel in the
+activity bar, `DSH: 提问…` / `DSH: 用选中内容提问`, and a status-bar item showing what the plugin is connected to.
+
+It talks to two loopback routes: `/dsh-vscode/status` and `/dsh-vscode/ask`. The second is a **real agent turn** - the
+same `ensureAgent` + `followws`/collector path a chat uses - so the editor gets the same model, tools and context rather
+than a second, weaker implementation. `/vscode on|off` gates it.
+
+The endpoint is discovered from `gui-port.json` in the plugin's state directory, because the GUI port changes on every
+DSH restart. Install: Extensions → `...` → **Install from VSIX**/folder, or `Developer: Install Extension from Location`.
+
 ### Flow automation / 流程自动化（影刀式）
 
 `browser_flow` is the RPA part: a task is written **once** as JSON, and replayed on demand - open, search, click,

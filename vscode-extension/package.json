@@ -1,0 +1,47 @@
+{
+  "name": "dsh-wechat-media-vscode",
+  "displayName": "DSH Bridge",
+  "description": "Ask DeepSeek Harness from VS Code: a chat panel, commands and a status bar, through dsh-wechat-media.",
+  "version": "0.1.0",
+  "publisher": "wjh-ux",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "dsh.ask", "title": "DSH: 提问…" },
+      { "command": "dsh.askSelection", "title": "DSH: 用选中内容提问" },
+      { "command": "dsh.showStatus", "title": "DSH: 显示连接状态" },
+      { "command": "dsh.openChat", "title": "DSH: 打开聊天面板" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "dshContainer", "title": "DSH", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "dshContainer": [
+        { "id": "dsh.chat", "name": "对话", "type": "webview" }
+      ]
+    },
+    "configuration": {
+      "title": "DSH Bridge",
+      "properties": {
+        "dsh.stateDir": {
+          "type": "string",
+          "default": "",
+          "description": "dsh-wechat-media 的状态目录（留空 = %USERPROFILE%\\.dsh\\dsh-wechat-media）"
+        },
+        "dsh.endpoint": {
+          "type": "string",
+          "default": "",
+          "description": "手动指定地址，如 http://127.0.0.1:12345（留空 = 从 gui-port.json 自动发现）"
+        }
+      }
+    }
+  }
+}

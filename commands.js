@@ -78,6 +78,12 @@ export const COMMANDS = [
     summary: "一键体检：通道、Office 工具链、浏览器与代理、定时任务、密钥加密，逐项告诉你能不能跑、不能跑怎么修",
   },
   {
+    name: "vscode",
+    aliases: ["编辑器", "编辑器桥"],
+    usage: "/vscode [status|on|off]",
+    summary: "VS Code 桥：编辑器的提问走一个真实会话（同一套模型与工具）；on 开启、off 关闭编辑器请求",
+  },
+  {
     name: "browser",
     aliases: ["浏览器"],
     usage: "/browser [status|mode headless|headed|erp|session own|chrome|attach|extension|ext|import|launch|proxy 127.0.0.1:7897|off|bar off|on|exportdir D:\\导出|hosts add x.com]",

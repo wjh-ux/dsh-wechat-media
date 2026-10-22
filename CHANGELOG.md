@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.57.0
+
+- **VS Code bridge.** Three ways into the same agent: a chat panel in the activity bar, two commands
+  (`DSH: 提问…`, `DSH: 用选中内容提问`), and a status-bar item that says whether the plugin is reachable and what is
+  connected (WeChat accounts, Feishu, browser extension + target, scheduled tasks).
+  - Plugin side: `/dsh-vscode/ask` and `/dsh-vscode/status`. The ask handler is a **real turn** -
+    `ensureAgent("vscode", "vscode", "VS Code")`, `collectors.wait`, `agent.followup` - so the editor uses the same
+    model, tools and session machinery a chat does, not a second, weaker path. `/vscode on|off` gates it, and the route
+    is loopback-only.
+  - Editor side: `vscode-extension/` - plain CommonJS, no bundler, no TypeScript, no dependencies. The endpoint is
+    discovered from `gui-port.json` in the plugin's state directory: that port changes on every DSH restart, so a
+    hard-coded one would mean "reconfigure after every restart".
+- 37 suites / 592 cases.
+
 ## 0.56.1
 
 - **An explicit target that is not connected is refused, not swapped.** Picking Edge while Edge's extension is off used

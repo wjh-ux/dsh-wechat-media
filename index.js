@@ -1847,6 +1847,27 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "doctor", problems });
       return true;
     }
+    if (command.name === "vscode") {
+      // The editor bridge: whether it is armed, and where the extension lives. A real agent turn sits behind it, so the
+      // switch exists mostly so it can be turned off without uninstalling anything.
+      const [sub = "status"] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      const current = await state.loadPrefs();
+      if (sub === "on" || sub === "off") {
+        await state.savePrefs({ vscodeEnabled: sub === "on" });
+        noteRoute("/command", { command: "vscode", action: sub });
+        await reply(`VS Code 桥已${sub === "on" ? "开启" : "关闭"}。${sub === "on" ? "" : "\n编辑器的请求会被拒绝，直到 /vscode on。"}`);
+        return true;
+      }
+      await reply([
+        `VS Code 桥：${current?.vscodeEnabled !== false ? "开启" : "关闭"}`,
+        `  状态接口：http://127.0.0.1:${guiEnvPort()?.port ?? guiPortCache?.port ?? "（见面板）"}/dsh-vscode/status`,
+        `  扩展目录：${join(PLUGIN_ROOT, "vscode-extension")}`,
+        "",
+        "开关：/vscode on | off",
+        "装法：VS Code 里 Ctrl+Shift+P → Developer: Install Extension from Location → 选上面这个目录",
+      ].join("\n"));
+      return true;
+    }
     if (command.name === "browser") {
       // Three named modes instead of a boolean: "erp" is not "not headless", it is a visible window with its own
       // profile that survives restarts, because the login to the system under work has to survive them too.
@@ -7119,6 +7140,61 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return json(res, 200, { ok: true, hosts: list, mode: list.length ? "pac" : (browserConfig().proxy ? "global" : "off") });
           } catch (error) {
             return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-vscode/status",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          const prefs = await state.loadPrefs();
+          const build = await buildInfo();
+          const ext = extensionBridge ? extensionBridge.status() : null;
+          const accounts = await state.loadAccounts();
+          json(res, 200, {
+            ok: true,
+            enabled: prefs?.vscodeEnabled !== false,
+            version: build.version,
+            wechat: { accounts: accounts.length },
+            feishu: { configured: Boolean(String(prefs?.feishu?.appId ?? "").trim()) },
+            browser: { extension: Boolean(ext?.connected), target: ext?.browser ?? "" },
+            tasks: (await state.loadTasks()).length,
+          });
+        },
+      },
+      {
+        kind: "exact",
+        path: "/dsh-vscode/ask",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const prefs = await state.loadPrefs();
+          if (prefs?.vscodeEnabled === false) {
+            return json(res, 403, { ok: false, error: "VS Code 桥已关闭（/vscode on 开启）" });
+          }
+          const body = await readArgs(req);
+          const prompt = String(body.prompt ?? "").trim();
+          if (!prompt) return json(res, 400, { ok: false, error: "prompt 是空的" });
+          // The same machinery a chat uses: one pseudo conversation named "VS Code", so the editor gets a real agent
+          // turn - the same model, tools and context - rather than a second, weaker path.
+          try {
+            const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            const message = await userMessage(prompt);
+            const waiting = collectors.wait(sessionId, message?.id);
+            await agent.followup(message);
+            const answer = await waiting;
+            noteRoute("/vscode", { action: "ask", stopReason: answer.stopReason, chars: String(answer.text ?? "").length });
+            return json(res, 200, {
+              ok: true,
+              text: String(answer.text ?? ""),
+              stopReason: answer.stopReason,
+              error: answer.error ?? null,
+              sessionId,
+            });
+          } catch (error) {
+            noteRoute("/vscode", { action: "ask", error: String(error?.message ?? error) });
+            return json(res, 500, { ok: false, error: String(error?.message ?? error) });
           }
         },
       },
