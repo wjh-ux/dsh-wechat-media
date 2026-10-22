@@ -146,17 +146,139 @@ async function refreshStatus({ quiet = true } = {}) {
   return null;
 }
 
+/**
+ * Ask through the streaming route: `onDelta` is called for every text chunk as it arrives, and the promise resolves
+ * with the final answer.
+ *
+ * A separate function from `request` because the body has to be read incrementally - waiting for `end` is exactly the
+ * behaviour this replaces.
+ */
+function streamAsk(prompt, { onDelta = () => {}, onStart = () => {}, timeoutMs = 600000, base = activeBase || endpoint() } = {}) {
+  if (!base) return Promise.reject(new Error("找不到 DSH 地址：先启动 DSH，或在设置里填 dsh.endpoint"));
+  const url = new URL(base + "/dsh-vscode/stream");
+  const payload = JSON.stringify({ prompt });
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(payload) },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        if (res.statusCode >= 400) {
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            let parsed = null;
+            try { parsed = JSON.parse(text); } catch { /* fallthrough */ }
+            reject(new Error(String(parsed?.error ?? `HTTP ${res.statusCode}`)));
+          });
+          return;
+        }
+        res.setEncoding("utf8");
+        let buffer = "";
+        let final = "";
+        let settled = false;
+        const finish = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+        res.on("data", (chunk) => {
+          buffer += chunk;
+          let at;
+          while ((at = buffer.indexOf("\n\n")) >= 0) {
+            const frame = buffer.slice(0, at);
+            buffer = buffer.slice(at + 2);
+            for (const line of frame.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              let event;
+              try { event = JSON.parse(line.slice(6)); } catch { continue; }
+              if (event.type === "delta") {
+                final += event.text;
+                onDelta(event.text);
+              } else if (event.type === "done") {
+                finish(resolve, { text: event.text || final, stopReason: event.stopReason });
+              } else if (event.type === "error") {
+                finish(reject, new Error(String(event.error ?? "未知错误")));
+              }
+            }
+          }
+        });
+        res.on("end", () => finish(resolve, { text: final, stopReason: "eof" }));
+        onStart();
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("DSH 没有在 10 分钟内回答")));
+    req.on("error", (error) => reject(error));
+    req.write(payload);
+    req.end();
+  });
+}
+
+/**
+ * Expand `@file` references in a prompt into real file content.
+ *
+ * A path is taken literally (quoted or not) and resolved against the workspace folder first, then as an absolute path.
+ * The content is fenced and labelled, so the model can tell where each block came from - and a missing file is reported
+ * as a sentence instead of silently sending a dangling `@`.
+ */
+async function expandFileRefs(text) {
+  const source = String(text ?? "");
+  const pattern = /@(?:"([^"]+)"|([^\s@]+))/g;
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length === 0) return { prompt: source, attached: [], problems: [] };
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  const attached = [];
+  const problems = [];
+  let prompt = source;
+  for (const match of matches) {
+    const raw = (match[1] ?? match[2] ?? "").trim();
+    if (!raw) continue;
+    const candidates = [];
+    if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("\\\\")) candidates.push(vscode.Uri.file(raw));
+    else if (root) candidates.push(vscode.Uri.joinPath(root, raw));
+    let content = null;
+    let used = null;
+    let tooBig = false;
+    for (const uri of candidates) {
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.size > 60_000) { tooBig = true; used = uri; break; }
+        content = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+        used = uri;
+        break;
+      } catch {
+        // try the next candidate
+      }
+    }
+    const label = used ? vscode.workspace.asRelativePath(used, false) : raw;
+    if (tooBig) {
+      problems.push(`${label} 太大（>60 KB），没有附上`);
+      continue;
+    }
+    if (content === null) {
+      problems.push(`${label} 找不到`);
+      continue;
+    }
+    attached.push({ path: label, chars: content.length });
+    prompt = prompt.replace(match[0], `\n\n文件 ${label}：\n\`\`\`\n${content}\n\`\`\``);
+  }
+  return { prompt, attached, problems };
+}
+
 /** Ask the plugin a question and return its answer text. */
-async function ask(prompt, { sessionHint = "" } = {}) {
+async function ask(prompt, { sessionHint = "", onDelta } = {}) {
   const text = String(prompt ?? "").trim();
   if (!text) throw new Error("问题是空的");
-  const body = { prompt: sessionHint ? `${text}\n\n（上下文：${sessionHint}）` : text };
-  const answer = await request("POST", "/dsh-vscode/ask", body);
+  const { prompt: expanded, attached, problems } = await expandFileRefs(text);
+  const withHint = sessionHint ? `${expanded}\n\n（上下文：${sessionHint}）` : expanded;
+  const answer = await streamAsk(withHint, { onDelta });
   const reply = String(answer.text ?? "").trim();
   // An empty answer is not a success: the route reports *why* (`stopReason`), and that reason is the only thing that
   // makes the failure fixable - showing a blank bubble would look like the model said nothing.
   if (!reply) throw new Error(`DSH 没有给出内容（stopReason: ${answer.stopReason ?? "unknown"}）`);
-  return reply;
+  return { reply, attached, problems };
 }
 
 /**
@@ -170,12 +292,36 @@ class ChatView {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = chatHtml();
     webviewView.webview.onDidReceiveMessage(async (message) => {
+      if (message?.type === "pick") {
+        // Picking files by hand is what makes `@` discoverable: nobody types a path they cannot see.
+        const picked = await vscode.window.showOpenDialog({
+          canSelectMany: true,
+          openLabel: "附上",
+          defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
+        });
+        if (!picked?.length) return;
+        const paths = picked.map((uri) => vscode.workspace.asRelativePath(uri, false));
+        webviewView.webview.postMessage({ type: "picked", paths });
+        return;
+      }
       if (message?.type !== "ask") return;
+      const webview = webviewView.webview;
+      let partial = "";
       try {
-        const answer = await ask(message.text);
-        webviewView.webview.postMessage({ type: "answer", text: answer });
+        const result = await ask(message.text, {
+          onDelta: (chunk) => {
+            partial += chunk;
+            webview.postMessage({ type: "delta", text: partial, attached: null });
+          },
+        });
+        webview.postMessage({
+          type: "answer",
+          text: result.reply,
+          attached: result.attached,
+          problems: result.problems,
+        });
       } catch (error) {
-        webviewView.webview.postMessage({ type: "error", text: String(error?.message ?? error) });
+        webview.postMessage({ type: "error", text: String(error?.message ?? error), partial });
       }
     });
   }
@@ -193,18 +339,23 @@ function chatHtml() {
   .msg { padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
   .me { background: var(--vscode-input-background); }
   .dsh { background: var(--vscode-editorWidget-background); border-left: 2px solid var(--vscode-focusBorder); }
+  .dsh.streaming::after { content: "▍"; opacity: .5; animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+  .meta-line { opacity: .7; font-size: 11px; font-style: italic; }
   .err { color: var(--vscode-errorForeground); }
   .meta { opacity: .6; font-size: 11px; margin-top: 2px; }
-  #row { display: flex; gap: 6px; }
+  #row { display: flex; gap: 6px; align-items: flex-end; }
   textarea { flex: 1; min-height: 54px; resize: vertical; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 6px; font: inherit; }
   button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+  button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   button:disabled { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
   <div id="log"></div>
   <div id="row">
-    <textarea id="input" placeholder="问 DSH…（Ctrl+Enter 发送）"></textarea>
+    <textarea id="input" placeholder="问 DSH…（Ctrl+Enter 发送，@文件 附上文件内容）"></textarea>
+    <button id="file" class="secondary" title="附上文件（插入 @路径）">＋文件</button>
     <button id="send">发送</button>
   </div>
 <script>
@@ -233,21 +384,48 @@ function chatHtml() {
     add("me", text);
     input.value = "";
     send.disabled = true;
-    add("dsh", "思考中…", "已发送到 DSH");
+    add("dsh streaming", "", "已发送到 DSH");
     vscode.postMessage({ type: "ask", text });
   }
 
   send.addEventListener("click", submit);
+  document.getElementById("file").addEventListener("click", () => vscode.postMessage({ type: "pick" }));
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
   });
 
   window.addEventListener("message", (event) => {
     const message = event.data ?? {};
+    if (message.type === "picked") {
+      // The picker hands back workspace-relative paths, which is exactly the "@path" form the expansion understands.
+      const refs = (message.paths || []).map((p) => (/\s/.test(p) ? '@"' + p + '"' : "@" + p)).join(" ");
+      if (refs) input.value = (input.value ? input.value.trimEnd() + " " : "") + refs + " ";
+      input.focus();
+      return;
+    }
+    const live = log.querySelector(".dsh.streaming");
+    if (message.type === "delta") {
+      // The bubble exists from the first chunk and grows: waiting for the whole answer is what this replaces.
+      if (!live) add("dsh streaming", "");
+      const bubble = log.querySelector(".dsh.streaming") ?? [...log.querySelectorAll(".dsh")].pop();
+      if (bubble) { bubble.className = "msg dsh streaming"; bubble.textContent = message.text; }
+      window.scrollTo(0, document.body.scrollHeight);
+      return;
+    }
+    if (live) live.remove();
     const pending = [...log.querySelectorAll(".dsh")].pop();
     if (pending && (message.type === "answer" || message.type === "error")) pending.remove();
-    if (message.type === "answer") add("dsh", message.text || "（空回答）");
-    if (message.type === "error") add("dsh err", "失败：" + message.text);
+    if (message.type === "answer") {
+      add("dsh", message.text || "（空回答）");
+      if (Array.isArray(message.attached) && message.attached.length) {
+        add("meta-line", "已附上：" + message.attached.map((f) => f.path + "（" + f.chars + " 字符）").join("，"));
+      }
+      if (Array.isArray(message.problems) && message.problems.length) add("dsh err", message.problems.join("；"));
+    }
+    if (message.type === "error") {
+      add("dsh err", "失败：" + message.text);
+      if (message.partial) add("dsh", message.partial);
+    }
     send.disabled = false;
   });
 </script>
@@ -281,7 +459,7 @@ function activate(context) {
       if (!text) return;
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "DSH 正在回答…" }, async () => {
         try {
-          showAnswer(text, await ask(text));
+          showAnswer(text, (await ask(text)).reply);
         } catch (error) {
           vscode.window.showErrorMessage(`DSH：${error.message}`);
         }
@@ -305,7 +483,7 @@ function activate(context) {
       const prompt = `${question || "解释这段代码"}\n\n文件：${hint}\n\`\`\`\n${selection}\n\`\`\``;
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "DSH 正在回答…" }, async () => {
         try {
-          showAnswer(`[${hint}] ${question || "解释这段代码"}`, await ask(prompt));
+          showAnswer(`[${hint}] ${question || "解释这段代码"}`, (await ask(prompt)).reply);
         } catch (error) {
           vscode.window.showErrorMessage(`DSH：${error.message}`);
         }

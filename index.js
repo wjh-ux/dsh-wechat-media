@@ -7476,6 +7476,61 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       },
       {
+        // Streaming variant of /dsh-vscode/ask: the same turn, but each text delta is written as it arrives so the
+        // editor can paint the answer while it is being written. Deltas are filtered by session id, because more than
+        // one conversation can be running a turn at the same time (WeChat, Feishu, the GUI).
+        kind: "exact",
+        path: "/dsh-vscode/stream",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          await noteGuiPort(req);
+          const prefs = await state.loadPrefs();
+          if (prefs?.vscodeEnabled === false) {
+            return json(res, 403, { ok: false, error: "VS Code 桥已关闭（/vscode on 开启）" });
+          }
+          const body = await readArgs(req);
+          const prompt = String(body.prompt ?? "").trim();
+          if (!prompt) return json(res, 400, { ok: false, error: "prompt 是空的" });
+          if (/\?{3,}/.test(prompt) && !/[\u3400-\u9fff]/.test(prompt)) {
+            return json(res, 400, { ok: false, error: "prompt 里的中文变成了问号：请求体不是 UTF-8" });
+          }
+
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+          let closed = false;
+          const send = (payload) => {
+            if (closed) return;
+            res.write(`data: ${JSON.stringify(payload)}\n\n`);
+          };
+          req.on("close", () => { closed = true; });
+          try {
+            const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            ctx.on("session/event", (session, event) => {
+              if (closed) return;
+              if (String(session?.header?.id ?? "") !== sessionId) return;
+              const type = String(event?.type ?? "");
+              if (!/delta/i.test(type) || /reason|think/i.test(type)) return;
+              const chunk = event.data?.text ?? event.data?.delta ?? event.data?.content;
+              if (typeof chunk === "string" && chunk) send({ type: "delta", text: chunk });
+            });
+            const message = await userMessage(prompt);
+            const waiting = collectors.wait(sessionId, message?.id);
+            await agent.followup(message);
+            const answer = await waiting;
+            send({ type: "done", text: String(answer.text ?? ""), stopReason: answer.stopReason, error: answer.error ?? null });
+          } catch (error) {
+            send({ type: "error", error: String(error?.message ?? error) });
+          } finally {
+            closed = true;
+            res.end();
+          }
+        },
+      },
+      {
         kind: "exact",
         path: "/dsh-vscode/ask",
         handler: async (req, res) => {

@@ -39,6 +39,27 @@ await test("a request whose Chinese arrived as question marks is refused, not an
   assert.match(client, /application\/json; charset=utf-8/, "and the editor client states its charset");
 });
 
+await test("streaming is a real turn written as it arrives, filtered by session", () => {
+  assert.match(host, /path: "\/dsh-vscode\/stream"/, "a streaming route exists");
+  assert.match(host, /text\/event-stream/, "it speaks SSE");
+  assert.match(host, /header\?\.id \?\? ""\) !== sessionId/, "and only forwards its own session's deltas");
+  assert.match(host, /type: "delta"/, "chunks are typed");
+  assert.match(host, /type: "done"/, "so is the end");
+  const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
+  assert.match(client, /function streamAsk/, "the editor reads the stream incrementally");
+  assert.match(client, /onDelta\(event\.text\)/, "calling back per chunk");
+  assert.match(client, /class="msg dsh streaming"|dsh streaming/, "and the panel paints into a growing bubble");
+});
+
+await test("an @file reference becomes real content, and a missing file is reported", () => {
+  const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
+  assert.match(client, /async function expandFileRefs/, "there is an expander");
+  assert.match(client, /@\(\?:"\(\[\^"\]\+\)"\|\(\[\^\\s@\]\+\)\)/, "it understands @path and @\"path with spaces\"");
+  assert.match(client, /60_000|60000/, "and refuses files too big to be useful context");
+  assert.match(client, /找不到/, "reporting a missing file instead of silently dropping the @");
+  assert.match(client, /type: "pick"/, "a file picker exists, because nobody types a path they cannot see");
+});
+
 await test("the extension parses, activates, and ships with the package", () => {
   execFileSync(process.execPath, ["--check", joinPath(extensionDir, "extension.js")], { stdio: "pipe" });
   const source = readFileSync(joinPath(extensionDir, "extension.js"), "utf8");

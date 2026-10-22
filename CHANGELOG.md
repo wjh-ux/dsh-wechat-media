@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.65.0
+
+- **The editor sees the answer being written.** `POST /dsh-vscode/stream` runs the same turn as `/ask` but writes
+  `text/event-stream`: `{"type":"delta","text":…}` as each chunk arrives, then `{"type":"done","text":…,"stopReason":…}`.
+  Deltas are filtered by **session id**, because more than one conversation can be running a turn at once (WeChat,
+  Feishu, the GUI) - an unfiltered stream would paint someone else's reply into the editor.
+  The panel grows a single bubble from the first chunk (with a blinking caret) instead of showing "思考中…" until the end.
+- **`@file` references.** `@path/to/file` (or `@"a path with spaces"`) is expanded before sending: the file is read from
+  the workspace, fenced and labelled with its path, capped at **60 KB**, and a missing or oversized file is reported in
+  the panel instead of being silently dropped. A **＋文件** button opens the picker and inserts the reference, because
+  nobody types a path they cannot see.
+- 38 suites / 602 cases.
+
 ## 0.64.1
 
 - **The editor finds DSH again after a restart.** `gui-port.json` said port 1826 while the GUI had moved to 63295, so the
