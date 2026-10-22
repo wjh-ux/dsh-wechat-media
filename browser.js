@@ -519,9 +519,14 @@ export async function browserOpen(session, url, { waitMs = 20000 } = {}) {
   return { url: wanted, title: String(title ?? ""), frameId: navigated?.frameId ?? "" };
 }
 
-/** Evaluate an expression in the page and return its value. */
-export async function browserEvaluate(session, expression) {
-  const answer = await session.send("Runtime.evaluate", { expression: String(expression ?? ""), returnByValue: true, awaitPromise: true });
+/**
+ * Evaluate an expression in the page and return its value.
+ *
+ * `options.timeoutMs` is for expressions that legitimately take a while - a loop that scrolls a feed until it stops
+ * growing, say. The transport's default ceiling (30 s for the extension) is right for a click and wrong for that.
+ */
+export async function browserEvaluate(session, expression, options = undefined) {
+  const answer = await session.send("Runtime.evaluate", { expression: String(expression ?? ""), returnByValue: true, awaitPromise: true }, options);
   if (answer?.exceptionDetails) throw new Error(`the page threw: ${answer.exceptionDetails.text ?? "unknown"} ${answer.exceptionDetails.exception?.description ?? ""}`.trim());
   return answer?.result?.value;
 }

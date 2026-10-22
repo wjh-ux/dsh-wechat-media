@@ -6215,7 +6215,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           for (const query of queries) {
             if (merged.size >= limit) break;
             await mod.browserOpen(live.session, `https://www.google.com/maps/search/${encodeURIComponent(query)}`);
-            const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }));
+            // The expression scrolls for up to 90 s; the transport's 30 s default would cut it off mid-scroll.
+            const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }), { timeoutMs: 150_000 });
             const list = Array.isArray(rows) ? rows : [];
             let added = 0;
             for (const row of list) {

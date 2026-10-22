@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.62.1
+
+- **A command may now ask for more time.** First live run of the merged Maps tool died with
+  `扩展 30s 内没有回应 Runtime.evaluate` - the transport's ceiling was a fixed 30 s, and an expression that scrolls a
+  feed for a minute is a legitimate command, not a hung one. `extensionSession.send` takes `options.timeoutMs`,
+  `browserEvaluate` passes it through, and the Maps patch asks for 150 s. Clicks keep the old ceiling.
+- 38 suites / 599 cases.
+
 ## 0.62.0
 
 - **`browser_maps_places` takes several searches.** Measured: one Google Maps search stops at about 90-100 places - the

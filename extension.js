@@ -382,13 +382,18 @@ export function extensionSession(bridge, { tabId = null } = {}) {
   return {
     kind: "extension",
     tabId,
-    send: (method, params = {}) => {
+    /**
+     * `options.timeoutMs` exists because not every command is a click. A `Runtime.evaluate` that scrolls a feed for a
+     * minute is legitimate, and the fixed 30 s ceiling turned it into "扩展 30s 内没有回应" - measured on the Maps patch.
+     */
+    send: (method, params = {}, options = {}) => {
       const payload = { ...params, __tabId: tabId };
       // The cursor flag rides *this* command rather than a stored setting: a setting has to be synchronised, and a
       // synchronised setting can be one click stale - which is exactly what the first version did ("the dot never
       // appeared" until the next poll). A flag on the command cannot go stale.
       if (method === "Input.dispatchMouseEvent") payload.__cursor = bridge.cursor === true;
-      return bridge.call(method, payload, { timeoutMs: method === "Page.navigate" ? 45_000 : 30_000 });
+      const timeoutMs = Number(options?.timeoutMs) || (method === "Page.navigate" ? 45_000 : 30_000);
+      return bridge.call(method, payload, { timeoutMs });
     },
     once: () => Promise.reject(new Error("扩展桥没有协议事件")),
     close: () => {},
