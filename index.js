@@ -6181,6 +6181,43 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
+      const browserMapsTool = browserTool(
+        "browser_maps_places",
+        "Collect Google Maps search results past the first screen: scrolls the result feed until it stops growing, de-duplicates by place link, returns rows (name / rating / address / link) and optionally saves them.",
+        {
+          query: { type: "string", description: "Optional search text; the tool navigates to it first (e.g. 上海 咖啡店)." },
+          limit: { type: "number", description: "Stop at this many places (default 200)." },
+          save: { type: "string", description: "Where to write the rows (csv/json, same rules as browser_flow save)." },
+        },
+        async (args) => {
+          const { mod, live } = await browserEnsure();
+          const { mapsPlacesExpression } = await import("./maps.js");
+          const limit = Number(args.limit) || 200;
+          const query = String(args.query ?? "").trim();
+          if (query) {
+            await mod.browserOpen(live.session, `https://www.google.com/maps/search/${encodeURIComponent(query)}`);
+          }
+          // One async run inside the page: it scrolls and waits at page speed, instead of one command per scroll.
+          const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }));
+          const list = Array.isArray(rows) ? rows : [];
+          if (list.length === 0) {
+            return "没有读到店铺：确认当前是地图搜索结果页（有结果列表），或先给 query 让我导航过去。";
+          }
+          const lines = [
+            `读到 ${list.length} 家店（已按链接去重，滚动到不再增长为止）`,
+            "  字段：名称 / 评分 / 地址 / 链接",
+            `  · ${list.slice(0, 3).map((row) => String(row["名称"] ?? "")).join("，")}…`,
+          ];
+          const target = String(args.save ?? "").trim();
+          if (target) {
+            const saved = await saveFlowRows(target, list, { name: "maps" });
+            lines.push("", `已保存 ${list.length} 行到 ${saved}`);
+          }
+          return lines.join("\n");
+        },
+        180000,
+      );
+
       const browserJsonTool = browserTool(
         "browser_json",
         "Run JavaScript in the page that returns an array of objects, turn it into rows (optional field map) and optionally save it as CSV/JSON. The bridge between 'I found the data' and 'a file'.",
@@ -6788,7 +6825,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

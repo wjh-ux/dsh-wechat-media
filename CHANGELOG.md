@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.61.0
+
+- **谷歌地图专用补丁：`browser_maps_places`.** Maps is not like the sites the other tools are built for, and the
+  measurements say why: its first result page is **not an XHR** (capture saw only the HTML document), and
+  `window.APP_INITIALIZATION_STATE` is 167 KB of compressed coordinate arrays - the biggest array of objects in it is
+  the state itself. Parsing that would be fragile guesswork dressed up as a feature.
+  So the patch drives the DOM properly instead: **one async run inside the page** scrolls the feed until it stops
+  growing (three quiet rounds), collects every card on the way, de-duplicates by place link, and returns
+  名称 / 评分 / 地址 / 链接 - optionally saved through the same export path as everything else.
+  - The old ceiling of "60 rows and a cut" was not a limit of Maps. It was three scrolls, each costing a round trip.
+  - A deadline inside the loop means a page that never stops loading cannot hang the tool; `limit` (default 200) and
+    `stallRounds` are both explicit.
+- 38 suites / 598 cases.
+
 ## 0.60.0
 
 - **`browser_json` - the last step from data to a file.** Give it a JS expression that returns an array (or a payload
