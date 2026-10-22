@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.65.1
+
+- **Streaming had no chunks, because it listened to the wrong event.** First live probe of `/dsh-vscode/stream`: `status
+  200`, then a single `done` frame at `+7111ms` and nothing in between - "200 text/event-stream" is not streaming.
+  Live tokens travel as `agent/assistant-stream` frames, whose payload carries `{ agent, frame }`, so they can be filtered
+  by session exactly (WeChat or the GUI may be mid-turn at the same time). After the fix, the same probe shows
+  **346 delta frames** arriving between `+3366ms` and `+3842ms`, then `done` - the answer lands in 3.9 s where the
+  non-streaming path took 7-14 s.
+- 38 suites / 602 cases.
+
 ## 0.65.0
 
 - **The editor sees the answer being written.** `POST /dsh-vscode/stream` runs the same turn as `/ask` but writes

@@ -7509,6 +7509,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           req.on("close", () => { closed = true; });
           try {
             const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            // Live tokens travel as `agent/assistant-stream` frames, and that payload carries the agent, so the filter
+            // is exact - which matters because WeChat or the GUI may be mid-turn at the same time. Measured: listening
+            // to `session/event` deltas produced zero frames; the turn answered in a single `done`, which is not
+            // streaming at all.
+            ctx.on("agent/assistant-stream", ({ agent: streamAgent, frame } = {}) => {
+              if (closed) return;
+              if (String(streamAgent?.session?.id ?? streamAgent?.id ?? "") !== sessionId) return;
+              const text = liveTextOf(frame);
+              if (text) send({ type: "delta", text });
+            });
+            // Some text also arrives as session events (non-durable deltas); accept those too rather than miss a
+            // provider that only reports there.
             ctx.on("session/event", (session, event) => {
               if (closed) return;
               if (String(session?.header?.id ?? "") !== sessionId) return;
