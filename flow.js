@@ -472,3 +472,71 @@ export async function resolveExportPath(raw, { base = "", name = "flow", home, s
   await mkdirImpl(dirname(path), { recursive: true });
   return path;
 }
+
+/**
+ * Walk a dotted path into a parsed JSON value: `data.list[0]`, `items.0.name`.
+ *
+ * Written down because "the array is at some path" is the one thing a captured payload always needs and nobody wants
+ * to hand-write a `reduce` for. A missing step returns `undefined` rather than throwing: the caller is looking for a
+ * shape in a payload it has not seen, and "not here" is a normal answer.
+ */
+export function pickPath(value, path) {
+  const text = String(path ?? "").trim();
+  if (!text) return value;
+  let current = value;
+  for (const raw of text.split(".")) {
+    if (current === null || current === undefined) return undefined;
+    const key = raw.trim();
+    const match = /^([^[]*)((?:\[\d+\])*)$/.exec(key);
+    const head = match ? match[1] : key;
+    if (head) current = current[head];
+    const indexes = match ? match[2] : "";
+    for (const hit of indexes.matchAll(/\[(\d+)\]/g)) {
+      current = Array.isArray(current) ? current[Number(hit[1])] : undefined;
+    }
+  }
+  return current;
+}
+
+/**
+ * Turn one JSON array into rows with named columns.
+ *
+ * `fields` maps a column to a dotted path inside each item (`{"名称": "name", "评分": "rating.value"}`). Without it the
+ * item is used as-is, which is right for already-tabular payloads and wrong for nothing.
+ */
+export function flattenRows(items, fields) {
+  const list = Array.isArray(items) ? items : [];
+  if (!fields || Object.keys(fields).length === 0) return list.map((item) => ({ ...item }));
+  const spec = Object.entries(fields);
+  return list.map((item) => {
+    const row = {};
+    for (const [column, path] of spec) {
+      const value = pickPath(item, path);
+      row[column] = value === null || value === undefined
+        ? ""
+        : (typeof value === "object" ? JSON.stringify(value) : String(value));
+    }
+    return row;
+  });
+}
+
+/** The biggest array of objects inside a payload, at `path` when given. Used when the shape is not known yet. */
+export function biggestObjectArray(payload, path = "") {
+  const target = pickPath(payload, path);
+  if (Array.isArray(target) && target.length && typeof target[0] === "object") return target;
+  if (path) return null;
+  let best = null;
+  const seen = new Set();
+  const walk = (node, depth) => {
+    if (!node || typeof node !== "object" || depth > 6 || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      if (node.length && typeof node[0] === "object" && (!best || node.length > best.length)) best = node;
+      for (const item of node.slice(0, 5)) walk(item, depth + 1);
+      return;
+    }
+    for (const value of Object.values(node)) walk(value, depth + 1);
+  };
+  walk(payload, 0);
+  return best;
+}

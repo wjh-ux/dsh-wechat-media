@@ -3,7 +3,7 @@
 // browser - the shapes it sends are the same ones browser.js sends (see its header for the measured originals).
 import assert from "node:assert/strict";
 
-const { normalizeFlow, extractExpression, runFlow, formatFlowResult, startRecording, stopRecording, FLOW_STEP_TYPES, expandHome, exportFileName, resolveExportPath } = await import("../flow.js");
+const { normalizeFlow, extractExpression, runFlow, formatFlowResult, startRecording, stopRecording, FLOW_STEP_TYPES, expandHome, exportFileName, resolveExportPath, pickPath, flattenRows, biggestObjectArray } = await import("../flow.js");
 import { join as joinPath0 } from "node:path";
 
 const passed = [];
@@ -178,6 +178,24 @@ await test("the export file name is safe on Windows and keeps the flow's name re
   assert.equal(exportFileName("maps coffee", when), "maps-coffee-2026-10-21T05-12-33.csv");
   assert.equal(exportFileName("a/b:c", when), "a-b-c-2026-10-21T05-12-33.csv", "characters Windows forbids are replaced");
   assert.equal(exportFileName("", when), "flow-2026-10-21T05-12-33.csv", "an unnamed flow still gets a name");
+});
+
+await test("a captured payload becomes rows: path, fields, and a best-guess array", () => {
+  const payload = { data: { list: [{ name: "A", rating: { value: 4.5 } }, { name: "B", rating: { value: 4.0 } }] }, total: 2 };
+  assert.deepEqual(pickPath(payload, "data.list"), payload.data.list);
+  assert.equal(pickPath(payload, "data.list[1].name"), "B");
+  assert.equal(pickPath(payload, "data.missing.x"), undefined, "a missing step is undefined, not a throw");
+
+  const rows = flattenRows(payload.data.list, { 名称: "name", 评分: "rating.value" });
+  assert.deepEqual(rows, [{ 名称: "A", 评分: "4.5" }, { 名称: "B", 评分: "4" }]);
+
+  // Without fields the item is the row, which is right for already-tabular payloads.
+  assert.deepEqual(flattenRows([{ a: 1 }]), [{ a: 1 }]);
+
+  // With no path the biggest array of objects wins - the common case when the shape is not known yet.
+  assert.equal(biggestObjectArray(payload).length, 2);
+  assert.equal(biggestObjectArray(payload, "data.list").length, 2);
+  assert.equal(biggestObjectArray({ a: 1 }, "nope"), null);
 });
 
 // The plugin's own wiring: three new tools, one shared session, and the runner packaged with the plugin.

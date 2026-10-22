@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
 import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
-import { expandHome, resolveExportPath } from "./flow.js";
+import { expandHome, resolveExportPath, pickPath, flattenRows, biggestObjectArray } from "./flow.js";
 import { importChromeProfile } from "./profile.js";
 import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "./extension.js";
 import { hasModelBlock, insertModelBlock, parseModelBlock, pickSelection } from "./modelguard.js";
@@ -6078,12 +6078,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
       const browserCaptureTool = browserTool(
         "browser_capture",
-        "Capture XHR/fetch JSON responses from the current tab (start / stop / list). This is how you get the data behind a page - the API payload, not the rendered cards.",
+        "Capture XHR/fetch JSON responses from the current tab (start / stop / list / extract). This is how you get the data behind a page - the API payload, not the rendered cards.",
         {
-          action: { type: "string", required: true, description: "start / stop / list." },
+          action: { type: "string", required: true, description: "start / stop / list / extract." },
           pattern: { type: "string", description: "Only keep URLs containing this text, e.g. /api/search." },
           limit: { type: "number", description: "Keep at most this many responses (default 400)." },
           bodies: { type: "string", description: "\"false\" to record metadata only (default: capture bodies)." },
+          path: { type: "string", description: "extract: dotted path to the array inside the payload, e.g. data.list. Omit to take the largest array of objects." },
+          fields: { type: "string", description: "extract: JSON map from column to path, e.g. {\"名称\":\"name\",\"评分\":\"rating\"}." },
+          save: { type: "string", description: "extract: where to write the rows (csv/json, same rules as browser_flow save)." },
         },
         async (args) => {
           const { live } = await browserEnsure();
@@ -6132,7 +6135,49 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (entries.length === 0) return "没有捕获到内容（先 action=start，操作页面，再 action=stop）。";
             return `${entries.length} 条响应（${lastCapture.at}）：\n${JSON.stringify(entries, null, 2).slice(0, 12000)}`;
           }
-          throw new Error("action 只能是 start / stop / list");
+          if (action === "extract") {
+            // The point of capturing JSON is to end up with a table. `path` names the array (`data.list`, `items[0]`);
+            // without it the largest array of objects in the payload wins, which is the right guess for most APIs.
+            const entries = lastCapture.entries;
+            if (entries.length === 0) return "没有可解析的捕获内容（先 action=start，操作页面，再 action=stop）。";
+            let fields = null;
+            if (args.fields) {
+              try {
+                fields = JSON.parse(String(args.fields));
+              } catch {
+                throw new Error('fields 要是 JSON，例如 {"名称":"name","评分":"rating"}');
+              }
+            }
+            const wanted = String(args.path ?? "").trim();
+            let chosen = null;
+            for (const entry of entries) {
+              if (!entry.body) continue;
+              let payload;
+              try { payload = JSON.parse(entry.body); } catch { continue; }
+              const items = biggestObjectArray(payload, wanted);
+              if (items && (!chosen || items.length > chosen.items.length)) chosen = { entry, items };
+            }
+            if (!chosen) {
+              return `捕获的 JSON 里没有找到对象数组${wanted ? `（path=${wanted}）` : ""}。\n用 action=list 看看实际结构，再用 path 指定。`;
+            }
+            const rows = flattenRows(chosen.items, fields);
+            lastCapture = { ...lastCapture, rows };
+            const columns = Object.keys(rows[0] ?? {});
+            const lines = [
+              `从 ${chosen.entry.url.slice(0, 90)} 抽出 ${rows.length} 行`,
+              `  字段：${columns.join(" / ")}`,
+            ];
+            for (const row of rows.slice(0, 3)) lines.push(`  · ${columns.map((column) => String(row[column] ?? "")).join(" | ").slice(0, 160)}`);
+            const target = String(args.save ?? "").trim();
+            if (target) {
+              const saved = await saveFlowRows(target, rows, { name: "capture" });
+              lines.push("", `已保存 ${rows.length} 行到 ${saved}`);
+            } else {
+              lines.push("", "要保存就再调一次并带上 save（如 save: \"门店.csv\"）。");
+            }
+            return lines.join("\n");
+          }
+          throw new Error("action 只能是 start / stop / list / extract");
         },
       );
 

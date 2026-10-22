@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.59.0
+
+- **`browser_capture action=extract` - the last mile of "the data is in the request".** Capturing a payload is only half
+  the job; turning it into a table is the half a person wants. `path` names the array (`data.list`, `items[0]`),
+  `fields` maps columns to paths (`{"名称":"name","评分":"rating.value"}`), and `save` writes CSV/JSON with the same path
+  rules `browser_flow` already uses. With neither, the **largest array of objects** in the payload wins - the right
+  guess for an API whose shape has not been seen yet.
+- Three pure helpers in `flow.js` (`pickPath`, `flattenRows`, `biggestObjectArray`) so the rules are stated by tests
+  rather than discovered in production: a missing path is `undefined`, a nested value is stringified, an empty array at
+  a named path is not silently replaced by some other array.
+- Measured while writing this: Google Maps does **not** use XHR for its first result page - the data is embedded in
+  `window.APP_INITIALIZATION_STATE` (167 KB) and a 157 KB inline script, which is why capture saw only the HTML document.
+  Sites whose lists come from `/api/...` are the ones this tool is for.
+- 37 suites / 594 cases.
+
 ## 0.58.1
 
 - **`browser_capture` now keeps what it captured.** First live run: `stop` reported 8 responses and `list` answered
