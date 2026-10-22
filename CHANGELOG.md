@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.60.0
+
+- **`browser_json` - the last step from data to a file.** Give it a JS expression that returns an array (or a payload
+  containing one), an optional `fields` map, and a `save` path, and it writes the CSV/JSON itself. Before this, a
+  `browser_eval` result came back as chat text, and anything past a few dozen rows was stuck in a message.
+  - It accepts what a page actually gives: an array of objects, an object whose largest array is the list, or a **JSON
+    string** (a document read back as text, or an expression that stringified itself).
+  - `limit` bounds what is written (default 500); field paths are the same dotted form `browser_flow` uses.
+- Measured while writing this: capture saw **28 responses (6 JSON)** on bilibili after the keep-alive fix (0 before), and
+  `extract` turned bilibili's `playurl` payload into 5 rows with the right columns. A URL that *is* JSON is still not
+  captured by the Network domain - `browser_text` reads it - which is why `browser_json` parses a string payload too.
+- 37 suites / 594 cases.
+
 ## 0.59.0
 
 - **`browser_capture action=extract` - the last mile of "the data is in the request".** Capturing a payload is only half

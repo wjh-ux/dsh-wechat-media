@@ -268,7 +268,7 @@ await test("the network layer is wired on both sides", () => {
   // download a file, and know when the page has settled. Without it a list is only what happened to be rendered.
   const host = readFileSync(new URL("../index.js", import.meta.url), "utf8");
   const flow = readFileSync(new URL("../flow.js", import.meta.url), "utf8");
-  for (const name of ["browser_capture", "browser_cookies", "browser_download", "browser_tabs"]) {
+  for (const name of ["browser_capture", "browser_json", "browser_cookies", "browser_download", "browser_tabs"]) {
     assert.match(host, new RegExp(`"${name}"`), `${name} is registered`);
   }
   for (const command of ["__netStart", "__netStop", "__cookies", "__download", "__tabs"]) {

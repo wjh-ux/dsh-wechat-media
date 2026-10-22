@@ -6181,6 +6181,50 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
+      const browserJsonTool = browserTool(
+        "browser_json",
+        "Run JavaScript in the page that returns an array of objects, turn it into rows (optional field map) and optionally save it as CSV/JSON. The bridge between 'I found the data' and 'a file'.",
+        {
+          expression: { type: "string", required: true, description: "JS returning an array of objects (or a payload containing one)." },
+          fields: { type: "string", description: "JSON map from column to path, e.g. {\"名称\":\"name\",\"评分\":\"rating.value\"}." },
+          save: { type: "string", description: "Where to write the rows (csv/json, same rules as browser_flow save)." },
+          limit: { type: "number", description: "Keep at most this many rows (default 500)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          const mod = await import("./browser.js");
+          let value = await mod.browserEvaluate(live.session, String(args.expression ?? ""));
+          // A JSON document read back as text (and an expression that stringified itself) both arrive as a string.
+          if (typeof value === "string") {
+            try { value = JSON.parse(value); } catch { /* keep it: biggestObjectArray will simply find nothing */ }
+          }
+          let fields = null;
+          if (args.fields) {
+            try { fields = JSON.parse(String(args.fields)); } catch { throw new Error('fields 要是 JSON，例如 {"名称":"name"}'); }
+          }
+          const items = Array.isArray(value) ? value : biggestObjectArray(value);
+          if (!Array.isArray(items) || items.length === 0) {
+            throw new Error("表达式没有返回对象数组（返回一个数组，或包含数组的对象）");
+          }
+          const limit = Math.max(1, Math.min(5000, Number(args.limit) || 500));
+          const rows = flattenRows(items.slice(0, limit), fields);
+          const columns = Object.keys(rows[0] ?? {});
+          const lines = [
+            `读到 ${items.length} 条${items.length > limit ? `（取前 ${limit} 条）` : ""}`,
+            `  字段：${columns.join(" / ")}`,
+          ];
+          for (const row of rows.slice(0, 3)) {
+            lines.push(`  · ${columns.map((column) => String(row[column] ?? "")).join(" | ").slice(0, 160)}`);
+          }
+          const target = String(args.save ?? "").trim();
+          if (target) {
+            const saved = await saveFlowRows(target, rows, { name: "json" });
+            lines.push("", `已保存 ${rows.length} 行到 ${saved}`);
+          }
+          return lines.join("\n");
+        },
+      );
+
       const browserCookiesTool = browserTool(
         "browser_cookies",
         "Read the cookies the current browser would send (the login state), optionally for one URL.",
@@ -6744,7 +6788,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
