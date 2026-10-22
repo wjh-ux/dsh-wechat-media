@@ -6215,8 +6215,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           for (const query of queries) {
             if (merged.size >= limit) break;
             await mod.browserOpen(live.session, `https://www.google.com/maps/search/${encodeURIComponent(query)}`);
-            // The expression scrolls for up to 90 s; the transport's 30 s default would cut it off mid-scroll.
-            const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }), { timeoutMs: 150_000 });
+            // The expression scrolls for up to four minutes; the transport's 30 s default would cut it off mid-scroll.
+            const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }), { timeoutMs: 300_000 });
             const list = Array.isArray(rows) ? rows : [];
             let added = 0;
             for (const row of list) {
@@ -6241,8 +6241,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
           return lines.join("\n");
         },
-        // Several searches, each of which may scroll for up to 90 s.
-        600000,
+        // Several searches, each of which may scroll for up to four minutes.
+        1_500_000,
       );
 
       const browserJsonTool = browserTool(

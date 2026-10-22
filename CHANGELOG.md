@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.62.2
+
+- **A search gets two minutes, not ninety seconds.** First merged live run reported 112 places from three searches, but
+  each search had only produced 47-51 - the in-page deadline (90 s) ran out before the feed did, and the earlier 83-row
+  run proved the same page yields more. Deadline is now 240 s, the transport ceiling 300 s per search, and the tool
+  ceiling 25 minutes so several searches fit inside one call.
+- 38 suites / 599 cases.
+
 ## 0.62.1
 
 - **A command may now ask for more time.** First live run of the merged Maps tool died with

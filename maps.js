@@ -19,14 +19,15 @@
  *
  * `limit` caps what is collected; `stallRounds` decides when "no growth" means finished. The defaults are the ones the
  * first live runs taught: 900 ms / 3 rounds stopped at 54 places, 1600 ms / 5 rounds reached 83 of the ~94 a single
- * search is willing to show - Maps loads a screen every 1-2 s, so a short wait reads "finished" too early.
+ * search is willing to show - Maps loads a screen every 1-2 s, so a short wait reads "finished" too early. The deadline
+ * was 90 s and cut a search off at 47; a full list needs about two minutes.
  */
-export function mapsPlacesExpression({ limit = 200, stallRounds = 5, pauseMs = 1500, timeoutMs = 90_000 } = {}) {
+export function mapsPlacesExpression({ limit = 200, stallRounds = 5, pauseMs = 1500, timeoutMs = 240_000 } = {}) {
   return `(async () => {
     const LIMIT = ${Number(limit) || 200};
     const STALL = ${Number(stallRounds) || 5};
     const PAUSE = ${Number(pauseMs) || 1500};
-    const DEADLINE = Date.now() + ${Number(timeoutMs) || 90_000};
+    const DEADLINE = Date.now() + ${Number(timeoutMs) || 240_000};
 
     // The feed appears a moment after navigation. Measured: scrolling before it existed collected 7 rows and stopped,
     // because every scroll was aimed at a list that was not there yet.
