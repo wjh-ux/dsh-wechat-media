@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.66.1
+
+- **The extension's own version never moved, so two releases were never installed.** `vscode-extension/package.json` sat
+  at `0.1.0` while the commands changed; `code --install-extension` printed "successfully installed" for the 0.2.0 and
+  0.3.0 packages and changed nothing, because VS Code saw the same version already present. Found by reading the
+  extension's detail page: version `0.1.0`, and its manifest came out of that first package with mojibake titles.
+  Fixed to **0.4.0**, uninstalled the stale folder, reinstalled, and verified by parsing the installed manifest
+  (`DSH: 提问… | DSH: 用选中内容提问 | DSH: 读取当前项目 | …`) rather than trusting the CLI's message.
+- **The project snapshot was verified end to end** by sending the same payload the extension builds (`@项目` + a 99-line
+  tree + `package.json` / `README.md`, 8178 chars) to `/dsh-vscode/stream`: 607 delta frames, and an answer that named
+  `index.js` as the entry point and grouped the other 27 modules correctly.
+- 38 suites / 603 cases.
+
 ## 0.66.0
 
 - **The open project can be sent as context.** `@file` only answers about a file you already know about; "what is this
