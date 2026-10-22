@@ -23,6 +23,29 @@ const CLIENT_ID = (() => {
 })();
 const ATTACH = { version: "1.3" };
 
+/**
+ * Network capture.
+ *
+ * The reason it exists: a rendered list is the last of the data, not the data. `Network.responseReceived` plus
+ * `Network.getResponseBody` hands over the JSON the page itself used - the same numbers, without scrolling, without
+ * guessing at cards, and without the "only 60 rows" ceiling a DOM has.
+ *
+ * `inflight` and `lastActivity` also answer "is the page still working?", which is what "wait for the page to settle"
+ * means when a site keeps loading as you scroll.
+ */
+const capture = {
+  active: false,
+  tabId: null,
+  pattern: "",
+  entries: new Map(),
+  inflight: 0,
+  lastActivity: 0,
+  bodyLimit: 1_000_000,
+  limit: 400,
+  bodies: true,
+};
+
+
 /** Current settings, with the defaults filled in. */
 async function settings() {
   const saved = await chrome.storage.local.get(DEFAULTS);
@@ -54,6 +77,78 @@ async function runCommand(command) {
   // parameters, so it must not travel any further than this function.
   const wantCursor = params.__cursor === true;
   delete params.__cursor;
+
+  // ── Network layer ─────────────────────────────────────────────────────────────────────────────────────────────
+  // These talk to Chrome's own APIs rather than to a page, so they run before the driver split: cookies and downloads
+  // work in every driver, and capture needs the debugger's Network domain either way.
+
+  if (command.method === "__netStart") {
+    const tabId2 = wantedTab ?? await pickTab();
+    if (!tabId2) throw new Error("没有可操作的标签页");
+    return { result: await startCapture(tabId2, params), driver: "control" };
+  }
+  if (command.method === "__netStop") {
+    return { result: await stopCapture(), driver: "control" };
+  }
+  if (command.method === "__waitIdle") {
+    return { result: await waitForIdle(params), driver: "control" };
+  }
+  if (command.method === "__cookies") {
+    const url = String(params.url ?? "").trim();
+    const list = await chrome.cookies.getAll(url ? { url } : {});
+    return {
+      result: {
+        count: list.length,
+        cookies: list.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain,
+          path: cookie.path,
+          secure: cookie.secure,
+          httpOnly: cookie.httpOnly,
+          session: cookie.session,
+          expirationDate: cookie.expirationDate ?? null,
+        })),
+      },
+      driver: "control",
+    };
+  }
+  if (command.method === "__download") {
+    const url = String(params.url ?? "");
+    if (!url) throw new Error("download 需要一个 url");
+    const downloadId = await chrome.downloads.download({
+      url,
+      filename: String(params.filename ?? "").trim() || undefined,
+      conflictAction: "uniquify",
+      saveAs: false,
+    });
+    const item = await waitForDownload(downloadId);
+    return {
+      result: {
+        id: downloadId,
+        state: item.state,
+        filename: item.filename,
+        bytes: item.fileSize ?? item.bytesReceived ?? 0,
+        error: item.error ?? null,
+      },
+      driver: "control",
+    };
+  }
+  if (command.method === "__tabs") {
+    const tabs = await chrome.tabs.query({});
+    const rows = tabs.map((tab) => ({ id: tab.id, url: tab.url, title: tab.title, active: tab.active, windowId: tab.windowId }));
+    return { result: { count: rows.length, tabs: rows }, driver: "control" };
+  }
+  if (command.method === "__tabOpen") {
+    const created = await chrome.tabs.create({ url: String(params.url ?? "about:blank"), active: params.active !== false });
+    return { result: { id: created.id, url: created.url ?? "" }, driver: "control" };
+  }
+  if (command.method === "__tabSelect") {
+    const id = Number(params.tabId);
+    if (!Number.isInteger(id)) throw new Error("tabSelect 需要 tabId");
+    const tab = await chrome.tabs.update(id, { active: true });
+    return { result: { id: tab.id, url: tab.url ?? "" }, driver: "control" };
+  }
 
   // The transport switch itself. It arrives on a poll, before the work it changes, so no command is ever run with the
   // wrong driver; id 0 is synthetic and its result is ignored.
@@ -260,6 +355,151 @@ async function pickTab() {
   if (active) return active.id;
   const created = await chrome.tabs.create({ url: "about:blank", active: false });
   return created?.id ?? null;
+}
+
+/** Attach the debugger, detaching first when something already holds it (a DevTools window, or a previous run). */
+async function attachDebugger(tabId) {
+  try {
+    await chrome.debugger.attach({ tabId }, ATTACH.version);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (!/already attached/i.test(message)) throw error;
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+    await chrome.debugger.attach({ tabId }, ATTACH.version);
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Start capturing responses for one tab. Keeps the debugger attached until `stopCapture`. */
+async function startCapture(tabId, params = {}) {
+  if (capture.active) await stopCapture().catch(() => {});
+  await attachDebugger(tabId);
+  await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
+    maxTotalBufferSize: 64 * 1024 * 1024,
+    maxResourceBufferSize: 8 * 1024 * 1024,
+  });
+  capture.active = true;
+  capture.tabId = tabId;
+  capture.pattern = String(params.pattern ?? "").trim();
+  capture.bodies = params.bodies !== false;
+  capture.bodyLimit = Math.max(1024, Math.min(8 * 1024 * 1024, Number(params.bodyLimit) || 1_000_000));
+  capture.limit = Math.max(1, Math.min(2000, Number(params.limit) || 400));
+  capture.entries.clear();
+  capture.inflight = 0;
+  capture.lastActivity = Date.now();
+  return { capturing: true, tabId, pattern: capture.pattern, limit: capture.limit };
+}
+
+/** Stop capturing and hand back what was seen: metadata always, bodies when they were asked for and readable. */
+async function stopCapture() {
+  const wasActive = capture.active;
+  const tabId = capture.tabId;
+  capture.active = false;
+  if (wasActive && tabId) {
+    await chrome.debugger.sendCommand({ tabId }, "Network.disable").catch(() => {});
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+  const entries = [...capture.entries.values()].map((entry) => ({
+    url: entry.url,
+    status: entry.status,
+    mimeType: entry.mimeType,
+    type: entry.type,
+    bytes: entry.bytes ?? null,
+    truncated: Boolean(entry.truncated),
+    body: entry.body ?? null,
+    bodyError: entry.bodyError ?? null,
+  }));
+  capture.entries.clear();
+  capture.tabId = null;
+  capture.inflight = 0;
+  return { capturing: false, count: entries.length, entries };
+}
+
+/** Ask the page to finish loading: no request in flight, and nothing new for `idleMs`. */
+async function waitForIdle(params = {}) {
+  if (!capture.active) throw new Error("先开始网络捕获（browser_capture 的 start）才能等网络空闲");
+  const idleMs = Math.max(100, Number(params.idleMs) || 500);
+  const timeoutMs = Math.max(1000, Number(params.timeoutMs) || 15000);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const quietFor = Date.now() - capture.lastActivity;
+    if (capture.inflight <= 0 && quietFor >= idleMs) {
+      return { idle: true, waitedMs: Date.now() - started, inflight: 0, quietFor };
+    }
+    await sleep(50);
+  }
+  return { idle: false, waitedMs: Date.now() - started, inflight: capture.inflight, quietFor: Date.now() - capture.lastActivity };
+}
+
+/** Wait for one download to finish (or fail), then report where it landed. */
+async function waitForDownload(downloadId, { timeoutMs = 60_000 } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const [item] = await chrome.downloads.search({ id: downloadId });
+    if (item && (item.state === "complete" || item.state === "interrupted")) return item;
+    await sleep(100);
+  }
+  throw new Error(`下载 ${Math.round(timeoutMs / 1000)}s 内没有完成`);
+}
+
+/**
+ * Network events arrive as they happen, which is why capture keeps the debugger attached between commands: the bodies
+ * are only readable while it is.
+ */
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (!capture.active || source.tabId !== capture.tabId) return;
+  capture.lastActivity = Date.now();
+
+  if (method === "Network.requestWillBeSent") {
+    capture.inflight += 1;
+    return;
+  }
+  if (method === "Network.loadingFailed") {
+    capture.inflight = Math.max(0, capture.inflight - 1);
+    return;
+  }
+  if (method === "Network.responseReceived") {
+    const response = params.response ?? {};
+    const url = String(response.url ?? "");
+    if (capture.pattern && !url.includes(capture.pattern)) return;
+    if (capture.entries.size >= capture.limit) return;
+    // Images and fonts are never the data; reading their bodies would waste the buffer on bytes nobody parses.
+    const mime = String(response.mimeType ?? "");
+    if (/^(image|font|audio|video)\//.test(mime)) return;
+    capture.entries.set(params.requestId, {
+      url,
+      status: response.status,
+      mimeType: mime,
+      type: params.type,
+      at: Date.now(),
+      body: null,
+    });
+    return;
+  }
+  if (method === "Network.loadingFinished") {
+    capture.inflight = Math.max(0, capture.inflight - 1);
+    const entry = capture.entries.get(params.requestId);
+    if (entry && capture.bodies) void fillBody(entry, params.requestId);
+  }
+});
+
+/** Read one response body while the debugger is still attached, capped and never throwing out of an event handler. */
+async function fillBody(entry, requestId) {
+  try {
+    const answer = await chrome.debugger.sendCommand(
+      { tabId: capture.tabId },
+      "Network.getResponseBody",
+      { requestId },
+    );
+    const raw = String(answer?.body ?? "");
+    const text = answer?.base64Encoded ? atob(raw) : raw;
+    entry.bytes = text.length;
+    entry.truncated = text.length > capture.bodyLimit;
+    entry.body = entry.truncated ? text.slice(0, capture.bodyLimit) : text;
+  } catch (error) {
+    entry.bodyError = String(error?.message ?? error);
+  }
 }
 
 /** One poll round: fetch a command, run it, post the answer. */

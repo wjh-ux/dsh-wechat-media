@@ -36,6 +36,7 @@ export const FLOW_STEP_TYPES = Object.freeze({
   each: "selector",
   eval: "expression",
   assert: "selector",
+  waitIdle: "",
 });
 
 /** Default ceiling for `waitFor`; long enough for a slow list, short enough to fail rather than hang. */
@@ -256,6 +257,18 @@ async function runStep(session, step, flow, result) {
       const value = await browserEvaluate(session, step.expression);
       if (step.into) result.values[String(step.into)] = value;
       return `执行 JS，结果 ${summarize(value)}`;
+    }
+    case "waitIdle": {
+      // The network layer's "is the page still working?": no request in flight, and nothing new for `idleMs`. Needs
+      // `browser_capture action=start` first, because the extension only sees traffic while the Network domain is on.
+      const outcome = await session.send("__waitIdle", {
+        idleMs: positive(step.idleMs, 500),
+        timeoutMs: positive(step.timeoutMs, 15000),
+      });
+      if (!outcome?.idle) {
+        throw new Error(`等了 ${outcome?.waitedMs ?? "?"}ms 网络还没空闲（还有 ${outcome?.inflight ?? "?"} 个请求在飞）`);
+      }
+      return `网络空闲（${outcome.waitedMs}ms 内没有新请求）`;
     }
     case "assert": {
       const found = await waitForSelector(session, step.selector, positive(step.ms, DEFAULT_WAIT_MS));

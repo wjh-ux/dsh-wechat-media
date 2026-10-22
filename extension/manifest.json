@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "DSH Browser Bridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Lets DeepSeek Harness (dsh) drive this Chrome through the DevTools protocol. Load unpacked, set the token, leave it running.",
-  "permissions": ["debugger", "tabs", "storage", "alarms", "activeTab", "scripting"],
+  "permissions": ["debugger", "tabs", "storage", "alarms", "activeTab", "scripting", "cookies", "downloads"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

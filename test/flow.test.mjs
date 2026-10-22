@@ -48,7 +48,7 @@ await test("a step the runner cannot execute is refused by name, with its number
   assert.throws(() => normalizeFlow([]), /一步都没有/);
   assert.throws(() => normalizeFlow({ steps: [{ type: "goto", url: "" }] }), /缺少 url/);
   // Every advertised type is runnable, so the table cannot drift from the switch.
-  assert.deepEqual(Object.keys(FLOW_STEP_TYPES).sort(), ["assert", "click", "each", "eval", "extract", "goto", "press", "scroll", "type", "wait", "waitFor"].sort());
+  assert.deepEqual(Object.keys(FLOW_STEP_TYPES).sort(), ["assert", "click", "each", "eval", "extract", "goto", "press", "scroll", "type", "wait", "waitFor", "waitIdle"].sort());
 });
 
 await test("numbers are defaulted rather than passed through as NaN", () => {

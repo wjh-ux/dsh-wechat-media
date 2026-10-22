@@ -2,6 +2,7 @@
 // browser tools expect. A real HTTP server is started on an ephemeral port, because the handshake *is* HTTP - mocking
 // fetch client-side would test the mock, not the bridge.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "../extension.js";
 
 const passed = [];
@@ -260,6 +261,31 @@ await test("the answer says which transport ran the command, so a flash is expla
     assert.equal(bridge.status().lastDriver, "script");
     assert.equal(bridge.status().debuggerUses, 1, "a script run does not increment it");
   } finally { await bridge.stop(); }
+});
+
+await test("the network layer is wired on both sides", () => {
+  // The data behind a page is the point: capture the JSON the page fetched, read the cookies that keep it logged in,
+  // download a file, and know when the page has settled. Without it a list is only what happened to be rendered.
+  const host = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const flow = readFileSync(new URL("../flow.js", import.meta.url), "utf8");
+  for (const name of ["browser_capture", "browser_cookies", "browser_download", "browser_tabs"]) {
+    assert.match(host, new RegExp(`"${name}"`), `${name} is registered`);
+  }
+  for (const command of ["__netStart", "__netStop", "__cookies", "__download", "__tabs"]) {
+    assert.ok(host.includes(command), `${command} is sent by the plugin`);
+  }
+  // "Wait until the page settles" lives in the flow runner, where a step can ask for it.
+  assert.match(flow, /__waitIdle/, "waitIdle is available as a flow step");
+  assert.match(host, /这个功能走浏览器扩展/, "and says so when the transport cannot do it");
+
+  const manifest = JSON.parse(readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8"));
+  assert.ok(manifest.permissions.includes("cookies"), "cookies permission");
+  assert.ok(manifest.permissions.includes("downloads"), "downloads permission");
+
+  const worker = readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
+  assert.match(worker, /Network\.enable/, "capture turns the Network domain on");
+  assert.match(worker, /Network\.getResponseBody/, "and reads response bodies while attached");
+  assert.match(worker, /chrome\.downloads\.download/, "downloads go through the browser, so its cookies apply");
 });
 
 await test("a token is 32 hex characters, so it can be pasted and not guessed", () => {

@@ -495,6 +495,23 @@ itself, and a screenshot came back as a 68,561-byte PNG and was delivered to Fei
   setting. The other browser keeps a standby poll and never gets work - without that, two open browsers race for every
   command and the answer comes from whichever asked first.
 
+### 网络层 / The network layer
+
+A rendered list is the last copy of the data, and the smallest. Four tools reach the source instead - all of them on the
+extension transport, because a page cannot see its own traffic or its own cookie store:
+
+| Tool | Does |
+|---|---|
+| `browser_capture` | `start` / `stop` / `list`: `Network.responseReceived` + `Network.getResponseBody`, so the JSON the page fetched comes back whole. `pattern` keeps only the API, `limit` bounds memory, bodies cap at 1 MB, images/fonts are skipped |
+| `browser_cookies` | the login state, for one URL or the whole browser |
+| `browser_download` | download through the browser (its cookie jar applies), wait for completion, report the path |
+| `browser_tabs` | list / open / select - a second tab becomes a choice, not a hope |
+
+Flow step `waitIdle` uses the same machinery: it resolves when nothing is in flight and nothing new has happened for
+`idleMs`, which is what "the page has settled" actually means.
+
+Typical shape: `browser_capture start pattern=/api/` → drive the page → `waitIdle` → `browser_capture stop`.
+
 Why not simply drive the real profile? Chrome 136+ silently ignores `--remote-debugging-port` when `--user-data-dir` is
 the default one - measured on Chrome 155: process up, window visible, port never listening. That is also why the
 extension exists.

@@ -6053,6 +6053,144 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
+      // ── Network layer: the data behind the page ────────────────────────────────────────────────────────────────
+      //
+      // A rendered list is the *last* copy of the data and the least complete one. These four tools reach past it:
+      // capture the JSON the page itself fetched, read the cookies that keep it logged in, download a file and report
+      // where it landed, and work with more than one tab. They need the extension transport, because a page cannot see
+      // its own network traffic or its own cookie store.
+
+      /** These routes only exist on the extension transport; say so instead of failing with something obscure. */
+      const requireExtension = (live) => {
+        if (!live?.extension) {
+          throw new Error("这个功能走浏览器扩展：先 /browser session extension 并让扩展连上（脚本/调试端口模式看不到网络层）");
+        }
+      };
+
+      const browserCaptureTool = browserTool(
+        "browser_capture",
+        "Capture XHR/fetch JSON responses from the current tab (start / stop / list). This is how you get the data behind a page - the API payload, not the rendered cards.",
+        {
+          action: { type: "string", required: true, description: "start / stop / list." },
+          pattern: { type: "string", description: "Only keep URLs containing this text, e.g. /api/search." },
+          limit: { type: "number", description: "Keep at most this many responses (default 400)." },
+          bodies: { type: "string", description: "\"false\" to record metadata only (default: capture bodies)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          requireExtension(live);
+          const action = String(args.action ?? "").trim().toLowerCase();
+          if (action === "start") {
+            const body = args.bodies === "false" || args.bodies === false ? false : true;
+            const started = await live.session.send("__netStart", {
+              pattern: args.pattern, limit: args.limit, bodies: body,
+            });
+            return `开始捕获网络响应（tab ${started.tabId}${started.pattern ? `，只收包含 ${started.pattern} 的 URL` : ""}，最多 ${started.limit} 条）\n接下来操作页面，然后 browser_capture action=stop 取结果。`;
+          }
+          if (action === "stop") {
+            const result = await live.session.send("__netStop", {});
+            const entries = Array.isArray(result?.entries) ? result.entries : [];
+            if (entries.length === 0) return "捕获已停止：没有收到任何响应（页面没发起请求，或 pattern 太窄）。";
+            const byType = new Map();
+            for (const entry of entries) {
+              const key = String(entry.mimeType || entry.type || "?");
+              byType.set(key, (byType.get(key) ?? 0) + 1);
+            }
+            const lines = [
+              `捕获已停止：${entries.length} 条响应`,
+              `  类型：${[...byType.entries()].map(([type, count]) => `${type}×${count}`).join("，")}`,
+            ];
+            const json = entries.filter((entry) => /json/i.test(String(entry.mimeType)) && entry.body);
+            for (const entry of json.slice(0, 5)) {
+              lines.push(`  · ${entry.url.slice(0, 100)}（${entry.bytes ?? "?"} 字节${entry.truncated ? "，已截断" : ""}）`);
+            }
+            if (json.length > 5) lines.push(`  …另有 ${json.length - 5} 条 JSON`);
+            lines.push("", "用 browser_capture action=list 取完整内容（含 body）。");
+            return lines.join("\n");
+          }
+          if (action === "list") {
+            const result = await live.session.send("__netStop", {});
+            const entries = Array.isArray(result?.entries) ? result.entries : [];
+            if (entries.length === 0) return "没有捕获到内容。";
+            return `${entries.length} 条响应：\n${JSON.stringify(entries, null, 2).slice(0, 12000)}`;
+          }
+          throw new Error("action 只能是 start / stop / list");
+        },
+      );
+
+      const browserCookiesTool = browserTool(
+        "browser_cookies",
+        "Read the cookies the current browser would send (the login state), optionally for one URL.",
+        {
+          url: { type: "string", description: "Only cookies for this URL; omit for every cookie in the browser." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          requireExtension(live);
+          const result = await live.session.send("__cookies", { url: String(args.url ?? "").trim() });
+          const cookies = Array.isArray(result?.cookies) ? result.cookies : [];
+          if (cookies.length === 0) return `没有 cookie${args.url ? `（${args.url}）` : ""}。`;
+          const hosts = new Map();
+          for (const cookie of cookies) hosts.set(cookie.domain, (hosts.get(cookie.domain) ?? 0) + 1);
+          const lines = [
+            `${cookies.length} 个 cookie，涉及 ${hosts.size} 个域名`,
+            ...[...hosts.entries()].slice(0, 12).map(([domain, count]) => `  · ${domain} × ${count}`),
+          ];
+          return lines.join("\n");
+        },
+      );
+
+      const browserDownloadTool = browserTool(
+        "browser_download",
+        "Download a URL through the browser (its cookie jar applies) and report where the file landed.",
+        {
+          url: { type: "string", required: true, description: "http(s) URL to download." },
+          name: { type: "string", description: "Optional file name (relative to the browser's download folder)." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          requireExtension(live);
+          const result = await live.session.send("__download", {
+            url: String(args.url ?? "").trim(),
+            filename: String(args.name ?? "").trim(),
+          }, { timeoutMs: 90_000 });
+          if (result?.state === "interrupted") throw new Error(`下载中断：${result.error ?? "未知原因"}`);
+          const size = Number(result?.bytes) || 0;
+          return `已下载到 ${result?.filename ?? "（未知路径）"}（${size ? `${Math.round(size / 1024)} KB` : "大小未知"}）`;
+        },
+        // A download can legitimately take longer than the default tool budget.
+        120000,
+      );
+
+      const browserTabsTool = browserTool(
+        "browser_tabs",
+        "List, open or focus tabs in the browser the extension drives.",
+        {
+          action: { type: "string", required: true, description: "list / open / select." },
+          url: { type: "string", description: "For action=open: the address to open." },
+          tabId: { type: "number", description: "For action=select: the tab id from action=list." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          requireExtension(live);
+          const action = String(args.action ?? "").trim().toLowerCase();
+          if (action === "list") {
+            const result = await live.session.send("__tabs", {});
+            const tabs = Array.isArray(result?.tabs) ? result.tabs : [];
+            return `${tabs.length} 个标签页：\n${tabs.map((tab) => `  ${tab.active ? "●" : " "} ${tab.id} · ${String(tab.title || tab.url || "").slice(0, 70)}`).join("\n")}`;
+          }
+          if (action === "open") {
+            const opened = await live.session.send("__tabOpen", { url: String(args.url ?? "about:blank") });
+            return `已打开新标签页 ${opened.id}：${opened.url}`;
+          }
+          if (action === "select") {
+            const selected = await live.session.send("__tabSelect", { tabId: args.tabId });
+            return `已切换到标签页 ${selected.id}：${selected.url}`;
+          }
+          throw new Error("action 只能是 list / open / select");
+        },
+      );
+
       const browserCloseTool = browserTool(
         "browser_close",
         "Close the browser session this plugin opened. A browser it merely attached to is left running.",
@@ -6543,7 +6681,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

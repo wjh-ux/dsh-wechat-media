@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.58.0
+
+- **网络层 (the network layer).** Until now a page was only what it rendered: scrolling a feed, counting cards, parsing
+  `innerText`, and hitting a ceiling at whatever the DOM happened to paint. The data is in the requests, so:
+  - `browser_capture` (start / stop / list) - `Network.responseReceived` + `Network.getResponseBody` while the debugger
+    is attached. Bodies are capped (1 MB default) and images/fonts skipped, `pattern` keeps only the API calls worth
+    reading, `limit` bounds memory;
+  - `browser_cookies` - the login state for one URL or the whole browser;
+  - `browser_download` - downloads through the browser (its cookie jar applies), waits for completion, reports the path;
+  - `browser_tabs` - list / open / select, so a second tab is a choice rather than a hope;
+  - flow step `waitIdle` - no request in flight and nothing new for `idleMs`, which is "the page has settled" instead of
+    "sleep two seconds and hope".
+  All four need the extension transport (a page cannot see its own traffic or cookie store) and say so in one sentence
+  when it is not in use.
+- The extension gains `cookies` + `downloads` permissions and moves to 1.2.0; reload it and accept the new permissions
+  once.
+- 37 suites / 593 cases.
+
 ## 0.57.0
 
 - **VS Code bridge.** Three ways into the same agent: a chat panel in the activity bar, two commands
