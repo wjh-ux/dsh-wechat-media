@@ -521,12 +521,24 @@ extension exists.
 `vscode-extension/` is a small editor extension - plain CommonJS, no build step - with three ways in: a chat panel in the
 activity bar, `DSH: 提问…` / `DSH: 用选中内容提问`, and a status-bar item showing what the plugin is connected to.
 
-It talks to two loopback routes: `/dsh-vscode/status` and `/dsh-vscode/ask`. The second is a **real agent turn** - the
-same `ensureAgent` + `followws`/collector path a chat uses - so the editor gets the same model, tools and context rather
-than a second, weaker implementation. `/vscode on|off` gates it.
+It talks to three loopback routes: `/dsh-vscode/status`, `/dsh-vscode/ask` and `/dsh-vscode/stream`. All of them are a
+**real agent turn** - the same `ensureAgent` + collector path a chat uses - so the editor gets the same model, tools and
+context rather than a second, weaker implementation. `/vscode on|off` gates it.
+
+**The AI edits the project you have open.** The request carries the workspace folder and the 可写 switch under the input
+box, and the plugin runs the turn *in* that folder with `workspace-write` as its boundary - so `edit`/`write` land in
+your project, and anything wider still fails closed (approval is `never`, because nobody in an editor panel can answer a
+prompt). Turn 可写 off and the same session runs `read-only` on the next request: the switch is re-applied every time,
+not remembered from the first turn. One folder is one conversation (`project:<folder>`), so two open projects never
+share a history. The panel prints the project it is talking about, `项目：<folder>（可改 / 只读）`.
+
+Verified end to end: "新建 note.txt" created a 31-byte UTF-8 file in the open folder; with 可写 off, the follow-up edit
+was refused by the sandbox (`[sandbox: file access denied under read-only mode]`) and the file was left untouched.
 
 The endpoint is discovered from `gui-port.json` in the plugin's state directory, because the GUI port changes on every
-DSH restart. Install: Extensions → `...` → **Install from VSIX**/folder, or `Developer: Install Extension from Location`.
+DSH restart. Install: Extensions → `...` → **Install from VSIX** (`dsh-wechat-media-vscode-0.5.0.vsix` in this repo), or
+`code --install-extension vscode-extension/`. The extension's own version is what VS Code uses to decide whether to
+replace it - a frozen version makes an install a no-op that still prints "successfully installed".
 
 ### Flow automation / 流程自动化（影刀式）
 

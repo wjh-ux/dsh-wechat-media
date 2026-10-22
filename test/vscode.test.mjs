@@ -20,7 +20,7 @@ async function test(name, fn) {
 
 await test("the editor gets a real agent turn, not a second weaker path", () => {
   assert.match(host, /path: "\/dsh-vscode\/ask"/, "the ask route exists");
-  assert.match(host, /ensureAgent\("vscode", "vscode", "VS Code"\)/, "through the same ensureAgent a chat uses");
+  assert.match(host, /ensureAgent\("vscode", chatId, cwd \? "VS Code 项目"/, "through the same ensureAgent a chat uses");
   assert.match(host, /collectors\.wait\(sessionId, message\?\.id\)/, "and the same reply collector");
   assert.match(host, /await agent\.followup\(message\)/, "so tools, model and context are identical");
   assert.match(host, /path: "\/dsh-vscode\/status"/, "the status route exists");
@@ -49,6 +49,29 @@ await test("streaming is a real turn written as it arrives, filtered by session"
   assert.match(client, /function streamAsk/, "the editor reads the stream incrementally");
   assert.match(client, /onDelta\(event\.text\)/, "calling back per chunk");
   assert.match(client, /class="msg dsh streaming"|dsh streaming/, "and the panel paints into a growing bubble");
+});
+
+await test("the editor can ask DSH to change the project, inside a real sandbox", () => {
+  // Reading is not the same as editing: the session has to run *in* the project, and it has to be given a sandbox that
+  // permits writes there and nothing wider. `never` means an editor request can never wait for a person who is not there.
+  assert.match(host, /async function enforceProjectMode/, "there is a mode helper");
+  assert.match(host, /const mode = writable \? "workspace-write" : "read-only"/, "writes and reads are both expressible");
+  assert.match(host, /setApprovalPolicy\?\.\(session, "never"\)/, "and nothing waits on an absent approver");
+  assert.match(host, /const projectCwd = String\(options\.cwd/, "the project directory drives the session's cwd");
+  assert.match(host, /"project:" \+ cwd\.toLowerCase\(\)/, "each project gets its own session, so histories do not mix");
+  assert.match(host, /write: writable/, "and the write flag reaches ensureAgent");
+  // The route must not trust the folder it is handed: a relative path would attach the request to whatever directory
+  // DSH runs from, and an edit would land somewhere the person never opened.
+  assert.match(host, /function editorProject\(body/, "the request is parsed in one place");
+  assert.match(host, /raw && isAbsolute\(raw\) \? raw : ""/, "and only an absolute folder counts as a project");
+  // `ask` and `never` are both policies; whoever writes last wins, and the project session must be left on `never`.
+  assert.match(host, /if \(!options\.cwd\) \{/, "a project session is not put back on `ask` behind enforceProjectMode");
+
+  const client = readFileSync(new URL("../vscode-extension/extension.js", import.meta.url), "utf8");
+  assert.match(client, /function projectCwd/, "the editor knows its folder");
+  assert.match(client, /write: write \? "1" : "0"/, "and states whether it may edit");
+  assert.match(client, /id="write"/, "the panel has a visible 可写 switch");
+  assert.match(client, /toggle-write/, "which is not a hidden setting");
 });
 
 await test("the open project can be sent as context", () => {

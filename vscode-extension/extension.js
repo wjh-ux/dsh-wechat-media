@@ -153,10 +153,24 @@ async function refreshStatus({ quiet = true } = {}) {
  * A separate function from `request` because the body has to be read incrementally - waiting for `end` is exactly the
  * behaviour this replaces.
  */
-function streamAsk(prompt, { onDelta = () => {}, onStart = () => {}, timeoutMs = 600000, base = activeBase || endpoint() } = {}) {
+/**
+ * Whether the editor session may edit the project.
+ *
+ * On by default when a folder is open: the whole point of asking about your own project from the editor is that the
+ * answer can be applied. The panel shows a checkbox, because a writable agent deserves a visible switch rather than a
+ * hidden setting.
+ */
+let writeEnabled = true;
+
+/** The project the request is about: the first workspace folder, or empty when none is open. */
+function projectCwd() {
+  return vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath ?? "";
+}
+
+function streamAsk(prompt, { onDelta = () => {}, onStart = () => {}, timeoutMs = 600000, base = activeBase || endpoint(), cwd = "", write = true } = {}) {
   if (!base) return Promise.reject(new Error("找不到 DSH 地址：先启动 DSH，或在设置里填 dsh.endpoint"));
   const url = new URL(base + "/dsh-vscode/stream");
-  const payload = JSON.stringify({ prompt });
+  const payload = JSON.stringify({ prompt, cwd, write: write ? "1" : "0" });
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -363,7 +377,7 @@ async function ask(prompt, { sessionHint = "", onDelta } = {}) {
   if (!text) throw new Error("问题是空的");
   const { prompt: expanded, attached, problems } = await expandFileRefs(text);
   const withHint = sessionHint ? `${expanded}\n\n（上下文：${sessionHint}）` : expanded;
-  const answer = await streamAsk(withHint, { onDelta });
+  const answer = await streamAsk(withHint, { onDelta, cwd: projectCwd(), write: writeEnabled });
   const reply = String(answer.text ?? "").trim();
   // An empty answer is not a success: the route reports *why* (`stopReason`), and that reason is the only thing that
   // makes the failure fixable - showing a blank bubble would look like the model said nothing.
@@ -381,6 +395,15 @@ class ChatView {
   resolveWebviewView(webviewView) {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = chatHtml();
+    const announce = () => {
+      const cwd = projectCwd();
+      const name = vscode.workspace.workspaceFolders?.[0]?.name ?? "";
+      webviewView.webview.postMessage({
+        type: "where",
+        text: cwd ? `项目：${name}（${writeEnabled ? "可改" : "只读"}）` : "没有打开文件夹（只读）",
+      });
+      webviewView.webview.postMessage({ type: "write-state", value: writeEnabled });
+    };
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message?.type === "pick") {
         // Picking files by hand is what makes `@` discoverable: nobody types a path they cannot see.
@@ -392,6 +415,15 @@ class ChatView {
         if (!picked?.length) return;
         const paths = picked.map((uri) => vscode.workspace.asRelativePath(uri, false));
         webviewView.webview.postMessage({ type: "picked", paths });
+        return;
+      }
+      if (message?.type === "ready") {
+        announce();
+        return;
+      }
+      if (message?.type === "toggle-write") {
+        writeEnabled = Boolean(message.value);
+        announce();
         return;
       }
       if (message?.type !== "ask") return;
@@ -439,6 +471,9 @@ function chatHtml() {
   button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
   button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   button:disabled { opacity: .5; cursor: default; }
+  #foot { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 11px; opacity: .85; }
+  #foot label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+  #where { opacity: .7; }
 </style>
 </head>
 <body>
@@ -448,6 +483,10 @@ function chatHtml() {
     <button id="project" class="secondary" title="附上当前项目（插入 @项目）">项目</button>
     <button id="file" class="secondary" title="附上文件（插入 @路径）">＋文件</button>
     <button id="send">发送</button>
+  </div>
+  <div id="foot">
+    <label title="允许 DSH 修改这个项目里的文件"><input type="checkbox" id="write" checked> 可写</label>
+    <span id="where"></span>
   </div>
 <script>
   const vscode = acquireVsCodeApi();
@@ -480,7 +519,11 @@ function chatHtml() {
   }
 
   send.addEventListener("click", submit);
+  vscode.postMessage({ type: "ready" });
   document.getElementById("file").addEventListener("click", () => vscode.postMessage({ type: "pick" }));
+  document.getElementById("write").addEventListener("change", (event) => {
+    vscode.postMessage({ type: "toggle-write", value: event.target.checked });
+  });
   document.getElementById("project").addEventListener("click", () => {
     input.value = (input.value ? input.value.trimEnd() + " " : "") + "@项目 ";
     input.focus();
@@ -491,6 +534,14 @@ function chatHtml() {
 
   window.addEventListener("message", (event) => {
     const message = event.data ?? {};
+    if (message.type === "write-state") {
+      document.getElementById("write").checked = Boolean(message.value);
+      return;
+    }
+    if (message.type === "where") {
+      document.getElementById("where").textContent = message.text || "";
+      return;
+    }
     if (message.type === "picked") {
       // The picker hands back workspace-relative paths, which is exactly the "@path" form the expansion understands.
       const refs = (message.paths || []).map((p) => (/\s/.test(p) ? '@"' + p + '"' : "@" + p)).join(" ");

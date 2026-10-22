@@ -1456,12 +1456,61 @@ export function apply(ctx, config = {}) {
   const conversationHandles = new Map();
 
   /** Ensure a live agent for one conversation, resuming its history when possible. */
-  async function ensureAgent(accountId, chatId, peerName) {
+  /**
+   * Let a session edit the project it was opened in.
+   *
+   * `workspace-write` is the sandbox that permits writes inside the workspace and temporary directories; everything wider
+   * still needs approval, and `never` means an editor request can never sit waiting for a person who is not there. The
+   * pair is the narrowest combination that actually lets an edit happen.
+   */
+  async function enforceProjectMode(session, writable) {
+    if (!session) return;
+    // Re-asserted on every request: a grant that cannot be revoked is not a switch. Measured - a session given
+    // workspace-write once kept writing after the panel was switched to read-only.
+    const mode = writable ? "workspace-write" : "read-only";
+    try {
+      const sandbox = await importHarnessPlugin(ctx, "@deepseek-ai/dsh-sandbox-policy");
+      sandbox?.setSandboxMode?.(session, mode);
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] sandbox policy not available: %s", error?.message ?? error);
+    }
+    try {
+      const approval = await importHarnessPlugin(ctx, "@deepseek-ai/dsh-user-approval");
+      approval?.setApprovalPolicy?.(session, "never");
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] approval policy not available: %s", error?.message ?? error);
+    }
+  }
+
+  /**
+   * What an editor request is about: its project folder and whether it may write.
+   *
+   * The editor names the folder; the plugin does not trust it beyond that. A relative or empty path is not a project -
+   * resolving it against this process's cwd would silently attach the request to whatever directory DSH happens to run
+   * from, which is exactly the kind of quiet mix-up that makes an edit land in the wrong place.
+   */
+  function editorProject(body = {}) {
+    const raw = String(body.cwd ?? "").trim();
+    const cwd = raw && isAbsolute(raw) ? raw : "";
+    const writable = body.write === true || String(body.write ?? "") === "1";
+    return { cwd, writable };
+  }
+
+  /**
+   * Resolve (or create) the agent for one conversation.
+   *
+   * `options.cwd` and `options.write` exist for the editor bridge: a project session must work *in* the project, and a
+   * session that is meant to edit has to be given a sandbox that allows editing. Writing inside the workspace needs no
+   * approval under `workspace-write`, which is exactly the boundary we want - wider operations still fail closed because
+   * the policy is `never` and there is no one to ask from an editor panel.
+   */
+  async function ensureAgent(accountId, chatId, peerName, options = {}) {
     const generation = await generationOf(accountId, chatId);
     const sessionId = sessionIdFor(accountId, chatId, generation);
     const existing = ctx.agents.get(sessionId);
     if (existing) {
       conversations.set(sessionId, { accountId, chatId, peerName, generation });
+      if (options.cwd) await enforceProjectMode(existing.session, Boolean(options.write));
       return { agent: existing, sessionId, accountId, chatId, peerName, generation, handle: conversationHandles.get(sessionId) };
     }
 
@@ -1486,7 +1535,9 @@ export function apply(ctx, config = {}) {
       ? { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) }
       : undefined;
     const workspaceRoot = await resolvedInbox();
-    const meta = { cwd: config.cwd || workspaceRoot, ...(mountId ? { agentPreset: mountId } : {}) };
+    // The editor names its project; a chat has no project, so it keeps the inbox as before.
+    const projectCwd = String(options.cwd ?? "").trim();
+    const meta = { cwd: projectCwd || config.cwd || workspaceRoot, ...(mountId ? { agentPreset: mountId } : {}) };
     const setup = async (agentCtx) => {
       // Without mounting the preset the agent publishes against the empty global
       // layer: no tools, no prompt, nothing it could act with.
@@ -1524,6 +1575,7 @@ export function apply(ctx, config = {}) {
     ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${resolvedId}`);
     conversationHandles.set(resolvedId, handle);
     conversations.set(resolvedId, { accountId, chatId, peerName, generation });
+    if (options.cwd) await enforceProjectMode(handle.agent?.session, Boolean(options.write));
     // Keep the generation: `/new` must not be undone by this write.
     await state.setRoute(accountId, chatId, {
       sessionId: resolvedId,
@@ -1535,11 +1587,18 @@ export function apply(ctx, config = {}) {
     // rejected before any answerer is consulted, so the authorization level could never decide;
     // `ask` hands the decision to this plugin, and with no answerer reachable it still fails
     // closed. Applied once per session, because the policy is recorded in the session itself.
-    try {
-      const approvalPlugin = await importHarnessPlugin(ctx, "@deepseek-ai/dsh-user-approval");
-      approvalPlugin?.setApprovalPolicy?.(handle.agent?.session, "ask");
-    } catch (error) {
-      ctx.logger?.warn?.("[dsh-wechat-media] could not set the session approval policy: %s", error?.message ?? error);
+    //
+    // A project session is the exception, and the order matters: `enforceProjectMode` above has just
+    // recorded `never`, and writing this afterwards put the project back on `ask` - so the very next
+    // request sat waiting for an approval nobody in the editor can answer. Measured before the fix:
+    // an editor request that needed a write stalled instead of failing closed.
+    if (!options.cwd) {
+      try {
+        const approvalPlugin = await importHarnessPlugin(ctx, "@deepseek-ai/dsh-user-approval");
+        approvalPlugin?.setApprovalPolicy?.(handle.agent?.session, "ask");
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] could not set the session approval policy: %s", error?.message ?? error);
+      }
     }
     return { agent: handle.agent, sessionId: resolvedId, accountId, chatId, peerName, generation, handle };
   }
@@ -7508,7 +7567,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           };
           req.on("close", () => { closed = true; });
           try {
-            const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            // A project session is keyed by the project itself, so two open folders never share one history - and it
+            // runs *in* that folder, which is what makes editing possible at all.
+            const { cwd, writable } = editorProject(body);
+            const chatId = cwd ? "project:" + cwd.toLowerCase() : "vscode";
+            const { agent, sessionId } = await ensureAgent("vscode", chatId, cwd ? "VS Code 项目" : "VS Code", { cwd, write: writable });
             // Live tokens travel as `agent/assistant-stream` frames, and that payload carries the agent, so the filter
             // is exact - which matters because WeChat or the GUI may be mid-turn at the same time. Measured: listening
             // to `session/event` deltas produced zero frames; the turn answered in a single `done`, which is not
@@ -7568,7 +7631,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // The same machinery a chat uses: one pseudo conversation named "VS Code", so the editor gets a real agent
           // turn - the same model, tools and context - rather than a second, weaker path.
           try {
-            const { agent, sessionId } = await ensureAgent("vscode", "vscode", "VS Code");
+            // A project session is keyed by the project itself, so two open folders never share one history - and it
+            // runs *in* that folder, which is what makes editing possible at all.
+            const { cwd, writable } = editorProject(body);
+            const chatId = cwd ? "project:" + cwd.toLowerCase() : "vscode";
+            const { agent, sessionId } = await ensureAgent("vscode", chatId, cwd ? "VS Code 项目" : "VS Code", { cwd, write: writable });
             // `trace=1` records which inbox events this session actually receives. It exists because the first live run
             // answered `not-claimed` - a message queued but never taken - and guessing at that from outside is exactly
             // how the wrong fix gets written. Only attached on request, so the normal path pays nothing.

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.67.0
+
+- **The editor's AI now edits the project it was opened on.** A panel request carries the folder (`cwd`) and a *可写*
+  switch; the plugin runs that conversation *in* the folder and gives it the narrowest sandbox that lets an edit happen:
+  `workspace-write` with the folder as the boundary, or `read-only` when the switch is off. Approval is `never`, because
+  there is nobody in an editor panel to answer a prompt - an editor request must fail closed and fast, never hang.
+  Measured against the real GUI process: "新建 note.txt" produced a 31-byte UTF-8 file inside the project; with the
+  switch off, the follow-up edit of the same file was refused by the sandbox
+  (`[sandbox: file access denied under read-only mode]`), the file stayed byte-identical, and the answer said so
+  instead of claiming success.
+- **One project, one session.** The conversation id becomes `project:<folder>`, so two open folders never share a
+  history, and the streaming route keeps filtering deltas by session id (46 delta frames, 8.5 s, in the same run).
+- **A policy-order bug: a project session was put back on `ask`.** Right after creating a session the code set the
+  `ask` approval policy - overwriting the `never` that `enforceProjectMode` had just recorded - so the first write that
+  needed an approval would have waited for a person who cannot answer from the editor. Project sessions now skip that
+  block, and the read-only/writable state is re-asserted on **every** request, since a grant that cannot be revoked is
+  not a switch.
+- **The route does not trust the folder it is handed.** `editorProject` accepts an absolute path only; a relative or
+  empty one is treated as "no project open" rather than resolved against the process's cwd - guessing there means an
+  edit landing in a directory the person never opened.
+- **The panel shows which project it is about** (`项目：<folder>（可改 / 只读）`, or a sentence when no folder is open),
+  and the 可写 switch is a visible checkbox, not a hidden setting.
+- **Chrome capture no longer forgets itself after ~30 s.** MV3 suspends the service worker, which loses the `capture`
+  module variable and stops `chrome.debugger.onEvent`; the recorded symptom was 8 responses on the first capture of a
+  session and 0 on the next one with the debugger still attached. Capturing now holds a `chrome.alarms` keep-alive plus
+  a 20 s no-op API call, both cleared on stop.
+- The extension ships as `dsh-wechat-media-vscode-0.5.0.vsix`; the installed copy is byte-identical to
+  `vscode-extension/extension.js`.
+- 38 suites / 593 cases.
+
 ## 0.66.1
 
 - **The extension's own version never moved, so two releases were never installed.** `vscode-extension/package.json` sat

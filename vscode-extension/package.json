@@ -2,7 +2,7 @@
   "name": "dsh-wechat-media-vscode",
   "displayName": "DSH Bridge",
   "description": "Ask DeepSeek Harness from VS Code: a chat panel, commands and a status bar, through dsh-wechat-media.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "wjh-ux",
   "license": "MIT",
   "engines": {

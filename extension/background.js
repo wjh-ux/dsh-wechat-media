@@ -380,6 +380,7 @@ async function startCapture(tabId, params = {}) {
     maxResourceBufferSize: 8 * 1024 * 1024,
   });
   capture.active = true;
+  keepCapturingAlive();
   capture.tabId = tabId;
   capture.pattern = String(params.pattern ?? "").trim();
   capture.bodies = params.bodies !== false;
@@ -391,11 +392,36 @@ async function startCapture(tabId, params = {}) {
   return { capturing: true, tabId, pattern: capture.pattern, limit: capture.limit };
 }
 
+/**
+ * Keep the service worker alive while capturing.
+ *
+ * MV3 suspends the worker after roughly 30 s idle, and a suspended worker loses `capture` - a plain module variable -
+ * and stops seeing `chrome.debugger.onEvent`. Measured: the first capture in a session returned 8 responses, the next
+ * one returned 0 with the debugger still attached, which is exactly a worker that restarted between the two.
+ */
+let keepAliveTimer = null;
+
+function keepCapturingAlive() {
+  chrome.alarms.create("dsh-capture-keepalive", { periodInMinutes: 0.5 });
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    // Any extension API call resets the idle timer; this one is cheap and has no side effects.
+    void chrome.runtime.getPlatformInfo().catch(() => {});
+  }, 20_000);
+}
+
+function stopKeepingAlive() {
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
+  chrome.alarms.clear("dsh-capture-keepalive").catch(() => {});
+}
+
 /** Stop capturing and hand back what was seen: metadata always, bodies when they were asked for and readable. */
 async function stopCapture() {
   const wasActive = capture.active;
   const tabId = capture.tabId;
   capture.active = false;
+  stopKeepingAlive();
   if (wasActive && tabId) {
     await chrome.debugger.sendCommand({ tabId }, "Network.disable").catch(() => {});
     await chrome.debugger.detach({ tabId }).catch(() => {});
