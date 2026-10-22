@@ -51,8 +51,18 @@ const pkg = JSON.parse(readFileSync(joinPath(pluginDir, "package.json"), "utf8")
 await test("the tool is registered and saves with the same rules as everything else", () => {
   assert.match(host, /"browser_maps_places"/);
   assert.match(host, /mapsPlacesExpression\(\{ limit \}\)/, "it uses the expression above");
-  assert.match(host, /saveFlowRows\(target, list, \{ name: "maps" \}\)/, "and the shared export path");
+  assert.match(host, /saveFlowRows\(target, all, \{ name: "maps" \}\)/, "and the shared export path");
   assert.ok(pkg.files.includes("maps.js"), "maps.js is published");
+});
+
+await test("several searches merge and de-duplicate, because one search stops at about 90", () => {
+  // The cap is Google's, measured: a single search ended at 94 cards and "查看更多" did nothing. Reaching 200 is a
+  // merge, so the tool takes a list of searches and keys the union by place link.
+  assert.match(host, /给 query（一个搜索）或 queries（多个搜索）/, "it says what it needs when given neither");
+  assert.match(host, /for \(const query of queries\)/, "it walks the whole list");
+  assert.match(host, /merged\.has\(key\)/, "and skips places it already has");
+  assert.match(host, /\["链接"\]/, "keyed by the place link");
+  assert.match(host, /perQuery/, "and reports what each search added, so a thin query is visible");
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.62.0
+
+- **`browser_maps_places` takes several searches.** Measured: one Google Maps search stops at about 90-100 places - the
+  feed ends with "查看更多", which did nothing when clicked - so "200 shops" cannot be a longer scroll. It is a merge:
+  `queries: "[\"上海 咖啡店\",\"上海 咖啡馆\"]"` (JSON array, or comma-separated) runs each search, unions the results by
+  place link, and reports what each one added (`徐汇 咖啡店：94 家，新增 37`). `limit` applies to the union.
+- **The waiting defaults are the measured ones now.** 900 ms / 3 quiet rounds collected 54 places; 1600 ms / 5 rounds
+  reached 83 of ~94. A lazy list that loads a screen every 1-2 s reads "finished" far too early with a short wait.
+- A tool parameter typed `array` is rejected by this plugin's own contract (it knows string / number / boolean), caught
+  by `wiring.test.mjs` before release; the list travels as a JSON string instead.
+- 38 suites / 599 cases.
+
 ## 0.61.1
 
 - **The Maps patch now waits for the list, and scrolls the list.** First live run returned 7 places and claimed it had

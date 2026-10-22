@@ -6183,9 +6183,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
       const browserMapsTool = browserTool(
         "browser_maps_places",
-        "Collect Google Maps search results past the first screen: scrolls the result feed until it stops growing, de-duplicates by place link, returns rows (name / rating / address / link) and optionally saves them.",
+        "Collect Google Maps search results past the first screen: scrolls the result feed until it stops growing, de-duplicates by place link, returns rows (name / rating / address / link) and optionally saves them. Give several queries to get past Google's per-search cap of roughly 90-100 places.",
         {
-          query: { type: "string", description: "Optional search text; the tool navigates to it first (e.g. 上海 咖啡店)." },
+          query: { type: "string", description: "One search, e.g. 上海 咖啡店. The tool navigates to it first." },
+          queries: { type: "string", description: "Several searches (JSON array or comma-separated), merged and de-duplicated by place link - the way to reach 200+, because one search stops at about 90." },
           limit: { type: "number", description: "Stop at this many places (default 200)." },
           save: { type: "string", description: "Where to write the rows (csv/json, same rules as browser_flow save)." },
         },
@@ -6193,29 +6194,54 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const { mod, live } = await browserEnsure();
           const { mapsPlacesExpression } = await import("./maps.js");
           const limit = Number(args.limit) || 200;
-          const query = String(args.query ?? "").trim();
-          if (query) {
+          const wanted = [];
+          if (Array.isArray(args.queries)) wanted.push(...args.queries);
+          else if (typeof args.queries === "string" && args.queries.trim()) {
+            try {
+              const parsed = JSON.parse(args.queries);
+              if (Array.isArray(parsed)) wanted.push(...parsed);
+            } catch {
+              wanted.push(...String(args.queries).split(/[,，\n]/));
+            }
+          }
+          const single = String(args.query ?? "").trim();
+          if (single) wanted.push(single);
+          const queries = [...new Set(wanted.map((entry) => String(entry).trim()).filter(Boolean))];
+          if (queries.length === 0) throw new Error("给 query（一个搜索）或 queries（多个搜索）");
+
+          // Google stops a single search at roughly 90-100 places, so "200 shops" is a merge, not a longer scroll.
+          const merged = new Map();
+          const perQuery = [];
+          for (const query of queries) {
+            if (merged.size >= limit) break;
             await mod.browserOpen(live.session, `https://www.google.com/maps/search/${encodeURIComponent(query)}`);
+            const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }));
+            const list = Array.isArray(rows) ? rows : [];
+            let added = 0;
+            for (const row of list) {
+              const key = String(row?.["链接"] ?? "").split("?")[0];
+              if (!key || merged.has(key)) continue;
+              merged.set(key, row);
+              added += 1;
+            }
+            perQuery.push({ query, found: list.length, added });
           }
-          // One async run inside the page: it scrolls and waits at page speed, instead of one command per scroll.
-          const rows = await mod.browserEvaluate(live.session, mapsPlacesExpression({ limit }));
-          const list = Array.isArray(rows) ? rows : [];
-          if (list.length === 0) {
-            return "没有读到店铺：确认当前是地图搜索结果页（有结果列表），或先给 query 让我导航过去。";
-          }
+          const all = [...merged.values()].slice(0, limit);
+          if (all.length === 0) return "没有读到店铺：确认当前是地图搜索结果页，或检查搜索词。";
           const lines = [
-            `读到 ${list.length} 家店（已按链接去重，滚动到不再增长为止）`,
-            "  字段：名称 / 评分 / 地址 / 链接",
-            `  · ${list.slice(0, 3).map((row) => String(row["名称"] ?? "")).join("，")}…`,
+            `读到 ${all.length} 家店（${queries.length} 个搜索合并，按链接去重）`,
+            ...perQuery.map((item) => `  · ${item.query}：${item.found} 家，新增 ${item.added}`),
+            `  · 示例：${all.slice(0, 3).map((row) => String(row["名称"] ?? "")).join("，")}…`,
           ];
           const target = String(args.save ?? "").trim();
           if (target) {
-            const saved = await saveFlowRows(target, list, { name: "maps" });
-            lines.push("", `已保存 ${list.length} 行到 ${saved}`);
+            const saved = await saveFlowRows(target, all, { name: "maps" });
+            lines.push("", `已保存 ${all.length} 行到 ${saved}`);
           }
           return lines.join("\n");
         },
-        180000,
+        // Several searches, each of which may scroll for up to 90 s.
+        600000,
       );
 
       const browserJsonTool = browserTool(
