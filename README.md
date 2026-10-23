@@ -435,6 +435,33 @@ Three things are deliberate:
 `desktop_screen` also reports the size of the `INPUT` struct the C# compiled, so a wrong layout (which makes
 `SendInput` silently do nothing) is visible rather than guessed at.
 
+## Clipboard / 剪贴板
+
+Two tools move things through the clipboard, which is how "我复制了一段…" becomes something the model can read, and how
+a result ends up where the next `Ctrl+V` will find it:
+
+| Tool | What it does |
+| --- | --- |
+| `clipboard_read` | the copied text (capped at 200k characters) and the file list currently on the clipboard |
+| `clipboard_write` | put `text` on the clipboard, or `paths` (comma / newline separated) as a **file-drop list** (Explorer pastes those as files) |
+
+```text
+/clipboard on|off|status     # on by default; /clip 也行
+```
+
+- **On by default, with an off switch.** A clipboard can hold a password, so `/clipboard off` is one command away and
+  both tools refuse immediately once it is set. The switch is checked in one place, before any script runs.
+- **Files win over text** when both are given: a clipboard holds one thing, and a file has no other way to be pasted.
+- **Windows goes through WinForms on an STA thread** (`powershell.exe -STA`), which is what makes `SetText`/`GetText`
+  reliable from a service-like process. macOS uses `pbcopy`/`pbpaste`, Linux `wl-copy`/`wl-paste`; a file list is
+  Windows-only and the other platforms say so instead of silently copying nothing.
+- **The protocol is base64, and that is not decoration.** The first version printed JSON straight to stdout and every
+  Chinese character came back as `?`, because `powershell.exe` writes stdout in the console codepage. Each script now
+  emits the base64 of its UTF-8 JSON and the runner decodes it - `剪贴板自检` round-trips unchanged, and a test drives the
+  fake runner with exactly that string.
+- The size cap is applied **inside** the PowerShell script, so a 20 MB clipboard never travels through stdout to then be
+  thrown away.
+
 ## Web search (Tavily) / 联网搜索
 
 A `tavily_search` tool lets a WeChat, WeCom or Feishu conversation ask about something current and get real titles,

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.69.0
+
+- **The clipboard, as two tools.** clipboard_read returns the copied text (capped at 200k characters) and the file
+  list currently on the clipboard; clipboard_write puts 	ext there, or paths as a **file-drop list** so Explorer
+  pastes actual files. On by default with an off switch (/clipboard on|off), because a clipboard can hold a password
+  and the switch is checked in one place before any script runs.
+- **The protocol is base64, and that was a real bug, not a preference.** The first version printed its JSON straight to
+  stdout and 剪贴板自检 came back as ?????? - powershell.exe writes stdout in the console codepage. Each script now
+  emits the base64 of its UTF-8 JSON and the runner decodes it; the test drives the fake runner with that exact string,
+  which is the assertion that would have caught the first version.
+- **Windows goes through WinForms on an STA thread** (-STA), the only way SetText/GetText behave from a
+  service-like process; macOS uses pbcopy/pbpaste, Linux wl-copy/wl-paste, and a file list is Windows-only with
+  the other platforms saying so instead of copying nothing.
+- The 200k cap is applied **inside** the script: a 20 MB clipboard never travels through stdout to be discarded.
+- Verified on this machine: 写 40 字符 → 读回同一串中文 and a file path round-tripped through the file-drop list.
+- 40 suites / 631 cases.
+
 ## 0.68.0
 
 - **`POST /dsh-wechat-media/inbound`: another system can speak into a conversation.** Body is `{peer, text, id?, reply?,

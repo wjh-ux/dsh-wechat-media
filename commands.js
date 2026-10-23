@@ -102,6 +102,12 @@ export const COMMANDS = [
     summary: "桌面控制开关：开/关鼠标、键盘、截图、窗口聚焦工具（默认关；这是唯一能操作你屏幕的功能）",
   },
   {
+    name: "clipboard",
+    aliases: ["clip", "剪贴板"],
+    usage: "/clipboard [on|off|status]",
+    summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
+  },
+  {
     name: "feishu",
     aliases: ["飞书", "lark"],
     usage: "/feishu [test [to]]",

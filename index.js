@@ -96,6 +96,7 @@ import { downloadWecomMedia } from "./wecom-media.js";
 import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
+import * as clipboard from "./clipboard.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -2694,6 +2695,23 @@ export function apply(ctx, config = {}) {
         await reply("🖱️ 桌面控制 → **关**。桌面工具现在一律拒绝执行，直到 /desktop on。");
       }
       noteRoute("/command", { command: "desktop", value: next, chatId });
+      return true;
+    }
+    if (command.name === "clipboard" || command.name === "clip") {
+      // On by default: a small utility, with an off switch because a clipboard can hold a password.
+      const wanted = parseSwitch(command.args);
+      const current = (await state.loadPrefs()).clipboard !== false;
+      const next = wanted ?? !current;
+      await state.savePrefs({ clipboard: next });
+      const support = clipboard.clipboardSupport();
+      if (next && !support.ok) {
+        await reply(`⚠️ 剪贴板已打开，但这台机器做不到：${support.reason}`);
+      } else if (next) {
+        await reply("📋 剪贴板 → **开**。可用：clipboard_read（读当前剪贴板里的文字/文件）、clipboard_write（把文字或文件放进剪贴板）。\n注意：读剪贴板可能读到密码这类东西，只在需要时读；关掉发 /clipboard off。");
+      } else {
+        await reply("📋 剪贴板 → **关**。clipboard_read / clipboard_write 现在一律拒绝执行，直到 /clipboard on。");
+      }
+      noteRoute("/command", { command: "clipboard", value: next, chatId });
       return true;
     }
     if (command.name === "feishu") {
@@ -7042,6 +7060,74 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       );
 
+      // ── Clipboard ───────────────────────────────────────────────────────────
+      //
+      // Reading a clipboard can hand the model a password, so the switch is checked in one place and the description
+      // says what it does. The cap lives in clipboard.js and is applied inside the script: a 20 MB clipboard must not
+      // travel through stdout to be thrown away afterwards.
+      const clipboardGate = async () => {
+        if ((await state.loadPrefs()).clipboard !== false) return;
+        throw new Error("剪贴板功能已关闭——在聊天里发 /clipboard on 开启");
+      };
+
+      const clipboardReadTool = define({
+        name: "clipboard_read",
+        description:
+          "Read this machine's clipboard: the copied text (capped) and any files currently on the clipboard. Use it when the person says \"我复制了一段…\" instead of asking them to paste it again. Sensitive: the clipboard may hold a password or a private message - read it only when the turn needs it.",
+        parameters: {
+          maxChars: { type: "number", description: `How much text to return (default ${clipboard.CLIPBOARD_MAX_CHARS}, that is also the ceiling).` },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 30000,
+        async execute(args) {
+          try {
+            await clipboardGate();
+            const answer = await clipboard.readClipboard({ maxChars: args?.maxChars });
+            noteRoute("/clipboard", { action: "read", chars: answer.chars, files: answer.files.length });
+            const parts = [];
+            if (answer.files.length) parts.push(`剪贴板上有 ${answer.files.length} 个文件：\n${answer.files.map((file) => `  · ${file}`).join("\n")}`);
+            if (answer.text) {
+              parts.push(`文字 ${answer.chars} 字符${answer.truncated ? `（已截断到 ${answer.text.length}）` : ""}：\n${answer.text}`);
+            }
+            if (!parts.length) return "剪贴板是空的（没有文字，也没有文件）";
+            return parts.join("\n\n");
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/clipboard", { action: "read", ok: false, error: reason });
+            return `clipboard_read 失败：${reason}`;
+          }
+        },
+      });
+
+      const clipboardWriteTool = define({
+        name: "clipboard_write",
+        description:
+          "Put something on this machine's clipboard so the next Ctrl+V pastes it: `text` for words, or `paths` for files (a file-drop list, which Explorer pastes as files). Files win when both are given - a clipboard holds one thing.",
+        parameters: {
+          text: { type: "string", description: "Text to copy." },
+          paths: { type: "string", description: "One or more absolute file paths to copy as a file list; separate them with commas or newlines." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 30000,
+        async execute(args) {
+          try {
+            await clipboardGate();
+            const rawPaths = String(args?.paths ?? "").split(/[,\r\n]+/);
+            const paths = rawPaths.map((value) => String(value ?? "").trim()).filter(Boolean);
+            const text = String(args?.text ?? "");
+            if (!paths.length && !text) return "没有可写的内容：给 `text` 或 `paths`";
+            const written = await clipboard.writeClipboard({ text, paths });
+            noteRoute("/clipboard", { action: "write", kind: written.kind, chars: written.chars, count: written.count });
+            if (written.kind === "files") return `已把 ${written.count} 个文件放到剪贴板（在资源管理器里 Ctrl+V 就会粘贴这些文件）`;
+            return `已把 ${written.chars} 个字符放到剪贴板`;
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/clipboard", { action: "write", ok: false, error: reason });
+            return `clipboard_write 失败：${reason}`;
+          }
+        },
+      });
+
       // ── Scheduled tasks ──────────────────────────────────────────────────────
       const taskToolError = (error) => `task_ 失败：${String(error?.message ?? error)}`;
       const taskAddTool = define({
@@ -7266,7 +7352,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -8513,6 +8599,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.desktopControl) !== null) patch.desktopControl = asBool(body.desktopControl);
           // The wizard's "skip" and "finish" both land here, so there is one answer to "is it done".
           if (asBool(body.wizardDone) !== null) patch.wizardDone = asBool(body.wizardDone);
+          // The clipboard switch: on unless explicitly turned off, so the route and /clipboard agree.
+          if (asBool(body.clipboard) !== null) patch.clipboard = asBool(body.clipboard);
           // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
           if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
           // The outbound webhook and its signing secret. An empty string turns the webhook off, which is how a person
