@@ -477,10 +477,21 @@ window.__ModuleLoader__.load({
       const [browserNotice, setBrowserNotice] = react.useState(undefined);
         const [code, setCode] = react.useState("");
 
+        /**
+         * One label, translated if the host knows the key.
+         *
+         * DSH's translator answers with the KEY when no dictionary has an entry (`lookup(...) ?? key`), and this card
+         * registers no dictionary of its own - so `translated.length > 0` was true for every miss and the fallback was
+         * never reached: 208 distinct labels rendered as raw identifiers (`browserLabel`, `officeDirHint`, ...) while the
+         * handful that happened to exist in DSH's own common dictionary looked fine. An answer identical to the key is
+         * the host saying "I do not know this one", so it has to be treated as a miss.
+         */
         const t = (key, fallback) => {
           try {
             const translated = props?.t?.(key);
-            return typeof translated === "string" && translated.length > 0 ? translated : fallback;
+            if (typeof translated !== "string") return fallback;
+            if (!translated.length || translated === key) return fallback;
+            return translated;
           } catch {
             return fallback;
           }

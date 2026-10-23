@@ -96,6 +96,31 @@ test("the card renders in both views", () => {
   assert.equal(summary?.type, "span");
 });
 
+test("a label the host cannot translate falls back to text, not to its key", () => {
+  // DSH's translator answers with the KEY when no dictionary has an entry (`lookup(...) ?? key`), and `t: (key) => key`
+  // is exactly that host. The helper used to accept any non-empty answer, so the 61 labels the card's own dictionary
+  // never defined rendered as identifiers - `browserLabel`, `tavilyLabel`, `flowExportDir` ... - which is what a person
+  // then saw in the panel. Measured by rendering with this translator and reading the text back.
+  const card = seen.slots[0].component;
+  const tree = card({ t: (key) => key, view: "page" });
+
+  const texts = [];
+  const walk = (node) => {
+    if (node === null || node === undefined || typeof node === "boolean") return;
+    if (typeof node === "string" || typeof node === "number") { texts.push(String(node)); return; }
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node === "object") { walk(node.children); walk(node.props?.children); }
+  };
+  walk(tree);
+
+  // Every raw key that used to leak is checked, not only the one somebody noticed.
+  for (const key of ["browserLabel", "tavilyLabel", "flowExportDir", "feishuOpsTitle", "guiPort", "extensionDriver"]) {
+    assert.ok(!texts.includes(key), `the panel must not render the raw key ${key}`);
+  }
+  assert.ok(texts.some((text) => text.includes("浏览器自动化")), "the browser section must render its own text");
+  assert.match(code, /translated === key/, "the helper must treat an untranslated key as a miss");
+});
+
 test("adding another account is always offered", () => {
   // Regression guard: the add button used to switch to a "pair again" label once
   // an account existed, which hid the fact that a second account can be added.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.67.2
+
+- **61 labels in the panel rendered as raw identifiers.** The card asks the host for 208 labels and registers its own
+  dictionary for 147 of them; for the rest - `browserLabel`, the whole Tavily block, the browser block, the flow-export
+  field, the GUI-port line - no dictionary has an entry, and DSH's translator then answers with **the key itself**
+  (`lookup(...) ?? key`). The helper only replaced an *empty* answer with its fallback, so the identifiers went straight
+  onto the screen: `browserLabel`, `tavilyLabel`, `browserModeHeadless`, `feishuOpsTitle`, `flowExportDir` ...
+  Measured by counting the gap: 208 keys used, 61 never defined. Fixed by treating an answer identical to the key as a
+  miss, so each call falls back to the text it was already carrying.
+- **A regression test renders the card with a translator that echoes keys** - the exact host behaviour that leaked -
+  and asserts that none of the raw keys appears in the rendered text and that the browser section shows its own words.
+- **Honest limit.** Those 61 fallbacks are Chinese, so an English UI now shows Chinese in those sections instead of
+  identifiers. Adding the English half of those keys is the remaining work; the test only guarantees no key leaks.
+- 38 suites / 595 cases.
+
 ## 0.67.1
 
 - **A GitHub install could not load at all: `files[]` was missing `modelguard.js`.** Installing with
