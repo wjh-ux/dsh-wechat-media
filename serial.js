@@ -241,8 +241,11 @@ export function resolvePort(wanted, ports = []) {
 }
 
 /** `idf.py -p COM3 -b 460800 flash` - the project's sdkconfig owns the offsets. */
-export function buildIdfArgs({ port, baud, target = "" } = {}) {
+export function buildIdfArgs({ port, baud, target = "", projectDir = "" } = {}) {
   const args = [];
+  // "-C" is how idf.py is told which project to work on; without it the flash happens in whatever directory the plugin
+  // happens to be running in, which is how "flash the open folder" silently becomes "flash nothing".
+  if (projectDir) args.push("-C", projectDir);
   if (target) args.push(`-DIDF_TARGET=${target}`);
   args.push("-p", port);
   if (baud) args.push("-b", String(baud));
@@ -303,13 +306,13 @@ export function parseMonitorOutput(stdout) {
 }
 
 /** One process run, reported as a fact: exit code, streams, timing. A timeout is an error, not a code. */
-export function runProcess(program, args, { exec = execFile, timeoutMs = FLASH_TIMEOUT_MS, env = process.env } = {}) {
+export function runProcess(program, args, { exec = execFile, timeoutMs = FLASH_TIMEOUT_MS, env = process.env, cwd } = {}) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     // Any of these flashers may be a python program (stcgal, esptool); without this, a Chinese Windows console turns
     // their bytes into mojibake before the output ever reaches the transcript.
     const childEnv = { ...env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
-    exec(program, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: childEnv }, (error, out, err) => {
+    exec(program, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: childEnv, ...(cwd ? { cwd } : {}) }, (error, out, err) => {
       if (error && error.killed) {
         reject(new Error(`超时（${Math.round(timeoutMs / 1000)}s）——烧录没有在预期时间内结束`));
         return;
@@ -335,6 +338,7 @@ export async function flashFirmware({
   offset = "0x0",
   chip = "",
   erase = false,
+  projectDir = "",
   exec = execFile,
   env = process.env,
   exists = existsSync,
@@ -353,7 +357,7 @@ export async function flashFirmware({
   }
   if (kind === "idf" || (kind === "auto" && support.idf?.idfPy)) {
     if (!support.idf?.idfPy) throw new Error("没有找到 ESP-IDF 的 idf.py");
-    const args = [support.idf.idfPy, ...buildIdfArgs({ port, baud, target: chip })];
+    const args = [support.idf.idfPy, ...buildIdfArgs({ port, baud, target: chip, projectDir })];
     // idf.py needs cmake, ninja and the toolchain on PATH; ESP-IDF's own export script is what puts them there, so the
     // flash runs inside one PowerShell session that sources it. Measured: calling idf.py directly fails with
     // "'cmake' must be available on the PATH", which reads like a broken install rather than a missing environment.
@@ -364,6 +368,7 @@ export async function flashFirmware({
       exec,
       timeoutMs,
       env: { ...env, IDF_PATH: support.idf.framework },
+      cwd: projectDir || undefined,
     });
     return { tool: "idf", program: "powershell.exe", args: ["-Command", command], ...result };
   }

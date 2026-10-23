@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.71.5
+
+- **`projectDir` reached the tool's schema but not `idf.py`.** The parameter was documented and passed by
+  `serial_flash`, and `flashFirmware` silently dropped it, so the flash ran in the plugin's own working directory - which
+  is why "flash the folder I have open in VS Code" would have failed with "not an ESP-IDF project" even with a board
+  plugged in. `buildIdfArgs` now emits `-C <projectDir>`, the child process runs in that directory as well, and a test
+  pins the exact argv (including the case where no project is given, which must stay `-p COMx flash`).
+- **Validated without a board**: `hello_world` from ESP-IDF 4.4.8 was built through the *same* wrapper the plugin uses
+  (`export.ps1` -> the env's python -> `idf.py -C <project> build`), which is the part that used to fail with
+  `'cmake' must be available on the PATH`. The flash step itself needs the board; everything up to producing an image does
+  not.
+- 42 suites / 665 cases.
+
 ## 0.71.4
 
 README only - the page now describes what the plugin actually does after the serial work:

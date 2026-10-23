@@ -129,6 +129,19 @@ await test("auto prefers idf.py on an ESP-IDF machine and runs it through export
   assert.equal(calls[0].options.env.IDF_PATH, support.idf.framework);
 });
 
+await test("idf.py is told which project: -C, or the flash happens in the wrong directory", () => {
+  // This was a real bug: the tool documented and passed projectDir, flashFirmware dropped it, and idf.py then ran in the
+  // plugin's own cwd - which is how "flash the folder I have open" becomes "flash nothing".
+  const args = serial.buildIdfArgs({ port: "COM5", projectDir: "E:\\proj\\hello" });
+  assert.deepEqual(args.slice(0, 2), ["-C", "E:\\proj\\hello"]);
+  assert.ok(args.includes("flash"));
+  assert.deepEqual(serial.buildIdfArgs({ port: "COM5" }), ["-p", "COM5", "flash"], "without a project it stays out");
+  assert.deepEqual(
+    serial.buildIdfArgs({ port: "COM5", projectDir: "p", target: "esp32s3", baud: 460800 }),
+    ["-C", "p", "-DIDF_TARGET=esp32s3", "-p", "COM5", "-b", "460800", "flash"],
+  );
+});
+
 await test("an STC board goes through stcgal, with DTR reset and the protocol passed as chip", async () => {
   const calls = [];
   const exec = (program, args, options, callback) => {
