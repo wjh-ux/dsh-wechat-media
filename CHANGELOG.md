@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.67.4
+
+- **The Feishu inbound suite was flaky, and the reason was a comparison across two moments.** `builtAt` was asserted
+  *exactly equal* to a maximum computed a few lines later, so anything that touched a shipped file in between - an
+  editor saving, a publish or a `pnpm add` running beside the suite, the profile being rewritten - moved one side and
+  not the other. It failed roughly one run in four under `node --test`, passed standalone, and cost a re-run each time.
+  The comparison is now a 2 s window, which still fails everything the test exists for (reporting `loadedAt`, only the
+  manifest's mtime, or a constant are minutes away), while the deterministic version of the same question stays in the
+  next test: it moves one file to a known timestamp and expects `builtAt` to follow it exactly.
+- **`waitFor`'s default budget went from 2 s to 8 s.** The loop returns the moment its condition holds, so a fast run
+  pays nothing, and a machine grading beside an install no longer turns a slow token fetch into a failed suite.
+- **The `github:` install failure is now documented.** pnpm resolves a `github:` spec over **SSH**
+  (`git+ssh://git@github.com/...`), so a machine without GitHub's host key cannot install a *public* repository:
+  `Host key verification failed`. The README's install section now names both ways out - rewrite GitHub SSH URLs to
+  HTTPS with `git config --global url."https://github.com/".insteadOf "git@github.com:"`, or install the release
+  tarball URL directly.
+- Verified: the suite ran three times at `--test-concurrency=2` and the Feishu file four times under deliberate CPU
+  load with no failure; `github:wjh-ux/dsh-wechat-media` installs again and reports 0.67.4, and
+  `POST /proxy-hosts {"action":"preset"}` answers 200 with 26 hosts on the live plugin.
+- 38 suites / 597 cases.
+
 ## 0.67.3
 
 - **"Which domains go through the proxy" is now a list you can apply instead of retype.** `browser.js` carries

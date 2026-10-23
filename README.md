@@ -42,6 +42,22 @@ Restart `dsh`, then open **Plugins → `dsh-wechat-media`** and press **Add an a
 
 重启 dsh，然后在 **插件 → `dsh-wechat-media`** 点「**添加账号（扫码）**」。
 
+**`Host key verification failed` / `Could not read from remote repository` on install.** pnpm resolves a `github:` spec
+over **SSH** (`git+ssh://git@github.com/...`), so a machine without GitHub's host key in `known_hosts` — and without an
+SSH key that can read the repo — cannot install it, even though the repository is public. Two ways out:
+
+```sh
+# 1. make git rewrite GitHub SSH URLs to HTTPS (no SSH key needed; the repo is public)
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+# 2. or install a release tarball instead of the shorthand
+dsh plugin --profile web add https://codeload.github.com/wjh-ux/dsh-wechat-media/tar.gz/refs/tags/v0.67.3
+```
+
+装不上、报 `Host key verification failed`？因为 pnpm 把 `github:` 解析成 **SSH** 地址，而这台机器既没有 GitHub 的主机密钥
+也没有能读这个仓库的 SSH key —— 仓库其实是公开的。两条路：把 GitHub 的 SSH 地址重写成 HTTPS（上面第 1 条），或者直接装
+release 的 tarball（第 2 条，把版本号换成你要的那一版）。
+
 ## Pairing / 配对
 
 1. The card shows a QR code (it polls its own status and refreshes an expired code automatically).
