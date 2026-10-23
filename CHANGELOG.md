@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.71.4
+
+README only - the page now describes what the plugin actually does after the serial work:
+
+- the capability table names **SSH** and **serial flashing**, and the editor row says the board can be flashed from the
+  VS Code panel (the turn runs in the open folder, which is where `idf.py` finds the project);
+- the serial section carries the **measured** session instead of generic advice (CH340 on COM3, `TEMP:28.1C`, a real
+  `DS18B20_TM1650.hex` flash with `Target UID: F734C3FC31F408`), and says why three fixes came out of testing on hardware
+  rather than out of reading the docs;
+- the STC note explains the `-A dtr` cold start (no unplugging) and that stcgal is found on PATH **or** inside any ESP-IDF
+  python env;
+- a short recipe box: "COM3 上插的是什么板子？" / "把这个项目烧到 COM3" / "读 10 秒串口";
+- the `/serial` row in the command table now mentions the status output;
+- a new **Flashing from the editor** subsection next to the VS Code bridge.
+
 ## 0.71.3
 
 - **A flasher's report no longer ends in a mojibake progress bar.** stcgal's tqdm bar is written with carriage returns, and

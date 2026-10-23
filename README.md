@@ -20,8 +20,8 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 | Multiple accounts | Pair a spare account and your main account; each keeps its own token, cursor and session map. |
 | WeCom (企业微信) | Group-robot webhook, a self-built app, or the intelligent-robot **long connection** (receiving without a public address); streaming previews work on this channel. |
 | Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools. |
-| Editor bridge | A VS Code extension: ask from the panel, stream the answer, and let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch). |
-| Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, web search, scheduled tasks, and an RPA-style flow runner. |
+| Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
+| Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
 
@@ -513,7 +513,9 @@ reimplementing a bootloader protocol, because that is how a tool ends up brickin
 | `serial_monitor` | read what the board prints for N seconds (default 8) and return it |
 
 An **STC (8051)** board uses `flasher=stcgal`: STC speaks its own ISP protocol, so `esptool` cannot touch it. Pass
-`chip=stc8g` (or leave it `auto`); `stcgal` DTR-resets the MCU, so no unplugging is needed. AVR boards use
+`chip=stc8g` (or leave it `auto`); `stcgal` passes `-A dtr`, which cold-starts the MCU over DTR - measured on an STC8H1K08,
+it handshakes without unplugging the board. `stcgal` is found on PATH **or** inside any ESP-IDF python env, because that is
+where `pip install stcgal` puts it on a machine that already has ESP-IDF. AVR boards use
 `flasher=avrdude`, and an ESP-IDF project uses `flasher=idf` - which runs inside `export.ps1`, because `idf.py` cannot see
 cmake otherwise.
 
@@ -527,6 +529,15 @@ cmake otherwise.
 Then, from the **VS Code panel** with the project open: *"把这个项目烧到 COM3"* - the turn runs in the open folder, so
 `serial_flash` with `flasher=idf` and `projectDir` set to that folder flashes the project's own build.
 
+From the **VS Code panel**, with the project open:
+
+```text
+COM3 上插的是什么板子？                 -> serial_ports
+把这个项目烧到 COM3                     -> serial_flash (flasher=idf, projectDir = the open folder)
+把 Objects\app.hex 烧到 COM3           -> serial_flash (flasher=stcgal / avrdude, by file type)
+读 10 秒串口看看它在打印什么              -> serial_monitor
+```
+
 Four rules, each because the alternative is silent damage:
 
 - **Off until `/serial on`** - writing a board's flash is not a default-on capability.
@@ -535,6 +546,8 @@ Four rules, each because the alternative is silent damage:
 - **The exact command is echoed** with every result, so a failed flash can be repeated by hand instead of guessed at.
 - **One owner per port**: the monitor opens the port exclusively, so a flash and a monitor cannot overlap - the second
   one fails with a reason rather than stealing the port mid-flash.
+
+A board answers on real hardware, and that is where the interesting bugs were. On an STC8H1K08 behind a CH340, `serial_ports` reported `COM3 — USB-SERIAL CH340 (COM3)`; `serial_monitor` read `TEMP:28.1C` twice a second; `serial_flash` wrote `DS18B20_TM1650.hex` (3129 bytes, `Target UID: F734C3FC31F408`) and the board printed `TEMP:27.6C` straight afterwards. Three fixes came out of that test rather than out of reading the docs: `/prefs` dropped the `serial` block silently, `idf.py` could not see cmake without `export.ps1`, and stcgal's tqdm bar arrived as mojibake and hid the verdict.
 
 The flasher's verdict lives in its last lines ("Hash of data verified", "avrdude done"), so output is *tailed* rather
 than capped from the start. Discovery is real: on this machine it found `D:\Espressif\frameworks\esp-idf-v4.4.8` with
@@ -661,6 +674,13 @@ DSH restart. Install: Extensions → `...` → **Install from VSIX** (`dsh-wecha
 `code --install-extension vscode-extension/`. The extension's own version is what VS Code uses to decide whether to
 replace it - a frozen version makes an install a no-op that still prints "successfully installed".
 
+### Flashing from the editor / 在编辑器里烧板子
+
+The editor bridge sends the folder you have open as the turn's working directory, which is exactly what a flash needs:
+`idf.py` finds the project's `sdkconfig` (and therefore the offsets, flash size and partition table), and a plain
+`.hex`/`.bin` is resolved relative to that folder. So "烧一下" from the panel is one sentence, not a terminal session
+with the right environment - and the answer comes back in the same panel, with the exact command that ran.
+
 ### Flow automation / 流程自动化（影刀式）
 
 `browser_flow` is the RPA part: a task is written **once** as JSON, and replayed on demand - open, search, click,
@@ -736,7 +756,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
-| `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`. **Off by default** - flashing writes a board's flash. |
+| `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and with no argument it reports the switch, the toolchain it found and the ports that are plugged in. **Off by default** - flashing writes a board's flash. |
 | `/ssh` | `/远程` | Arms or disarms the SSH tools and manages the host list: `/ssh on|off`, `/ssh add <name> <user@host[:port]> [identity]`, `/ssh remove <name>`. **Off by default** - these run commands on other machines. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
