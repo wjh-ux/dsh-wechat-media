@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.69.1
+
+- **The README now describes the whole plugin, not only the WeChat half.** The capability table gained WeCom, Feishu, the
+  VS Code editor bridge, the automation tools (browser / Office / desktop / **clipboard** / search / tasks / flows) and
+  the integrations (inbound trigger, outbound webhook, dashboard); the command table gained /desktop and
+  /clipboard, which were documented in their own sections but missing from the list a person scans for commands.
+- Docs only: no behaviour change, and the release exists so the published README matches what the code does.
+- 40 suites / 631 cases.
+
 ## 0.69.0
 
 - **The clipboard, as two tools.** clipboard_read returns the copied text (capped at 200k characters) and the file

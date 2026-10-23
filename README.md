@@ -14,10 +14,15 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 | Capability | Detail |
 |---|---|
 | QR pairing | Cards in the Plugins panel. The login token is stored under `$DSH_HOME`, so **restarting dsh does not need a new scan**; re-pairing is one click. |
-| One conversation per chat | Every WeChat contact (and group) gets its own DSH session with its own context, created or resumed automatically. |
+| One conversation per chat | Every WeChat contact (and group) gets its own DSH session with its own context, created or resumed automatically. The same holds for a WeCom or Feishu chat. |
 | Text both ways | Your message becomes a turn; the answer is chunked back to WeChat. |
 | Media both ways | Images, video, documents and archives. Inbound files are downloaded and decrypted to `$DSH_HOME/wechat-inbox/<date>/<chat>/`; the agent gets the path, so a text model can read images through `read_image`. Outbound files are uploaded and sent by the agent through its tools. |
 | Multiple accounts | Pair a spare account and your main account; each keeps its own token, cursor and session map. |
+| WeCom (企业微信) | Group-robot webhook, a self-built app, or the intelligent-robot **long connection** (receiving without a public address); streaming previews work on this channel. |
+| Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools. |
+| Editor bridge | A VS Code extension: ask from the panel, stream the answer, and let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch). |
+| Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, web search, scheduled tasks, and an RPA-style flow runner. |
+| Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
 
 ## Requirements / 环境要求
@@ -656,6 +661,8 @@ through (a blocked chat cannot run commands either).
 | `/feishu` | `/飞书` `/lark` | Reports the Feishu channels that are configured (**never the secret itself** - only whether one is set), and `/feishu test [id] [type]` sends a self-test through the available channel. |
 | `/retry` | `/重试` | Retries a turn **once** when it fails in the transport (a timeout, a reset connection, a rate limit, a 5xx). A deterministic failure is never retried - that would only spend a second call to fail the same way. On by default, and the same switch is a checkbox in the Web UI panel. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
+| `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
+| `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
 Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an
