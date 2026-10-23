@@ -98,6 +98,29 @@ test("every relative import resolves", () => {
   }
 });
 
+test("every module a published module imports is published too", () => {
+  // `files[]` is a whitelist: a module that is imported but not listed still works in a checkout and is missing from
+  // every installed copy. Measured from a real `dsh plugin add github:` install: importing `index.js` died on
+  // `Cannot find module .../modelguard.js`, because `modelguard.js` was never added to the list when it was written.
+  const published = new Set(pkg.files.map((file) => file.replace(/\\/g, "/")));
+  for (const source of hostModules()) {
+    const text = readFileSync(join(root, source), "utf8");
+    for (const match of text.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const target = join(dirname(source), match[1]).replace(/\\/g, "/");
+      assert.ok(
+        published.has(target),
+        `${source} imports ${target}, which is missing from package.json files[]`,
+      );
+    }
+  }
+  // The SILK encoder is loaded by path at runtime rather than imported by name, so it needs its own line: a missing
+  // wasm makes every voice message silently unsendable in an installed copy.
+  for (const asset of ["vendor/silk-wasm/index.mjs", "vendor/silk-wasm/silk.wasm"]) {
+    assert.ok(published.has(asset), `${asset} must be listed in package.json files[]`);
+    assert.ok(existsSync(join(root, asset)), `${asset} must exist on disk`);
+  }
+});
+
 test("the host half never statically imports a harness package", () => {
   // A link-installed plugin cannot resolve @deepseek-ai/* from its own directory,
   // so those must go through the loader at runtime instead.

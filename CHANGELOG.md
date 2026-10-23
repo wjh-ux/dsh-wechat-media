@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.67.1
+
+- **A GitHub install could not load at all: `files[]` was missing `modelguard.js`.** Installing with
+  `dsh plugin --profile desktop add github:wjh-ux/dsh-wechat-media` fetched a tarball whose whitelist did not include
+  the module `index.js` imports on its second line, so importing the package died with
+  `Cannot find module .../modelguard.js` and the plugin never mounted - the panel, the routes and every tool were
+  simply absent, with nothing on screen saying why. Found by importing the installed copy directly instead of trusting
+  "install succeeded": the same command that printed `+ dsh-wechat-media` left a package that cannot be imported.
+  A link-installed checkout never shows this, because the whole directory is there - which is why every earlier release
+  passed its tests and still shipped broken.
+- **`vendor/silk-wasm/{index.mjs,silk.wasm,LICENSE,README.md}` had the same problem**: the SILK encoder is loaded by
+  path at runtime, so a missing wasm makes every voice message silently unsendable in an installed copy. Published now.
+- **A test so this cannot come back.** `test/package.test.mjs` walks every published module's relative imports and
+  fails when a target is not in `files[]`, and asserts the SILK assets are both listed and present. It is written
+  against the manifest rather than a fixed list, so a new module that forgets the whitelist fails here instead of in
+  somebody's install.
+- Verified by packing (`dsh-wechat-media-0.67.1.tgz`, 49 files) and importing the extracted copy: `import ok`,
+  `apply` is a function. 38 suites / 594 cases.
+
 ## 0.67.0
 
 - **The editor's AI now edits the project it was opened on.** A panel request carries the folder (`cwd`) and a *可写*
