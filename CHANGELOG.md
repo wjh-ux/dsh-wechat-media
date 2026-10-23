@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.70.1
+
+- **`/ssh` answered "未知命令" even though the dispatcher handled it.** `parseCommand` resolves a name through the
+  catalogue, and anything it cannot find is marked unknown - the dispatcher returns right there, so the branch below it
+  was unreachable code and the help list did not mention the command either. The catalogue now has `ssh` (aliases
+  `/远程`), and a test walks every `command.name === "…"` branch in `index.js` and fails if the catalogue does not list
+  it. That test immediately found a second one: `/clip` was matched in a branch although it is already an alias that
+  arrives as `clipboard`; the dead half is gone.
+- **The Web UI card now carries both switches.** Under the desktop switch there is the clipboard checkbox (on by
+  default, same preference as `/clipboard`) and the SSH switch with its host list: each saved host is shown with a
+  remove button, and a field plus **Add host** writes the same validated `prefs.ssh` block the `/ssh add` command writes.
+  Labels are in both languages, and there is deliberately no password field - key-based auth only.
+- **The help text was losing its backticks.** `/clipboard`'s summary listed `clipboardread` and `clipboardwrite`,
+  because `/help` strips markdown and the tool names were written in backticks. The summary no longer uses them, and a
+  test keeps `summary` strings free of backticks.
+- 41 suites / 647 cases.
+
 ## 0.70.0
 
 - **Three SSH tools.** `ssh_exec` runs one command on another machine and returns exit code, stdout, stderr and timing;

@@ -697,6 +697,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/ssh` | `/远程` | Arms or disarms the SSH tools and manages the host list: `/ssh on|off`, `/ssh add <name> <user@host[:port]> [identity]`, `/ssh remove <name>`. **Off by default** - these run commands on other machines. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 
 Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an

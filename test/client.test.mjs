@@ -268,5 +268,20 @@ test("the text menu is on the card, in both languages, wired to the host", () =>
   const host = readFileSync(join(here, "..", "index.js"), "utf8");
   assert.match(host, /command\.name === "format"/, "the /format command must be handled");
 });
+test("the clipboard and SSH switches are on the card, in both languages, wired to the host", () => {
+  // Both are switches over a stored preference, so the card must (a) render them, (b) name them in both dictionaries and
+  // (c) go through the same /prefs route the chat commands use - never keep a second copy of the truth.
+  for (const key of ["clipboard", "ssh", "sshAdd", "sshRemove", "sshPlaceholder"]) {
+    const occurrences = code.split(`${key}: "`).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  assert.match(code, /async function setClipboard[\s\S]{0,260}api\("\/prefs"/, "the clipboard switch saves through /prefs");
+  assert.match(code, /body: \{ ssh: next \}/, "the SSH block is saved whole, so the host route can validate it");
+  assert.match(code, /t\("clipboard"/, "the clipboard checkbox is labelled through the translator");
+  assert.match(code, /t\("ssh"/, "so is the SSH switch");
+  assert.match(code, /removeSshHost\(/, "a saved host can be removed from the card");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
+

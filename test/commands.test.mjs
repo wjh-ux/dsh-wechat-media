@@ -5,6 +5,11 @@
  * Run: node test/commands.test.mjs
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
 
@@ -233,5 +238,20 @@ test("an unauthenticated bot is reported, with the reason when there is one", ()
   assert.match(text, /未连接（853000: invalid BotID）/);
 });
 
+test("every command the dispatcher handles is in the catalogue", () => {
+  // This is the bug that shipped: index.js answered `/ssh`, but commands.js did not list it, and `parseCommand` marks
+  // anything unlisted as unknown - so the branch was unreachable and the person got "未知命令 /ssh" with a list that did
+  // not mention it either. A branch without a catalogue entry is dead code with a misleading error message.
+  const source = readFileSync(path.join(here, "..", "index.js"), "utf8");
+  const handled = [...source.matchAll(/command\.name === "([a-z0-9]+)"/g)].map((match) => match[1]);
+  const catalogue = [...readFileSync(path.join(here, "..", "commands.js"), "utf8")
+    .matchAll(/name: "([a-z0-9]+)"/g)].map((match) => match[1]);
+  assert.ok(handled.length > 10, "sanity: the dispatcher was found");
+  for (const name of new Set(handled)) {
+    assert.ok(catalogue.includes(name), `/${name} is handled but missing from the command catalogue`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
+

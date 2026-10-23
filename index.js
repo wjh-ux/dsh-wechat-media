@@ -2698,7 +2698,9 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "desktop", value: next, chatId });
       return true;
     }
-    if (command.name === "clipboard" || command.name === "clip") {
+    if (command.name === "clipboard") {
+      // `clip` is an alias in the catalogue, so it arrives here already named `clipboard`; matching it again would be a
+      // branch that can never run - and a test now says so.
       // On by default: a small utility, with an off switch because a clipboard can hold a password.
       const wanted = parseSwitch(command.args);
       const current = (await state.loadPrefs()).clipboard !== false;

@@ -108,6 +108,12 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "ssh",
+    aliases: ["远程"],
+    usage: "/ssh [list|on|off] · /ssh add <名字> <user@host[:port]> [identity] · /ssh remove <名字>",
+    summary: "SSH 开关与主机列表：ssh_exec 执行命令、ssh_upload / ssh_download 传文件（默认关；只用密钥登录，密码不保存）",
+  },
+  {
     name: "feishu",
     aliases: ["飞书", "lark"],
     usage: "/feishu [test [to]]",

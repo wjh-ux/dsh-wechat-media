@@ -162,6 +162,11 @@ window.__ModuleLoader__.load({
           officeConvert: "PDF",
           officeDir: "Save to",
           officeDirHint: "absolute folder; empty = the bridge's own directory",
+          clipboard: "Let the agent read and write this machine's clipboard",
+          ssh: "Let the agent run commands on your SSH hosts (key-based only)",
+          sshAdd: "Add host",
+          sshRemove: "Remove",
+          sshPlaceholder: "name user@host[:port] [identity file]",
           officeDirSet: "using the folder above",
           officeDirDefault: "default: the bridge's own directory",
           officeHint: "relative paths from the four office tools land here",
@@ -320,6 +325,11 @@ window.__ModuleLoader__.load({
           officeConvert: "转 PDF",
           officeDir: "保存到",
           officeDirHint: "绝对路径；留空 = 桥接进程自己的目录",
+          clipboard: "允许 agent 读写这台机器的剪贴板",
+          ssh: "允许 agent 在你的 SSH 主机上执行命令（仅密钥登录）",
+          sshAdd: "添加主机",
+          sshRemove: "删除",
+          sshPlaceholder: "名字 user@host[:port] [identity 文件]",
           officeDirSet: "使用上面的目录",
           officeDirDefault: "默认：桥接进程自己的目录",
           officeHint: "四个 office 工具的相对路径都落在这里",
@@ -463,6 +473,8 @@ window.__ModuleLoader__.load({
         // normal path; this is for "I am already looking at the list".
         // undefined = "not edited yet", so the field follows /state until somebody types in it.
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
+        // The SSH host draft: "name user@host[:port] [identity]". Empty until somebody types one.
+        const [sshDraft, setSshDraft] = react.useState("");
         // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
         const [wizardStep, setWizardStep] = react.useState(0);
         // The result of the wizard's test message: undefined = not tried yet.
@@ -773,6 +785,63 @@ window.__ModuleLoader__.load({
           } finally {
             setBusy(false);
           }
+        }
+
+        /** The clipboard switch: the same preference `/clipboard on` writes, on by default. */
+        async function setClipboard(clipboard) {
+          setBusy(true);
+          try {
+            await api("/prefs", { method: "POST", body: { clipboard } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
+         * Save the whole SSH block. The switch and the host list are one validated object on the host side, so a
+         * half-written list cannot land in prefs: the route refuses it and the card shows why.
+         */
+        async function saveSsh(next) {
+          setBusy(true);
+          try {
+            await api("/prefs", { method: "POST", body: { ssh: next } });
+            setSshDraft("");
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function setSshEnabled(enabled) {
+          const current = snapshot?.prefs?.ssh ?? { hosts: [] };
+          await saveSsh({ enabled, hosts: Array.isArray(current.hosts) ? current.hosts : [] });
+        }
+
+        async function addSshHost() {
+          const draft = String(sshDraft ?? "").trim();
+          if (!draft) return;
+          const [name, spec, identity = ""] = draft.split(/\s+/);
+          if (!name || !spec) {
+            setError("格式：名字 user@host[:port] [identity 文件]");
+            return;
+          }
+          const current = snapshot?.prefs?.ssh ?? { hosts: [] };
+          const hosts = (Array.isArray(current.hosts) ? current.hosts : []).filter((host) => host.name !== name);
+          hosts.push({ name, host: spec, ...(identity ? { identity } : {}) });
+          await saveSsh({ enabled: Boolean(current.enabled), hosts });
+        }
+
+        async function removeSshHost(name) {
+          const current = snapshot?.prefs?.ssh ?? { hosts: [] };
+          await saveSsh({
+            enabled: Boolean(current.enabled),
+            hosts: (Array.isArray(current.hosts) ? current.hosts : []).filter((host) => host.name !== name),
+          });
         }
 
         /**
@@ -1465,6 +1534,52 @@ window.__ModuleLoader__.load({
                 (snapshot?.desktop?.supported === false
                   ? `（${t("desktopUnsupported", "not available on this platform")}：${snapshot.desktop.reason ?? ""}）`
                   : ""),
+            ]),
+            // The clipboard: on unless turned off, because a clipboard can hold a password. Same preference as
+            // `/clipboard off`, read from the host rather than kept here.
+            h("label", { key: "cb", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: snapshot?.prefs?.clipboard !== false,
+                disabled: busy,
+                onChange: (event) => setClipboard(event.target.checked),
+              }),
+              " " + t("clipboard", "Let the agent read and write this machine's clipboard"),
+            ]),
+            // SSH: one switch plus the host list, all in the same validated prefs block `/ssh` writes. There is
+            // deliberately no password field: key-based auth only.
+            h("label", { key: "ss", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: Boolean(snapshot?.prefs?.ssh?.enabled),
+                disabled: busy,
+                onChange: (event) => setSshEnabled(event.target.checked),
+              }),
+              " " + t("ssh", "Let the agent run commands on your SSH hosts (key-based only)"),
+            ]),
+            ...(Array.isArray(snapshot?.prefs?.ssh?.hosts) ? snapshot.prefs.ssh.hosts : []).map((host) =>
+              h("div", { key: `sshhost-${host.name}`, className: "dswxMeta" }, [
+                `  · ${host.name} → ${host.user ? host.user + "@" : ""}${host.host}:${host.port} `,
+                h("button", {
+                  key: "rm",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => removeSshHost(host.name),
+                }, t("sshRemove", "Remove")),
+              ])),
+            h("div", { key: "sshadd", className: "dswxRow" }, [
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("sshPlaceholder", "name user@host[:port] [identity file]"),
+                value: sshDraft,
+                disabled: busy,
+                onChange: (event) => setSshDraft(event.target.value),
+              }),
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addSshHost }, t("sshAdd", "Add host")),
             ]),
             ]),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
