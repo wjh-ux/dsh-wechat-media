@@ -9,7 +9,7 @@ const {
   browserClick, browserType, browserScreenshot,
   BROWSER_MODES, BROWSER_MODE_NAMES, browserModeSettings,
   browserCloseBrowser, parseProxyAddress, proxyListening, browserArgsMatch,
-  normalizeProxyPattern, normalizeProxyPatterns, hostMatchesPattern, buildPacScript,
+  normalizeProxyPattern, normalizeProxyPatterns, hostMatchesPattern, buildPacScript, COMMON_PROXY_HOSTS,
 } = await import("../browser.js");
 
 const passed = [];
@@ -506,6 +506,34 @@ await test("the PAC script routes the listed hosts and leaves the rest direct", 
   assert.throws(() => buildPacScript({ patterns: ["a.com"], proxy: "" }), /需要一个代理地址/);
   // An empty list is a valid (if pointless) PAC: everything direct.
   assert.match(buildPacScript({ patterns: [], proxy: "127.0.0.1:7897" }), /var patterns = \[\]/);
+});
+
+await test("the documented preset is a real list the PAC can use", async () => {
+  // `COMMON_PROXY_HOSTS` is the answer to "which domains should go through the proxy" - it is applied by
+  // `/browser hosts preset` and by `POST /proxy-hosts {"action":"preset"}`, so it has to survive the same
+  // normalisation a hand-typed list does, without duplicates and without an entry that becomes a no-op.
+  assert.ok(Array.isArray(COMMON_PROXY_HOSTS) && COMMON_PROXY_HOSTS.length >= 20, "the preset must exist and be worth applying");
+  const normalized = normalizeProxyPatterns([...COMMON_PROXY_HOSTS]);
+  assert.deepEqual(normalized, [...COMMON_PROXY_HOSTS], "already normalised and duplicate-free");
+  for (const host of COMMON_PROXY_HOSTS) {
+    assert.match(host, /^[a-z0-9.-]+$/, `${host} must be a bare host so a subdomain rule covers its subdomains`);
+  }
+  // The groups a person would notice missing, one probe each.
+  for (const probe of ["google.com", "github.com", "youtube.com", "x.com", "wikipedia.org"]) {
+    assert.ok(COMMON_PROXY_HOSTS.includes(probe), `the preset must cover ${probe}`);
+    assert.equal(hostMatchesPattern(`www.${probe}`, probe), true, `${probe} must also cover its subdomains`);
+  }
+  const pac = buildPacScript({ patterns: normalized, proxy: "127.0.0.1:7897" });
+  assert.match(pac, /return "PROXY 127\.0\.0\.1:7897"/);
+  assert.match(pac, /"google\.com"/, "the script carries the list, not a summary of it");
+
+  // Both entry points have to offer it, or the documented command does nothing.
+  const { readFileSync } = await import("node:fs");
+  const host = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(host, /COMMON_PROXY_HOSTS/, "the host imports the preset");
+  assert.match(host, /action === "preset"\) list = normalizeProxyPatterns\(COMMON_PROXY_HOSTS\)/, "the chat command applies it");
+  assert.match(host, /action === "preset"/, "the route applies it");
+  assert.match(host, /\/browser hosts preset/, "and the help text names it");
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);

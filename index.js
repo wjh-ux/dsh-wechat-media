@@ -30,7 +30,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // Pure helpers, imported statically: `browserConfig()` is synchronous, and the rest of browser.js is loaded
 // lazily because it spawns processes. Same bug class as v0.38.1 - used must mean imported.
-import { BROWSER_MODE_NAMES, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
+import { BROWSER_MODE_NAMES, COMMON_PROXY_HOSTS, browserModeSettings, buildPacScript, normalizeProxyPatterns, parseProxyAddress, proxyListening } from "./browser.js";
 import { expandHome, resolveExportPath, pickPath, flattenRows, biggestObjectArray } from "./flow.js";
 import { importChromeProfile } from "./profile.js";
 import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "./extension.js";
@@ -1948,13 +1948,14 @@ export function apply(ctx, config = {}) {
         const rest = String(command.args ?? "").trim().replace(/^hosts?\s*/, "").trim();
         const [action = "list", ...values] = rest.split(/\s+/).filter(Boolean);
         let list = await proxyHosts();
-        if (["add", "remove", "set", "clear"].includes(action)) {
+        if (["add", "remove", "set", "clear", "preset"].includes(action)) {
           try {
             if (action === "add") list = normalizeProxyPatterns([...list, ...values]);
             else if (action === "remove") {
               const gone = normalizeProxyPatterns(values);
               list = list.filter((entry) => !gone.includes(entry));
             } else if (action === "set") list = normalizeProxyPatterns(values);
+            else if (action === "preset") list = normalizeProxyPatterns(COMMON_PROXY_HOSTS);
             else list = [];
           } catch (error) {
             await reply(String(error?.message ?? error));
@@ -1979,6 +1980,7 @@ export function apply(ctx, config = {}) {
           ...(list.length ? list.map((entry) => `  · ${entry}`) : []),
           "",
           "增删：/browser hosts add x.com · remove x.com · set a.com b.com · clear",
+          "预设：/browser hosts preset（常用被墙域名，会替换当前列表）",
         ].join("\n"));
         return true;
       }
@@ -7494,10 +7496,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               list = list.filter((entry) => !wanted.includes(entry));
             } else if (action === "set") {
               list = normalizeProxyPatterns(String(body.hosts ?? "").split(/[\s,]+/).filter(Boolean));
+            } else if (action === "preset") {
+              // The documented starting list, so "which domains should go through the proxy" has an answer that is one
+              // call away instead of something each person retypes from a README.
+              list = normalizeProxyPatterns(COMMON_PROXY_HOSTS);
             } else if (action === "clear") {
               list = [];
             } else if (action !== "list") {
-              return json(res, 400, { ok: false, error: `未知 action：${action}（list / add / remove / set / clear）` });
+              return json(res, 400, { ok: false, error: `未知 action：${action}（list / add / remove / set / clear / preset）` });
             }
             if (action !== "list") {
               await state.saveProxyHosts(list);

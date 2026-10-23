@@ -132,13 +132,29 @@ test("the host half never statically imports a harness package", () => {
   }
 });
 
-test("the cookbook ships and the README links to it", () => {
+test("every document ships and the README links to it", () => {
   // A document that is not in files[] never reaches an installed copy, and one nobody
   // links to is never found - both are silent losses, so both are checked here.
-  const doc = "docs/build-a-knowledge-base.md";
-  assert.ok(pkg.files.includes(doc), `${doc} must be listed in package.json files[]`);
   const readme = readFileSync(join(root, "README.md"), "utf8");
-  assert.ok(readme.includes(`./${doc}`), `README.md must link to ./${doc}`);
+  for (const doc of ["docs/build-a-knowledge-base.md", "docs/proxy-and-domains.md"]) {
+    assert.ok(pkg.files.includes(doc), `${doc} must be listed in package.json files[]`);
+    assert.ok(existsSync(join(root, doc)), `${doc} must exist on disk`);
+    assert.ok(readme.includes(`./${doc}`), `README.md must link to ./${doc}`);
+  }
+});
+
+test("the proxy preset and the browser routes stay documented together", () => {
+  // The doc is the only place that says which domains go through the proxy; if the code's preset and the doc drift,
+  // one of them is lying. Both are derived from the same constant here.
+  const doc = readFileSync(join(root, "docs/proxy-and-domains.md"), "utf8");
+  const browser = readFileSync(join(root, "browser.js"), "utf8");
+  const constant = /export const COMMON_PROXY_HOSTS = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(browser);
+  assert.ok(constant, "COMMON_PROXY_HOSTS must stay a plain literal so it can be read and compared");
+  const hosts = [...constant[1].matchAll(/"([a-z0-9.-]+)"/g)].map((match) => match[1]);
+  assert.ok(hosts.length >= 20, `expected a list worth documenting, found ${hosts.length}`);
+  for (const host of hosts) assert.ok(doc.includes(`\`${host}\``), `the doc must list ${host}`);
+  assert.match(doc, /\/browser hosts preset/, "the doc must name the command that applies it");
+  assert.match(doc, /extension/, "and must say that an extension session uses the browser's own proxy");
 });
 
 test("the patch inserts exactly one row and carries no secret", () => {

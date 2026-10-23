@@ -276,6 +276,33 @@ function comparablePath(value) {
 }
 
 /**
+ * The proxy host list worth starting from, for a person behind a filtering network.
+ *
+ * These are the domains that are unreachable from inside mainland China, grouped so a missing entry is easy to spot.
+ * A bare host also covers its subdomains, which is why `google.com` and not `www.google.com`: the PAC rule is a suffix
+ * match, so one line covers the dozens of hosts those sites actually use. Apply with `/browser hosts preset` (or
+ * `POST /dsh-wechat-media/proxy-hosts {"action":"preset"}`); it *replaces* the list, and every other host keeps going
+ * direct - which is the point of a PAC rather than a global proxy.
+ *
+ * It is deliberately not the default. A list someone did not ask for silently routes their traffic through a proxy, and
+ * "why is this slow / why is this failing" is a bad first experience; a preset they chose is a different thing.
+ */
+export const COMMON_PROXY_HOSTS = Object.freeze([
+  // Google
+  "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "googlevideo.com",
+  // video
+  "youtube.com", "ytimg.com",
+  // code and packages
+  "github.com", "githubusercontent.com", "githubassets.com", "jsdelivr.net", "unpkg.com",
+  // social
+  "x.com", "twitter.com", "twimg.com", "telegram.org", "t.me", "reddit.com", "medium.com",
+  // knowledge
+  "wikipedia.org", "duckduckgo.com",
+  // AI services
+  "openai.com", "chatgpt.com", "claude.ai", "anthropic.com", "huggingface.co",
+]);
+
+/**
  * One proxy rule, normalised.
  *
  * People paste what they see in the address bar: `https://x.com/home`, `www.google.com`, `*.github.com`. A rule is a

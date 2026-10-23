@@ -870,6 +870,14 @@ page, so the tools will not build a link from it. Set `tenantHost` (panel or `/p
 
 ## Cookbook / 实战文档
 
+- **[Proxy and the host list / 代理与「走代理的域名」](./docs/proxy-and-domains.md)** — the 26-domain preset that says
+  which sites go through a local proxy and which stay direct, applied with `/browser hosts preset` or one POST, plus
+  the two boundaries people trip on: a PAC only governs a browser the plugin launched itself (an `extension` session
+  uses your own Chrome's proxy), and an empty list means *everything* goes through the proxy rather than nothing.
+
+  哪些网站走代理、哪些直连：一份 26 个域名的预设，一条命令套用；顺带说明两个边界 —— PAC 只对插件自己拉起的浏览器生效，
+  列表为空其实是「全部走代理」而不是关闭。
+
 - **[Turning a Word question bank into a Feishu bitable](./docs/build-a-knowledge-base.md)** — the whole pipeline
   behind one real job: a 997-paragraph Word question bank (312 questions, no tables) parsed into structured data,
   deduplicated to 285, corrected in 64 places against the law and the ministries' own wording, uploaded to a

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.67.3
+
+- **"Which domains go through the proxy" is now a list you can apply instead of retype.** `browser.js` carries
+  `COMMON_PROXY_HOSTS` - 26 bare hosts covering Google, YouTube, GitHub and the package CDNs, the social set, Wikipedia
+  and the AI services - and two entry points apply it: `/browser hosts preset` in a chat, and
+  `POST /dsh-wechat-media/proxy-hosts {"action":"preset"}` for the panel and scripts. Bare hosts are enough because the
+  PAC rule is a suffix match (`google.com` covers `maps.google.com`), so the list stays readable.
+- **It is a preset, not a default.** A host list nobody asked for silently routes traffic through a proxy, and "why is
+  this slow / why does this fail" is a bad first impression; choosing the preset is a different act from receiving it.
+- **`docs/proxy-and-domains.md`** documents the list, the commands to add/remove/replace it, and the two boundaries that
+  cost real time: a PAC only governs a browser *the plugin launched* (an `extension` session drives your own Chrome, so
+  that browser's proxy settings decide), and an empty list with a proxy address means **everything** goes through the
+  proxy, while no proxy address means direct.
+- Two tests keep the preset honest: one normalises it and renders a PAC from it, the other derives the list from
+  `browser.js` and fails if the documentation stops naming a domain - and it asserts the document is in `files[]` and
+  linked from the README, because a doc nobody ships is a doc nobody reads.
+- 38 suites / 597 cases.
+
 ## 0.67.2
 
 - **61 labels in the panel rendered as raw identifiers.** The card asks the host for 208 labels and registers its own
