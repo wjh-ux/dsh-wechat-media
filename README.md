@@ -501,6 +501,45 @@ Three decisions, each because the alternative fails silently:
 starting with `-` is not read as an option, and captured output is capped at 40k characters with an explicit
 "已截断" marker rather than a silent cut.
 
+## Serial: flash a board and read it back / 串口烧录
+
+Three tools drive the toolchain people already have - ESP-IDF's `idf.py`/`esptool`, or `avrdude` for AVR - instead of
+reimplementing a bootloader protocol, because that is how a tool ends up bricking a board.
+
+| Tool | What it does |
+| --- | --- |
+| `serial_ports` | the COM ports with the device name behind each (COM3 vs COM4 means nothing without "Silicon Labs CP210x"), plus which flashers were found |
+| `serial_flash` | flash: `flasher=idf` runs `idf.py -p COMx flash` in an ESP-IDF project (offsets come from its sdkconfig); `esptool` writes one `.bin` at an offset; `avrdude` flashes a `.hex` |
+| `serial_monitor` | read what the board prints for N seconds (default 8) and return it |
+
+An **STC (8051)** board uses `flasher=stcgal`: STC speaks its own ISP protocol, so `esptool` cannot touch it. Pass
+`chip=stc8g` (or leave it `auto`); `stcgal` DTR-resets the MCU, so no unplugging is needed. AVR boards use
+`flasher=avrdude`, and an ESP-IDF project uses `flasher=idf` - which runs inside `export.ps1`, because `idf.py` cannot see
+cmake otherwise.
+
+```text
+/serial                 # switch, baud, default port, ports, toolchain
+/serial on | off        # off by default: flashing writes a board's flash
+/serial baud 460800
+/serial port COM3
+```
+
+Then, from the **VS Code panel** with the project open: *"把这个项目烧到 COM3"* - the turn runs in the open folder, so
+`serial_flash` with `flasher=idf` and `projectDir` set to that folder flashes the project's own build.
+
+Four rules, each because the alternative is silent damage:
+
+- **Off until `/serial on`** - writing a board's flash is not a default-on capability.
+- **Never guess the port**: a port must be named, or there must be exactly one. Two ports and no answer is "say which
+  one", not "pick the first" - and a named port that is not plugged in is refused with the list of the ones that are.
+- **The exact command is echoed** with every result, so a failed flash can be repeated by hand instead of guessed at.
+- **One owner per port**: the monitor opens the port exclusively, so a flash and a monitor cannot overlap - the second
+  one fails with a reason rather than stealing the port mid-flash.
+
+The flasher's verdict lives in its last lines ("Hash of data verified", "avrdude done"), so output is *tailed* rather
+than capped from the start. Discovery is real: on this machine it found `D:\Espressif\frameworks\esp-idf-v4.4.8` with
+its `python_env` interpreter - and reported "no serial ports" when no board was plugged in, rather than inventing one.
+
 ## Web search (Tavily) / 联网搜索
 
 A `tavily_search` tool lets a WeChat, WeCom or Feishu conversation ask about something current and get real titles,
@@ -697,6 +736,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`. **Off by default** - flashing writes a board's flash. |
 | `/ssh` | `/远程` | Arms or disarms the SSH tools and manages the host list: `/ssh on|off`, `/ssh add <name> <user@host[:port]> [identity]`, `/ssh remove <name>`. **Off by default** - these run commands on other machines. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |
 

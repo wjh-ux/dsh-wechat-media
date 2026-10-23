@@ -98,6 +98,7 @@ import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
 import * as clipboard from "./clipboard.js";
 import * as ssh from "./ssh.js";
+import * as serial from "./serial.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -2715,6 +2716,63 @@ export function apply(ctx, config = {}) {
         await reply("📋 剪贴板 → **关**。clipboard_read / clipboard_write 现在一律拒绝执行，直到 /clipboard on。");
       }
       noteRoute("/command", { command: "clipboard", value: next, chatId });
+      return true;
+    }
+    if (command.name === "serial") {
+      // One switch, one place for the baud, and the port list the tools will act on - so "does it see my board" is
+      // answerable without flashing anything.
+      const prefs = await state.loadPrefs();
+      const current = prefs?.serial && typeof prefs.serial === "object" ? prefs.serial : {};
+      const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "on" || action === "off") {
+        const next = { ...current, enabled: action === "on" };
+        await state.savePrefs({ serial: next });
+        const support = serial.serialSupport();
+        if (next.enabled && !support.ok) await reply(`⚠️ 串口已打开，但这台机器还缺烧录工具：${support.reason}`);
+        else if (next.enabled) await reply("🔌 串口 → **开**。可用：serial_ports（列串口与烧录工具）、serial_flash（idf / esptool / avrdude 烧录）、serial_monitor（读板子打印）。默认关；读串口会占用端口。");
+        else await reply("🔌 串口 → **关**。serial_* 工具现在一律拒绝执行，直到 /serial on。");
+        noteRoute("/command", { command: "serial", action, enabled: next.enabled });
+        return true;
+      }
+      if (action === "baud") {
+        const value = Number(rest[0]);
+        if (!Number.isFinite(value) || value < 1200 || value > 4_000_000) {
+          await reply(`波特率不像话：${rest[0] ?? "（空）"}（常用 115200、460800）`);
+          return true;
+        }
+        await state.savePrefs({ serial: { ...current, baud: value } });
+        await reply(`串口波特率 → ${value}`);
+        noteRoute("/command", { command: "serial", action: "baud", value });
+        return true;
+      }
+      if (action === "port") {
+        const wanted = rest[0] ?? "";
+        await state.savePrefs({ serial: { ...current, port: wanted } });
+        await reply(wanted ? `默认串口 → ${wanted}` : "已清掉默认串口（烧录时必须指定端口）");
+        noteRoute("/command", { command: "serial", action: "port", value: wanted });
+        return true;
+      }
+      // status / ports: the switch, the toolchain and what is actually plugged in.
+      const support = serial.serialSupport();
+      const lines = [`串口 → ${current.enabled ? "**开**" : "**关**"}（默认关）`];
+      lines.push(`  默认波特率：${current.baud || serial.SERIAL_DEFAULT_BAUD}${current.port ? ` · 默认端口：${current.port}` : ""}`);
+      lines.push(`  ESP-IDF：${support.idf ? support.idf.framework : "没找到"}`);
+      lines.push(`  avrdude：${support.avrdude || "没找到"}`);
+      try {
+        const { execFile } = await import("node:child_process");
+        const stdout = await new Promise((resolve, reject) => {
+          execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", serial.portsScript()], { windowsHide: true, timeout: 20000 },
+            (error, out) => (error ? reject(error) : resolve(String(out ?? ""))));
+        });
+        const ports = serial.parsePortsOutput(stdout);
+        lines.push(ports.length ? `  串口（${ports.length}）：` : "  串口：无（板子插上了吗？）");
+        for (const row of ports) lines.push(`    · ${row.port}${row.name ? ` — ${row.name}` : ""}`);
+      } catch (error) {
+        lines.push(`  串口：列不出来（${String(error?.message ?? error)}）`);
+      }
+      lines.push("", "用法：/serial on|off · /serial baud 460800 · /serial port COM3 · /serial");
+      await reply(lines.join("\n"));
+      noteRoute("/command", { command: "serial", action: "status" });
       return true;
     }
     if (command.name === "ssh") {
@@ -7284,6 +7342,151 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       const sshUploadTool = sshTransferTool("ssh_upload", "upload", "Copy a local file (or directory) to another machine over SSH, through the platform scp. Key-based auth only.");
       const sshDownloadTool = sshTransferTool("ssh_download", "download", "Copy a file (or directory) from another machine over SSH, through the platform scp. Key-based auth only.");
 
+      // ── Serial: ports, flashing, monitor ────────────────────────────────────
+      //
+      // Off until armed: writing a board's flash is not a default capability, and reading a port takes it away from the
+      // terminal somebody may already have open. The gate is checked before any process starts.
+      const serialGate = async () => {
+        const prefs = await state.loadPrefs();
+        if (prefs?.serial?.enabled === true) return prefs.serial;
+        throw new Error("串口功能未开启——在聊天里发 /serial on 开启（默认关：这些工具会写板子的 Flash、也会占住串口）");
+      };
+
+      const serialPortsNow = async () => {
+        const { execFile } = await import("node:child_process");
+        const run = (command, args) => new Promise((resolve, reject) => {
+          execFile(command, args, { windowsHide: true, timeout: 20000 }, (error, out) => (error ? reject(error) : resolve(String(out ?? ""))));
+        });
+        const stdout = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", serial.portsScript()]);
+        return serial.parsePortsOutput(stdout);
+      };
+
+      const serialReport = (result, note) => {
+        const lines = [`${note}（退出码 ${result.code}，${result.ms}ms）`];
+        lines.push(`$ ${[result.program, ...result.args].join(" ")}`);
+        const out = serial.tail(result.stdout, 20);
+        const err = serial.tail(result.stderr, 20);
+        if (out) lines.push(`--- 输出（末尾）---\n${out}`);
+        if (err) lines.push(`--- 错误（末尾）---\n${err}`);
+        if (!out && !err) lines.push("（没有输出）");
+        return lines.join("\n");
+      };
+
+      const serialPortsTool = define({
+        name: "serial_ports",
+        description:
+          "List the serial ports on this machine (COM3, COM4, ...) with the device name behind each, plus which flashing toolchains were found (ESP-IDF idf.py / esptool, avrdude). Call this before flashing: a port number alone does not say whether it is the board or a Bluetooth adapter.",
+        parameters: {},
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 30000,
+        async execute() {
+          try {
+            await serialGate();
+            const ports = await serialPortsNow();
+            const support = serial.serialSupport();
+            const lines = [];
+            lines.push(ports.length ? `${ports.length} 个串口：` : "现在没有任何串口（板子插上了吗？驱动装了吗？）");
+            for (const row of ports) lines.push(`  · ${row.port}${row.name ? ` — ${row.name}` : ""}`);
+            lines.push("", "烧录工具：");
+            lines.push(`  · ESP-IDF：${support.idf ? support.idf.framework : "没找到"}`);
+            lines.push(`  · esptool：${support.esptool ? "可用（随 ESP-IDF 的 python）" : "没找到"}`);
+            lines.push(`  · avrdude：${support.avrdude || "没找到"}`);
+            noteRoute("/serial", { action: "ports", count: ports.length });
+            return lines.join("\n");
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/serial", { action: "ports", ok: false, error: reason });
+            return `serial_ports 失败：${reason}`;
+          }
+        },
+      });
+
+      const serialFlashTool = define({
+        name: "serial_flash",
+        description:
+          "Flash a board over its serial port. flasher=idf runs `idf.py -p COMx flash` inside an ESP-IDF project (offsets come from the project's sdkconfig - this is the normal way to flash an ESP32 project); flasher=esptool writes one .bin at an offset; flasher=avrdude flashes a .hex to an AVR. flasher=stcgal flashes an STC (8051) board through stcgal, which speaks STC's own ISP protocol - pass chip=stc8g/stc89/... to pin the protocol, and it DTR-resets the MCU instead of asking for a power cycle. Give port when more than one serial port exists. It echoes the exact command it ran, so a failure can be repeated by hand.",
+        parameters: {
+          port: { type: "string", description: "COM port, e.g. COM3. Omit only when exactly one serial port exists." },
+          flasher: { type: "string", description: "idf | esptool | avrdude | auto (default auto: idf if ESP-IDF is installed, else esptool, else avrdude)." },
+          file: { type: "string", description: "Firmware path: .bin for esptool, .hex for avrdude. Not needed for flasher=idf." },
+          offset: { type: "string", description: "esptool only: flash offset (default 0x0)." },
+          chip: { type: "string", description: "esptool: --chip esp32; avrdude: -p mcu; idf: -DIDF_TARGET; stcgal: the ISP protocol (auto/stc89/stc12/stc15/stc8/stc8g)." },
+          baud: { type: "number", description: "Baud rate for the transfer (default: the tool's own)." },
+          erase: { type: "boolean", description: "esptool only: erase the flash instead of writing." },
+          projectDir: { type: "string", description: "flasher=idf: the ESP-IDF project directory to run idf.py in." },
+          timeoutMs: { type: "number", description: `How long to allow (default ${serial.FLASH_TIMEOUT_MS}, max 900000).` },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 900000,
+        async execute(args) {
+          try {
+            const prefs = await serialGate();
+            const support = serial.serialSupport();
+            if (!support.ok) return `serial_flash 失败：${support.reason}`;
+            const ports = await serialPortsNow();
+            const port = serial.resolvePort(args?.port ?? prefs.port, ports);
+            const baud = Number(args?.baud) || Number(prefs.baud) || 0;
+            const result = await serial.flashFirmware({
+              support,
+              flasher: String(args?.flasher ?? prefs.flasher ?? "auto"),
+              port,
+              baud,
+              file: String(args?.file ?? ""),
+              offset: String(args?.offset ?? "0x0"),
+              chip: String(args?.chip ?? ""),
+              erase: Boolean(args?.erase),
+              projectDir: String(args?.projectDir ?? ""),
+              timeoutMs: Number(args?.timeoutMs) || serial.FLASH_TIMEOUT_MS,
+            });
+            noteRoute("/serial", { action: "flash", tool: result.tool, port, code: result.code });
+            const note = result.code === 0
+              ? `✅ 烧录完成（${result.tool}，${port}）`
+              : `❌ 烧录失败（${result.tool}，${port}）`;
+            return serialReport(result, note);
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/serial", { action: "flash", ok: false, error: reason });
+            return `serial_flash 失败：${reason}`;
+          }
+        },
+      });
+
+      const serialMonitorTool = define({
+        name: "serial_monitor",
+        description:
+          "Read what a board is printing over its serial port for a bounded number of seconds (default 8, max 120), then return the text. The port is opened exclusively: if a terminal already holds it, the answer says so instead of returning nothing. Use it after flashing, or to read a boot log.",
+        parameters: {
+          port: { type: "string", description: "COM port, e.g. COM3. Omit only when exactly one serial port exists." },
+          baud: { type: "number", description: "Baud rate (default 115200)." },
+          seconds: { type: "number", description: "How long to listen, in seconds (default 8, max 120)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 180000,
+        async execute(args) {
+          try {
+            const prefs = await serialGate();
+            const ports = await serialPortsNow();
+            const port = serial.resolvePort(args?.port ?? prefs.port, ports);
+            const baud = Number(args?.baud) || Number(prefs.baud) || serial.SERIAL_DEFAULT_BAUD;
+            const seconds = Math.max(1, Math.min(120, Number(args?.seconds) || 8));
+            const { execFile } = await import("node:child_process");
+            const run = (command, cmdArgs) => new Promise((resolve, reject) => {
+              execFile(command, cmdArgs, { windowsHide: true, timeout: (seconds + 15) * 1000 }, (error, out) => (error ? reject(error) : resolve(String(out ?? ""))));
+            });
+            const stdout = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", serial.monitorScript({ port, baud, seconds })]);
+            const answer = serial.parseMonitorOutput(stdout);
+            noteRoute("/serial", { action: "monitor", port, ok: Boolean(answer?.ok) });
+            if (!answer?.ok) return `serial_monitor 失败：${answer?.error || "串口打不开（可能被别的程序占用）"}`;
+            const text = String(answer.text ?? "").trim();
+            return text ? `${port} @ ${baud} · ${seconds}s 收到 ${text.length} 字符：\n${serial.tail(text, 40)}` : `${port} @ ${baud} · ${seconds}s 内没有收到任何输出（板子没在打印，或者需要复位）`;
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/serial", { action: "monitor", ok: false, error: reason });
+            return `serial_monitor 失败：${reason}`;
+          }
+        },
+      });
+
       // ── Scheduled tasks ──────────────────────────────────────────────────────
       const taskToolError = (error) => `task_ 失败：${String(error?.message ?? error)}`;
       const taskAddTool = define({
@@ -7508,7 +7711,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -8759,6 +8962,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.clipboard) !== null) patch.clipboard = asBool(body.clipboard);
           // The SSH block (host list + switch) is validated as a whole: a host list that quietly lost an entry is
           // worse than one that refuses to save.
+          // The serial block: one validated object, so a half-written preference cannot land in prefs. Without this
+          // the route answered 200 and dropped the value - the card's checkbox flipped straight back.
+          if (body.serial !== undefined) {
+            try {
+              patch.serial = serial.normalizeSerialPrefs(typeof body.serial === "string" ? JSON.parse(body.serial) : body.serial);
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
+          }
           if (body.ssh !== undefined) {
             try {
               patch.ssh = ssh.normalizeSshPrefs(typeof body.ssh === "string" ? JSON.parse(body.ssh) : body.ssh);

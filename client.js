@@ -167,6 +167,7 @@ window.__ModuleLoader__.load({
           sshAdd: "Add host",
           sshRemove: "Remove",
           sshPlaceholder: "name user@host[:port] [identity file]",
+          serial: "Let the agent flash boards and read serial output (off by default)",
           officeDirSet: "using the folder above",
           officeDirDefault: "default: the bridge's own directory",
           officeHint: "relative paths from the four office tools land here",
@@ -330,6 +331,7 @@ window.__ModuleLoader__.load({
           sshAdd: "添加主机",
           sshRemove: "删除",
           sshPlaceholder: "名字 user@host[:port] [identity 文件]",
+          serial: "允许 agent 烧录开发板并读取串口输出（默认关）",
           officeDirSet: "使用上面的目录",
           officeDirDefault: "默认：桥接进程自己的目录",
           officeHint: "四个 office 工具的相对路径都落在这里",
@@ -820,6 +822,20 @@ window.__ModuleLoader__.load({
         async function setSshEnabled(enabled) {
           const current = snapshot?.prefs?.ssh ?? { hosts: [] };
           await saveSsh({ enabled, hosts: Array.isArray(current.hosts) ? current.hosts : [] });
+        }
+
+        /** The serial switch: the same preference `/serial on` writes. Off by default - flashing writes a board. */
+        async function setSerialEnabled(enabled) {
+          setBusy(true);
+          try {
+            const current = snapshot?.prefs?.serial ?? {};
+            await api("/prefs", { method: "POST", body: { serial: { ...current, enabled } } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
         }
 
         async function addSshHost() {
@@ -1558,6 +1574,18 @@ window.__ModuleLoader__.load({
                 onChange: (event) => setSshEnabled(event.target.checked),
               }),
               " " + t("ssh", "Let the agent run commands on your SSH hosts (key-based only)"),
+            ]),
+            // Serial: flashing writes a board's flash, so it is off by default like desktop control. The port list and
+            // the toolchain discovery live on the host (`serial_ports`), not here: the card is not the flasher.
+            h("label", { key: "se", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: Boolean(snapshot?.prefs?.serial?.enabled),
+                disabled: busy,
+                onChange: (event) => setSerialEnabled(event.target.checked),
+              }),
+              " " + t("serial", "Let the agent flash boards and read serial output (off by default)"),
             ]),
             ...(Array.isArray(snapshot?.prefs?.ssh?.hosts) ? snapshot.prefs.ssh.hosts : []).map((host) =>
               h("div", { key: `sshhost-${host.name}`, className: "dswxMeta" }, [

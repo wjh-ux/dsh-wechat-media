@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.71.1
+
+- **STC (8051) boards flash too, through `stcgal`.** `flasher=stcgal` speaks STC's own ISP protocol (ESP-IDF's toolchain
+  cannot), takes the protocol from `chip` (`auto` by default, or `stc89`/`stc12`/`stc15`/`stc8`/`stc8g`), and passes
+  `-A dtr` so the MCU is cold-started over DTR instead of asking the person to unplug the board. Measured on the
+  CH340/STC8H1K08 that was actually plugged in: `Protocol detected: stc8g · Target model: STC8H1K08 · Code flash 8.0 KB ·
+  EEPROM 4.0 KB · BSL 7.3.13U`.
+- **`idf.py` now runs inside ESP-IDF's own environment.** Calling it directly failed with `'cmake' must be available on the
+  PATH` - the toolchain lives in `D:\\Espressif\\tools` and only `export.ps1` puts it on PATH. The flash therefore runs one
+  PowerShell session that sources `export.ps1` first, and the echoed command says so.
+- **`/prefs` accepts the `serial` block.** It answered 200 and dropped the value, so the card's checkbox flipped straight
+  back and only the `/serial on` command could change anything. The block is validated by `normalizeSerialPrefs` (only the
+  literal `true` arms flashing; an absurd baud is dropped; a non-COM port is refused).
+- **`findStcgal` searches every ESP-IDF python env**, not just the newest one: stcgal had been installed into `py3.11`
+  while the newest env by name was `py3.8`, and the first version reported "no stcgal" on a machine that had it.
+- Testing this on real hardware is what produced all three fixes; the suite grew to 12 serial cases (argv per flasher,
+  prefs validation, discovery with a fake filesystem, the export-script wrapper, the STC route).
+- 42 suites / 661 cases.
+
+## 0.71.0
+
+- **Serial, flashing and a monitor.** Three tools: `serial_ports` (the COM ports with the device name behind each, plus
+  which flashers were found), `serial_flash` (`idf.py -p COMx flash` inside an ESP-IDF project, `esptool` for a plain
+  `.bin` at an offset, `avrdude` for a `.hex`), and `serial_monitor` (read what the board prints for N seconds).
+  They drive the toolchain that is already installed instead of reimplementing a bootloader protocol - that is how a tool
+  ends up bricking a board.
+- **From Visual Studio Code**: the panel's turn runs in the open folder, so *"把这个项目烧到 COM3"* becomes
+  `serial_flash` with `flasher=idf` and that folder as `projectDir` - the project's own sdkconfig supplies the offsets.
+- **`/serial`** manages the switch and the defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and
+  with no argument it reports the switch, the baud, the ESP-IDF/avrdude it found and the ports that are actually plugged
+  in. The card gained the matching checkbox (`允许 agent 烧录开发板并读取串口输出（默认关）`).
+- **Four rules that prevent silent damage**: off until `/serial on`; the port is never guessed (one port is a decision,
+  two are a question, and a named port that is absent is refused with the list of the present ones); the exact command is
+  echoed with every result; and the monitor opens the port exclusively, so a flash and a monitor cannot overlap.
+- **Discovery is real, not assumed.** On the development machine it found `D:\\Espressif\\frameworks\\esp-idf-v4.4.8`
+  and its `python_env` interpreter, refused to flash with "没有找到任何串口" while no board was plugged in, and every
+  argv builder is covered by a test that needs no hardware (11 cases).
+- The command-catalogue test from 0.70.1 earned its keep again: `/serial` was handled in the dispatcher but missing from
+  the catalogue, which is exactly the "未知命令" bug - it failed the suite before the release.
+- 42 suites / 660 cases.
+
 ## 0.70.1
 
 - **`/ssh` answered "未知命令" even though the dispatcher handled it.** `parseCommand` resolves a name through the

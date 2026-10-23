@@ -108,6 +108,12 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "serial",
+    aliases: ["串口", "flash"],
+    usage: "/serial [on|off|ports] · /serial baud 460800 · /serial port COM3",
+    summary: "串口烧录开关与默认值：serial_ports 列串口、serial_flash 烧录（ESP-IDF idf.py / esptool / avrdude）、serial_monitor 读打印（默认关；会写板子 Flash、会占用串口）",
+  },
+  {
     name: "ssh",
     aliases: ["远程"],
     usage: "/ssh [list|on|off] · /ssh add <名字> <user@host[:port]> [identity] · /ssh remove <名字>",
