@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.70.0
+
+- **Three SSH tools.** `ssh_exec` runs one command on another machine and returns exit code, stdout, stderr and timing;
+  `ssh_upload` / `ssh_download` move a file (or a directory) through the platform `scp`. They drive the OpenSSH client
+  that ships with Windows 10/11 (and `ssh`/`scp` on macOS and Linux), so `~/.ssh/config` and `known_hosts` keep working
+  and no key material ever passes through the plugin - only its path.
+- **`/ssh` manages the host list**: `/ssh add nas root@192.168.1.10:22 [identityFile]`, `/ssh remove nas`, `/ssh on|off`.
+  The list is one validated prefs block (`prefs.ssh`), shared by the card, `/state` and the tools; an ad-hoc
+  `user@host[:port]` works without saving anything.
+- **Off until armed**, like desktop control: these tools execute commands on other machines, so `/ssh on` is the switch
+  and it is checked before any process starts.
+- **Key-based auth only, always `BatchMode=yes`.** A password cannot be typed into a service-like process, so an auth
+  problem fails immediately with the client's message instead of hanging the turn; no password is ever stored.
+- **`StrictHostKeyChecking=accept-new`**: a new host key is learned once, a *changed* one is refused. `no` would accept a
+  man-in-the-middle; `yes` would make a first connection impossible.
+- Details that bite: `scp` gets `-P` (its `-p` means preserve times), the remote command sits after `--` so a command
+  starting with `-` is not parsed as an option, and captured output is capped at 40k characters **with a 已截断 marker**.
+- Measured on this machine: OpenSSH `OpenSSH_for_Windows_9.5p2` answered `ssh -V` in 56 ms, and the argv/prefs rules are
+  covered by 12 tests that need no network.
+- 41 suites / 645 cases.
+
 ## 0.69.1
 
 - **The README now describes the whole plugin, not only the WeChat half.** The capability table gained WeCom, Feishu, the

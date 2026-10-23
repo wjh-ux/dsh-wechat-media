@@ -467,6 +467,40 @@ a result ends up where the next `Ctrl+V` will find it:
 - The size cap is applied **inside** the PowerShell script, so a 20 MB clipboard never travels through stdout to then be
   thrown away.
 
+## SSH / 远程命令
+
+Three tools drive the platform's own OpenSSH client - the binaries ship with Windows 10/11, honour `~/.ssh/config` and
+`known_hosts`, and keep the private key exactly where it already is. Nothing here reads a key's contents; only its path.
+
+| Tool | What it does |
+| --- | --- |
+| `ssh_exec` | run one command on a host, return exit code + stdout + stderr + timing |
+| `ssh_upload` | copy a local file (or directory, `recursive`) to the host, via `scp` |
+| `ssh_download` | copy a file (or directory) from the host |
+
+```text
+/ssh                      # status: switch + host list
+/ssh on | off             # arm / disarm  (off by default)
+/ssh add nas root@192.168.1.10:22 [C:\Users\me\.ssh\id_ed25519]
+/ssh remove nas
+```
+
+Hosts live in one prefs block (`prefs.ssh`), so the card, `/state` and the tools read the same list; a tool also accepts
+an ad-hoc `user@host[:port]` without saving it.
+
+Three decisions, each because the alternative fails silently:
+
+- **Key-based only, always `BatchMode=yes`.** A password cannot be typed into a service-like process, so an auth problem
+  must fail immediately with the client's own message instead of hanging the turn. No password is ever stored.
+- **`StrictHostKeyChecking=accept-new`.** A new host key is learned once and a **changed** one is refused: `no` would
+  accept a man-in-the-middle, `yes` would make the first connection impossible.
+- **Off until `/ssh on`.** Running commands on someone's servers is not a default-on capability, and the gate is checked
+  before any process starts.
+
+`scp` gets `-P` for the port (its `-p` means "preserve times"), the command is placed after `--` so a remote command
+starting with `-` is not read as an option, and captured output is capped at 40k characters with an explicit
+"已截断" marker rather than a silent cut.
+
 ## Web search (Tavily) / 联网搜索
 
 A `tavily_search` tool lets a WeChat, WeCom or Feishu conversation ask about something current and get real titles,

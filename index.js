@@ -97,6 +97,7 @@ import { toPlainText } from "./plain-text.js";
 import { silkToWav, synthesizeVoice, voiceDeliveryFor } from "./voice.js";
 import * as desktop from "./desktop.js";
 import * as clipboard from "./clipboard.js";
+import * as ssh from "./ssh.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -2714,6 +2715,71 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "clipboard", value: next, chatId });
       return true;
     }
+    if (command.name === "ssh") {
+      // The host list lives in one prefs block, so /state, the card and these tools read the same thing.
+      const prefs = await state.loadPrefs();
+      const current = ssh.normalizeSshPrefs(prefs.ssh);
+      const [action = "list", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      const save = async (next) => {
+        await state.savePrefs({ ssh: next });
+        return next;
+      };
+      if (!action || action === "list" || action === "status") {
+        const lines = [`SSH → ${current.enabled ? "**开**" : "**关**"}`];
+        if (!current.hosts.length) {
+          lines.push("还没有主机。加一个：/ssh add nas root@192.168.1.10:22 [C:\\Users\\me\\.ssh\\id_ed25519]");
+        } else {
+          lines.push("主机：", ...current.hosts.map((host) => `  · ${host.name} → ${host.user ? host.user + "@" : ""}${host.host}:${host.port}${host.identity ? "（key）" : ""}`));
+        }
+        lines.push("", "开关：/ssh on · /ssh off；增删：/ssh add <名字> <user@host[:port]> [identity] · /ssh remove <名字>");
+        await reply(lines.join("\n"));
+        noteRoute("/command", { command: "ssh", action, count: current.hosts.length });
+        return true;
+      }
+      if (action === "on" || action === "off") {
+        const next = await save({ ...current, enabled: action === "on" });
+        const support = ssh.sshSupport();
+        if (next.enabled && !support.ok) await reply(`⚠️ SSH 已打开，但这台机器做不到：${support.reason}`);
+        else if (next.enabled) await reply("🔐 SSH → **开**。可用：ssh_exec（在别的机器上执行一条命令）、ssh_upload / ssh_download（scp 传文件）。默认不保存任何密码，只用密钥。");
+        else await reply("🔐 SSH → **关**。ssh_* 工具现在一律拒绝执行，直到 /ssh on。");
+        noteRoute("/command", { command: "ssh", action, enabled: next.enabled });
+        return true;
+      }
+      if (action === "add") {
+        const [name, spec, identity = ""] = rest;
+        if (!name || !spec) {
+          await reply("用法：/ssh add <名字> <user@host[:port]> [identityFile]");
+          return true;
+        }
+        try {
+          const parsed = ssh.parseHostSpec(spec);
+          const hosts = current.hosts.filter((host) => host.name !== name);
+          const next = await save(ssh.normalizeSshPrefs({
+            ...current,
+            hosts: [...hosts, { name, host: parsed.host, user: parsed.user, port: parsed.port || 22, ...(identity ? { identity } : {}) }],
+          }));
+          await reply(`已保存主机 ${name} → ${parsed.user ? parsed.user + "@" : ""}${parsed.host}:${parsed.port || 22}（共 ${next.hosts.length} 个）`);
+        } catch (error) {
+          await reply(`没有保存：${String(error?.message ?? error)}`);
+        }
+        noteRoute("/command", { command: "ssh", action: "add", name });
+        return true;
+      }
+      if (action === "remove" || action === "rm") {
+        const name = rest[0] ?? "";
+        if (!name) {
+          await reply("用法：/ssh remove <名字>");
+          return true;
+        }
+        const next = await save({ ...current, hosts: current.hosts.filter((host) => host.name !== name) });
+        await reply(next.hosts.length === current.hosts.length ? `没有叫 ${name} 的主机` : `已删除主机 ${name}（剩 ${next.hosts.length} 个）`);
+        noteRoute("/command", { command: "ssh", action: "remove", name });
+        return true;
+      }
+      await reply("用法：/ssh [list|on|off] · /ssh add <名字> <user@host[:port]> [identity] · /ssh remove <名字>");
+      return true;
+    }
+
     if (command.name === "feishu") {
       const argsText = String(command.args ?? "").trim();
       if (/^test\b/i.test(argsText)) {
@@ -7128,6 +7194,94 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
+      // ── SSH (run a command on another machine, move a file) ─────────────────
+      //
+      // Off until armed, like desktop control: running commands on someone's servers is not a default capability. The gate
+      // is checked before any process starts, and only the *path* of a key is ever read - never its contents.
+      const sshGate = async () => {
+        const prefs = await state.loadPrefs();
+        if (prefs?.ssh?.enabled === true) return prefs.ssh;
+        throw new Error("SSH 未开启——在聊天里发 /ssh on 开启（默认关：这些工具会在别的机器上执行命令）");
+      };
+
+      const sshReport = (result, command) => {
+        const lines = [];
+        lines.push(result.code === 0 ? `已在 ${result.target.name || result.target.host} 上执行（${result.ms}ms）` : `命令返回退出码 ${result.code}（${result.target.name || result.target.host}，${result.ms}ms）`);
+        if (command) lines.push(`$ ${command}`);
+        if (result.stdout.trim()) lines.push(`--- stdout ---\n${result.stdout.trim()}${result.stdoutTruncated ? "\n（已截断）" : ""}`);
+        if (result.stderr.trim()) lines.push(`--- stderr ---\n${result.stderr.trim()}${result.stderrTruncated ? "\n（已截断）" : ""}`);
+        if (!result.stdout.trim() && !result.stderr.trim()) lines.push("（没有任何输出）");
+        return lines.join("\n");
+      };
+
+      const sshExecTool = define({
+        name: "ssh_exec",
+        description:
+          "Run one shell command on another machine over SSH (key-based auth only, host key learned once). Give `host` as a saved name from the plugin's ssh settings, or an ad-hoc user@host[:port]. Returns the exit code, stdout and stderr, so a failure is visible instead of silent.",
+        parameters: {
+          host: { type: "string", required: true, description: "Saved host name, or user@host[:port]." },
+          command: { type: "string", required: true, description: "The command to run on the remote machine." },
+          timeoutMs: { type: "number", description: `How long to wait (default ${ssh.SSH_TIMEOUT_MS}, max 600000).` },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 600000,
+        async execute(args) {
+          try {
+            const prefs = { ssh: await sshGate() };
+            const command = String(args?.command ?? "").trim();
+            if (!command) return "ssh_exec 失败：缺少 command";
+            const result = await ssh.execRemote({ prefs, host: args?.host, command, timeoutMs: Number(args?.timeoutMs) || ssh.SSH_TIMEOUT_MS });
+            noteRoute("/ssh", { action: "exec", host: args?.host, code: result.code });
+            return sshReport(result, command);
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/ssh", { action: "exec", ok: false, error: reason });
+            return `ssh_exec 失败：${reason}`;
+          }
+        },
+      });
+
+      const sshTransferTool = (name, direction, description) => define({
+        name,
+        description,
+        parameters: {
+          host: { type: "string", required: true, description: "Saved host name, or user@host[:port]." },
+          local: { type: "string", required: true, description: direction === "upload" ? "Local file to send." : "Local path to write." },
+          remote: { type: "string", required: true, description: direction === "upload" ? "Remote destination path." : "Remote source path." },
+          recursive: { type: "boolean", description: "Copy a directory (adds scp -r)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 600000,
+        async execute(args) {
+          try {
+            const prefs = { ssh: await sshGate() };
+            const result = await ssh.transferRemote({
+              prefs,
+              host: args?.host,
+              direction,
+              local: args?.local,
+              remote: args?.remote,
+              recursive: Boolean(args?.recursive),
+            });
+            noteRoute("/ssh", { action: direction, host: args?.host, code: result.code });
+            if (result.code !== 0) {
+              const detail = (result.stderr || result.stdout || "").trim().split(/\r?\n/).slice(0, 6).join("\n");
+              return `${name} 失败（退出码 ${result.code}）：${detail || "没有输出"}`;
+            }
+            return direction === "upload"
+              ? `已上传 ${args?.local} → ${result.target.name || result.target.host}:${args?.remote}（${result.ms}ms）`
+              : `已下载 ${result.target.name || result.target.host}:${args?.remote} → ${args?.local}（${result.ms}ms）`;
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/ssh", { action: direction, ok: false, error: reason });
+            return `${name} 失败：${reason}`;
+          }
+        },
+      });
+
+      const sshUploadTool = sshTransferTool("ssh_upload", "upload", "Copy a local file (or directory) to another machine over SSH, through the platform scp. Key-based auth only.");
+      const sshDownloadTool = sshTransferTool("ssh_download", "download", "Copy a file (or directory) from another machine over SSH, through the platform scp. Key-based auth only.");
+
       // ── Scheduled tasks ──────────────────────────────────────────────────────
       const taskToolError = (error) => `task_ 失败：${String(error?.message ?? error)}`;
       const taskAddTool = define({
@@ -7352,7 +7506,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -8601,6 +8755,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.wizardDone) !== null) patch.wizardDone = asBool(body.wizardDone);
           // The clipboard switch: on unless explicitly turned off, so the route and /clipboard agree.
           if (asBool(body.clipboard) !== null) patch.clipboard = asBool(body.clipboard);
+          // The SSH block (host list + switch) is validated as a whole: a host list that quietly lost an entry is
+          // worse than one that refuses to save.
+          if (body.ssh !== undefined) {
+            try {
+              patch.ssh = ssh.normalizeSshPrefs(typeof body.ssh === "string" ? JSON.parse(body.ssh) : body.ssh);
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
+          }
           // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
           if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
           // The outbound webhook and its signing secret. An empty string turns the webhook off, which is how a person
