@@ -143,7 +143,8 @@ await test("an STC board goes through stcgal, with DTR reset and the protocol pa
     avrdude: "",
     stcgal: { program: "D:\\Espressif\\python_env\\idf4.4_py3.11_env\\Scripts\\stcgal.exe", args: [] },
   };
-  const result = await serial.flashFirmware({ support, flasher: "stcgal", port: "COM3", file: "app.hex", chip: "stc8g", exec });
+  const result = await serial.flashFirmware({ support, flasher: "stcgal", port: "COM3", file: "app.hex",
+      exists: () => true, chip: "stc8g", exec });
   assert.equal(result.tool, "stcgal");
   assert.deepEqual(calls[0].args, ["-P", "stc8g", "-p", "COM3", "-A", "dtr", "app.hex"]);
   assert.match(result.stdout, /STC8H1K08/);
@@ -158,6 +159,7 @@ await test("avrdude is used when it is all there is", async () => {
     support: { ok: true, idf: null, esptool: null, avrdude: "C:\\avrdude.exe", stcgal: null },
     port: "COM4",
     file: "main.hex",
+      exists: () => true,
     exec,
   });
   assert.equal(result.tool, "avrdude");
@@ -174,6 +176,27 @@ await test("the monitor script opens the port exclusively and closes it even on 
   assert.match(script, /AddMilliseconds\(3000\)/);
   assert.match(script, /finally \{ try \{ \$port\.Close\(\) \}/);
   assert.match(script, /ToBase64String/);
+});
+
+await test("a missing firmware file is refused here, not inside the flasher", async () => {
+  // Measured: stcgal answered a missing path with its whole usage text, which reads like a broken tool rather than a
+  // wrong path.
+  assert.throws(() => serial.assertFile("C:\\nope\\app.hex", { exists: () => false }), /固件文件不存在/);
+  assert.equal(serial.assertFile("", { exists: () => false }), "", "no file is fine for flasher=idf");
+  assert.equal(serial.assertFile("app.hex", { exists: () => true }), "app.hex");
+  await assert.rejects(
+    () =>
+      serial.flashFirmware({
+        support: { ok: true, idf: null, esptool: null, avrdude: "", stcgal: { program: "stcgal.exe", args: [] } },
+        flasher: "stcgal",
+        port: "COM3",
+        file: "C:\\nope\\app.hex",
+        exec: () => {
+          throw new Error("the flasher must not start");
+        },
+      }),
+    /固件文件不存在/,
+  );
 });
 
 await test("a flasher's verdict is the tail of its output", () => {

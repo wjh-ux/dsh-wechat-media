@@ -7391,6 +7391,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             lines.push(`  · ESP-IDF：${support.idf ? support.idf.framework : "没找到"}`);
             lines.push(`  · esptool：${support.esptool ? "可用（随 ESP-IDF 的 python）" : "没找到"}`);
             lines.push(`  · avrdude：${support.avrdude || "没找到"}`);
+            lines.push(`  · stcgal：${support.stcgal ? support.stcgal.program : "没找到（pip install stcgal）"}（STC 8051）`);
             noteRoute("/serial", { action: "ports", count: ports.length });
             return lines.join("\n");
           } catch (error) {

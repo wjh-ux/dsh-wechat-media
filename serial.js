@@ -203,6 +203,19 @@ export function normalizeSerialPrefs(value = {}) {
   };
 }
 
+/**
+ * A firmware path that does not exist is refused here, not inside the flasher.
+ *
+ * Measured: passing a missing file to stcgal produced its whole `usage:` text, which reads like a broken tool rather
+ * than a wrong path. One line from here is a better answer.
+ */
+export function assertFile(file, { exists = existsSync } = {}) {
+  const value = String(file ?? "").trim();
+  if (!value) return "";
+  if (!exists(value)) throw new Error(`固件文件不存在：${value}`);
+  return value;
+}
+
 /** `com3` / `COM3` → `COM3`; anything else is a mistake worth saying out loud. */
 export function normalizePort(value) {
   const text = String(value ?? "").trim().toUpperCase();
@@ -321,9 +334,12 @@ export async function flashFirmware({
   erase = false,
   exec = execFile,
   env = process.env,
+  exists = existsSync,
   timeoutMs = FLASH_TIMEOUT_MS,
 } = {}) {
   if (!support?.ok) throw new Error(support?.reason ?? "没有可用的烧录工具");
+  // Checked before the toolchain is picked: a wrong path must not depend on which flasher runs.
+  assertFile(file, { exists });
   const kind = String(flasher || "auto").toLowerCase();
   const wantsAvr = kind === "avrdude" || (kind === "auto" && !support.idf?.idfPy && support.avrdude);
   if (wantsAvr) {

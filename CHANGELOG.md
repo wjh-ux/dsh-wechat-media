@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.71.2
+
+- **`serial_ports` now lists stcgal.** It reported ESP-IDF, esptool and avrdude but not the tool the STC board had just
+  been flashed with - the one line a person needs in order to know they can flash an STC chip.
+- **A missing firmware path is refused before the flasher starts.** Passing a non-existent `.hex` to stcgal produced its
+  entire `usage:` text, which reads like a broken tool rather than a wrong path; `assertFile` answers
+  `固件文件不存在：<path>` in one line, and `flasher=idf` (which takes no file) is unaffected. The check is injectable
+  (`exists`), so tests can name a fictional file without creating one.
+- 42 suites / 662 cases.
+
 ## 0.71.1
 
 - **STC (8051) boards flash too, through `stcgal`.** `flasher=stcgal` speaks STC's own ISP protocol (ESP-IDF's toolchain
