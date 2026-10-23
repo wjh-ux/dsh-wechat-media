@@ -634,6 +634,71 @@ through (a blocked chat cannot run commands either).
 Anything else starting with `/` gets the command list back rather than a guess; a bare `/` or `//` is an
 ordinary message. Commands are counted (`counters.commands`) and recorded in `/state.recentRoutes`.
 
+## Integrations: in, out, and a dashboard / 集成：进、出、看板
+
+Three routes turn the bridge into something other systems can drive and watch. All of them live on the same loopback
+server as the rest of the panel; the inbound one is the exception that is *meant* to be reachable from another machine.
+
+### 1. Inbound: `POST /dsh-wechat-media/inbound` — let a NAS, CI or a monitor "shout at" the agent
+
+```sh
+curl -s http://127.0.0.1:19387/dsh-wechat-media/inbound \
+  -H 'content-type: application/json' \
+  -H "x-dsh-token: <面板/看板上的入站 token>" \
+  -d '{"peer":"<wxid 或群 id>","text":"把今天的备份报告整理成三句话","id":"ci-2026-10-23-1","reply":true}'
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `peer` | 是 | 要说话的会话 id：微信 wxid / 群 id、企微会话 id、飞书 receive id。**不是**昵称 —— 昵称会重名，会话 id 不会 |
+| `text` | 是 | 触发这一轮的话；上限 8000 字符 |
+| `id` | 否 | 幂等键。同一个 `id` 再发一次不会重跑（CI 重试安全） |
+| `reply` | 否 | `true`（默认）= 回答也发到那个会话；`false` = 只在 HTTP 响应里返回 |
+| `transport` | 否 | `wechat`（默认）/ `wecom` / `feishu`；后两者目前只能把回答放进 HTTP 响应 |
+| `accountId` | 否 | 多个微信账号时指定用哪个；默认第一个已配对的 |
+
+响应里带 `sessionId`、`answer`、`stopReason`、`delivered` 和 `ms`，所以 CI 不需要再去微信里看结果。token 是唯一的门 ——
+这条路由**不要求来源是本机**（否则它就没有意义），所以 token 泄露等于接口泄露：面板/看板上可以一键换一个。
+
+### 2. Outbound webhook — every finished turn, POSTed to your address
+
+```sh
+curl -s -X POST http://127.0.0.1:19387/dsh-wechat-media/prefs \
+  -H 'content-type: application/json' \
+  -d '{"webhookUrl":"https://example.com/dsh-hook","webhookSecret":"<随便一段足够长的随机串>"}'
+
+# 先证明接收端是对的，再让真实轮次依赖它
+curl -s -X POST http://127.0.0.1:19387/dsh-wechat-media/webhook \
+  -H 'content-type: application/json' -d '{"action":"test"}'
+```
+
+每轮结束（微信 / 企微 / 飞书 / VS Code / 入站触发的都算）POST 一份 JSON：
+
+```json
+{"event":"turn.end","at":"…","sessionId":"…","accountId":"…","chatId":"…","peerName":"…",
+ "transport":"wechat","answer":"…","answerChars":123,"stopReason":"end_turn","error":null,"version":"0.68.0"}
+```
+
+- 配了 `webhookSecret` 时带 `x-dsh-signature: sha256=<hex>`，是对**原始 body** 的 **HMAC-SHA256**（不是拼接哈希），
+  接收端算一遍比对即可；
+- 失败重试 3 次（300/600ms 退避），4xx 不重试 —— 那是「地址错了」，再发两次也没用；
+- 接收端挂了、慢了、超时（10s）都不会拖慢或影响聊天里的回答：发送是 fire-and-forget，结果记在
+  `/dsh-wechat-media/webhook` 的 `last` 和看板上；
+- `webhookUrl` 置空 = 关闭。
+
+### 3. Dashboard — `GET /dsh-wechat-media/dashboard`
+
+浏览器打开 `http://127.0.0.1:19387/dsh-wechat-media/dashboard`（30 秒自动刷新，无脚本，仅本机可访问）：
+
+- **卡片**：会话数、失败合计、token 总量、入站请求数、webhook 已发数；
+- **失败与丢弃**：重试失败、无法使用的消息、媒体失败、被白名单/群规则拦下的、飞书错误、入站失败、webhook 失败、
+  token 记账失败（如果记账本身坏了，这一项会红）；
+- **Token 用量**：按账号/会话拆开，带清零窗口；
+- **最近活动**：最后入站、webhook 的最后一次投递（成功/失败 + HTTP 状态）、最近路由、最后一帧流式数据；
+- **配置**：入站 token、webhook 地址、签名是否已设置。
+
+排障时先看这一页，比翻会话记录快。
+
 ## Token usage / Token 统计
 
 The bridge records what each **account** spends, per model call, from the `usage` the harness reports on the

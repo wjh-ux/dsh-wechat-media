@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.68.0
+
+- **`POST /dsh-wechat-media/inbound`: another system can speak into a conversation.** Body is `{peer, text, id?, reply?,
+  transport?, accountId?}`; `peer` is the platform chat id (a wxid, a group id, a WeCom chat id, a Feishu receive id) and
+  `reply` decides whether the answer also goes to that chat or only back over HTTP. The turn is the same machinery a chat
+  uses - same agent, tools and history - so a NAS, a CI job or a monitor triggers the same assistant people talk to. It is
+  the one route that does **not** require a loopback source, because that is its purpose; the token is the gate, it is
+  compared with `timingSafeEqual` rather than `===` (a prefix comparison leaks through timing), and an `id` makes a retry
+  idempotent. Measured: `reply:false` answers in the response, `reply:true` delivers through the paired WeChat account;
+  WeCom/Feishu return the answer over HTTP and say so instead of pretending to deliver.
+- **The outbound webhook fires once per finished turn, not once per transport.** The hook sits in `ReplyCollector.#settle`,
+  which every transport funnels through, so a turn started in WeChat, WeCom, Feishu, VS Code or by `/inbound` produces
+  exactly one POST. The payload carries `sessionId`, `accountId`, `chatId`, `peerName`, `transport`, `answer`,
+  `stopReason`, `error` and the version. With `webhookSecret` set the body is signed as `x-dsh-signature: sha256=<hmac>` -
+  **HMAC-SHA256**, not a digest of body-plus-secret, because the latter is forgeable by length extension. Delivery retries
+  3 times on a network failure or a 5xx and never on a 4xx (a wrong URL does not improve with repetition), times out after
+  10 s, and is fire-and-forget: a broken receiver must not delay or fail an answer. `POST /webhook {"action":"test"}`
+  proves a receiver before a real turn depends on it.
+- **`GET /dsh-wechat-media/dashboard`**: one script-free page (30 s refresh, loopback only) with the session count,
+  total failures broken down by cause, token spend per account and chat, the last inbound and the last webhook delivery,
+  the recent routes, the inbound token and the webhook configuration. The failure card counts `retryFailed`,
+  `unusable`, `mediaFailed`, `feishuErrors`, `interjectFailed`, `inboundFailed` and `webhookFailed`, so "something is
+  wrong" has a number instead of a feeling. Every printed value is escaped - display names come from other people.
+- **New counters**, all visible in `/state` and on the dashboard: `inboundRequests`, `inboundFailed`,
+  `inboundDuplicates`, `webhookSent`, `webhookFailed`.
+- Docs: a new README section with the three routes, the field table, the webhook payload and the exact signature rule.
+- 39 suites / 619 cases.
+
 ## 0.67.4
 
 - **The Feishu inbound suite was flaky, and the reason was a comparison across two moments.** `builtAt` was asserted

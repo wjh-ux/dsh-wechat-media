@@ -22,7 +22,7 @@
  * runtime through the Cordis loader, and every use is guarded.
  */
 import { homedir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -1049,16 +1049,219 @@ export function assistantText(event) {
 }
 
 /**
+ * The signature header on an outbound webhook, and the HMAC it carries.
+ *
+ * A webhook URL is a password nobody changes: whoever learns it receives every answer this bridge produces. Signing the
+ * body lets the receiver tell a real delivery from someone else's POST to the same URL, using a secret that never
+ * travels. `sha256=<hex>` is the GitHub convention, deliberately, so an existing verifier is a one-liner.
+ */
+export const WEBHOOK_SIGNATURE_HEADER = "x-dsh-signature";
+
+export function webhookSignature(secret, body) {
+  const key = String(secret ?? "");
+  if (!key) return "";
+  // HMAC, not `sha256(body + secret)`: a plain digest over a concatenation is open to a length-extension forgery, and
+  // the receiver would have no way to tell.
+  return `sha256=${createHmac("sha256", key).update(String(body ?? ""), "utf8").digest("hex")}`;
+}
+
+/**
+ * An inbound request, normalised - or the reason it cannot be one.
+ *
+ * `peer` is the conversation to speak into: the platform chat id (a wxid, a group id, a WeCom chat id, a Feishu
+ * receive id) rather than a display name, because a name can match two people and a chat id cannot. `reply` is what
+ * separates "trigger the agent and give me the answer over HTTP" (`false`) from "answer in that chat" (`true`).
+ */
+export function normalizeInboundRequest(body = {}) {
+  const text = String(body.text ?? body.message ?? "").trim();
+  const peer = String(body.peer ?? body.chatId ?? body.to ?? "").trim();
+  const accountId = String(body.accountId ?? "").trim();
+  const rawTransport = String(body.transport ?? "").trim().toLowerCase();
+  const transport = ["wechat", "wecom", "feishu"].includes(rawTransport) ? rawTransport : "wechat";
+  const id = String(body.id ?? "").trim();
+  const replyFlag = body.reply === undefined ? true : body.reply;
+  const reply = !(replyFlag === false || replyFlag === 0 || /^(false|0|no|off)$/i.test(String(replyFlag).trim()));
+  if (!text) return { error: "text 是空的（要触发一轮对话，得给它一句话）" };
+  if (!peer) return { error: "peer 是空的（填会话 id：wxid / 群 id / 企微会话 id / 飞书 receive id）" };
+  if (text.length > 8000) return { error: `text 太长：${text.length} 字符，上限 8000` };
+  return { text, peer, accountId, transport, id, reply };
+}
+
+/**
+ * Is this inbound request allowed in?
+ *
+ * The endpoint exists for other machines (a NAS, CI, a monitor), so it cannot demand a loopback source; the token is
+ * the whole gate. Comparison is length-safe and constant-time-ish (`timingSafeEqual` over equal-length buffers) because
+ * a token compared with `===` leaks its prefix through timing to anyone who can reach the port.
+ */
+export function inboundTokenAccepted(prefs, headers = {}) {
+  const expected = String(prefs?.inboundToken ?? "").trim();
+  if (!expected) return { ok: false, reason: "入站 token 还没生成（打开面板刷新一次）" };
+  const raw = String(
+    headers["x-dsh-token"] ?? headers["x-inbound-token"] ?? headers["authorization"] ?? "",
+  ).trim();
+  const given = raw.replace(/^Bearer\s+/i, "");
+  if (!given) return { ok: false, reason: "缺少 x-dsh-token" };
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  const same = a.length === b.length && timingSafeEqual(a, b);
+  return same ? { ok: true } : { ok: false, reason: "token 不对" };
+}
+
+/** Escape a value for HTML text or an attribute. The dashboard prints chat names and URLs, both attacker-shaped. */
+export function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+/** `1234567` → `1,234,567`; a dashboard number nobody has to count digits on. */
+function groupDigits(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return Math.round(number).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/**
+ * The dashboard: one page that answers "is it working, what broke, what did it cost".
+ *
+ * Server-rendered and script-free like `/panel`, because the thing it is diagnosing is often the thing that would have
+ * to run the script. Every value is escaped: display names come from other people.
+ */
+export function dashboardHtml(data = {}) {
+  const {
+    version = "", builtAt = "", loadedAt = "", now = Date.now(),
+    counters = {}, tokens = {}, peers = {}, tasks = {}, prefs = {},
+    webhook = {}, inbound = {}, accounts = [], lastInbound = {}, stream = {},
+    tokenAccountingError = null, routes = [],
+  } = data;
+
+  const row = (label, value, hint = "") =>
+    `<tr><th>${escapeHtml(label)}</th><td>${value}${hint ? `<div class="m">${escapeHtml(hint)}</div>` : ""}</td></tr>`;
+  const number = (value) => `<b>${groupDigits(value)}</b>`;
+  const failed =
+    (counters.retryFailed ?? 0) + (counters.unusable ?? 0) + (counters.mediaFailed ?? 0) +
+    (counters.feishuErrors ?? 0) + (counters.interjectFailed ?? 0) + (counters.inboundFailed ?? 0) +
+    (counters.webhookFailed ?? 0);
+  const uptimeHours = loadedAt ? Math.max(0, (now - Date.parse(loadedAt)) / 3_600_000) : 0;
+  const accountRows = (Array.isArray(accounts) ? accounts : []).map((account) => {
+    const id = account?.accountId ?? account?.botId ?? "?";
+    const live = account?.running ? `<span class="good">在线</span>` : `<span class="bad">离线</span>`;
+    const polled = account?.lastPollAt ? new Date(account.lastPollAt).toLocaleTimeString("zh-CN") : "-";
+    return `<li><code>${escapeHtml(id)}</code> · ${live} · 最后轮询 ${escapeHtml(polled)}</li>`;
+  }).join("");
+  const tokenRows = (Array.isArray(tokens?.accounts) ? tokens.accounts : []).slice(0, 12).map((entry) =>
+    `<li><code>${escapeHtml(entry?.accountId ?? "?")}</code>${
+      entry?.chatId ? ` / ${escapeHtml(entry.chatId)}` : ""
+    } · ${groupDigits(entry?.totalTokens ?? 0)} tokens · ${groupDigits(entry?.calls ?? 0)} 次</li>`).join("");
+  const peerCount = Object.values(peers ?? {}).reduce((sum, chats) => sum + Object.keys(chats ?? {}).length, 0);
+  const inboundRows = Object.values(lastInbound ?? {}).map((entry) =>
+    `<li>${escapeHtml(entry?.peerName ?? entry?.chatId ?? "?")} · ${escapeHtml(entry?.accountId ?? "")} · ${escapeHtml(
+      entry?.at ? new Date(entry.at).toLocaleString("zh-CN") : "-",
+    )}</li>`).join("");
+  const routeRows = (Array.isArray(routes) ? routes : []).slice(0, 6).map((entry) =>
+    `<li>${escapeHtml(entry?.path ?? "?")} · ${escapeHtml(new Date(entry?.at ?? now).toLocaleString("zh-CN"))}${
+      entry?.command ? ` · ${escapeHtml(entry.command)}` : ""
+    }</li>`).join("");
+
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="30">
+<title>dsh-wechat-media 看板</title>
+<style>
+ body{font:14px/1.65 system-ui,"Segoe UI",sans-serif;margin:24px auto;max-width:920px;padding:0 18px;color:#1f2328}
+ h1{font-size:19px;margin:0 0 4px} h2{font-size:15px;margin:26px 0 8px;padding-bottom:6px;border-bottom:1px solid #e6e8eb}
+ table{border-collapse:collapse;width:100%} th{text-align:left;font-weight:600;width:190px;vertical-align:top;padding:6px 0;color:#57606a}
+ td{padding:6px 0} .m{color:#6e7781;font-size:12px} .bad{color:#b42318;font-weight:600} .good{color:#1a7f37;font-weight:600}
+ ul{margin:6px 0;padding-left:20px} li{margin:2px 0} code{background:#f6f8fa;padding:1px 5px;border-radius:5px;font-size:12px}
+ .cards{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0 4px}
+ .card{flex:1 1 150px;border:1px solid #e6e8eb;border-radius:10px;padding:10px 12px}
+ .card b{display:block;font-size:22px;line-height:1.2} .card span{color:#6e7781;font-size:12px}
+ a{color:#0969da}
+</style>
+<h1>dsh-wechat-media 看板</h1>
+<div class="m">版本 ${escapeHtml(version || "?")} · 构建 ${escapeHtml(builtAt ? new Date(builtAt).toLocaleString("zh-CN") : "?")} ·
+加载 ${escapeHtml(loadedAt ? new Date(loadedAt).toLocaleString("zh-CN") : "?")} · 已运行 ${uptimeHours.toFixed(1)} 小时 ·
+<a href="/dsh-wechat-media/state">原始 /state</a> · <a href="/dsh-wechat-media/panel">控制面板</a></div>
+
+<div class="cards">
+  <div class="card"><b>${groupDigits(peerCount)}</b><span>会话</span></div>
+  <div class="card"><b class="${failed ? "bad" : "good"}">${groupDigits(failed)}</b><span>失败</span></div>
+  <div class="card"><b>${groupDigits(tokens?.total?.totalTokens ?? 0)}</b><span>tokens</span></div>
+  <div class="card"><b>${groupDigits(counters.inboundRequests ?? 0)}</b><span>入站请求</span></div>
+  <div class="card"><b class="${(counters.webhookFailed ?? 0) ? "bad" : "good"}">${groupDigits(counters.webhookSent ?? 0)}</b><span>webhook 已发</span></div>
+</div>
+
+<h2>会话与账号</h2>
+<table>
+${row("账号", accountRows ? `<ul>${accountRows}</ul>` : "（无）")}
+${row("会话", number(peerCount), "已被桥接的会话：微信 / 企微 / 飞书")}
+${row("定时任务", `${number(tasks?.count ?? 0)}（启用 ${groupDigits(tasks?.enabled ?? 0)}）`)}
+${row("入站接口", prefs?.inboundToken ? `<span class="good">已开启</span>` : `<span class="bad">未生成 token</span>`,
+  "POST /dsh-wechat-media/inbound，token 见下方配置")}
+</table>
+
+<h2>失败与丢弃</h2>
+<table>
+${row("失败合计", failed ? `<span class="bad">${groupDigits(failed)}</span>` : `<span class="good">0</span>`)}
+${row("重试失败", number(counters.retryFailed ?? 0), "尝试过一次重试仍失败")}
+${row("无法使用", number(counters.unusable ?? 0), "消息类型不认识 / 没有可用内容")}
+${row("媒体失败", number(counters.mediaFailed ?? 0))}
+${row("被拦截", number(counters.blocked ?? 0), "白名单 / 只处理好友 / 群被跳过")}
+${row("飞书错误", number(counters.feishuErrors ?? 0))}
+${row("入站失败", number(counters.inboundFailed ?? 0), "POST /inbound 触发的轮次里出错")}
+${row("Webhook 失败", number(counters.webhookFailed ?? 0))}
+${row("Token 记账失败", tokenAccountingError
+    ? `<span class="bad">${escapeHtml(tokenAccountingError.message ?? tokenAccountingError)}</span>`
+    : `<span class="good">无</span>`)}
+</table>
+
+<h2>Token 用量</h2>
+<table>
+${row("合计", `${number(tokens?.total?.totalTokens ?? 0)} <span class="m">输入 ${groupDigits(tokens?.total?.inputTokens ?? 0)} · 输出 ${groupDigits(tokens?.total?.outputTokens ?? 0)} · 缓存 ${groupDigits(tokens?.total?.cachedTokens ?? 0)} · 调用 ${groupDigits(tokens?.total?.calls ?? 0)} 次</span>`)}
+${row("窗口", `${groupDigits(tokens?.windowDays ?? 0)} 天`, `下次清零 ${tokens?.nextResetAt ? new Date(tokens.nextResetAt).toLocaleString("zh-CN") : "?"}`)}
+${tokenRows ? row("按会话", `<ul>${tokenRows}</ul>`) : ""}
+</table>
+
+<h2>最近活动</h2>
+<table>
+${row("最后入站", inboundRows ? `<ul>${inboundRows}</ul>` : "（还没有）")}
+${row("Webhook", webhook?.last
+    ? `${webhook.last.ok ? `<span class="good">成功</span>` : `<span class="bad">失败</span>`} · ${escapeHtml(
+        new Date(webhook.last.at).toLocaleString("zh-CN"),
+      )}${webhook.last.status ? ` · HTTP ${escapeHtml(webhook.last.status)}` : ""}${
+        webhook.last.error ? ` · ${escapeHtml(webhook.last.error)}` : ""
+      }`
+    : "（没有配置或还没发过）")}
+${row("最近路由", routeRows ? `<ul>${routeRows}</ul>` : "（还没有）")}
+${row("流式帧", stream?.lastFrame
+    ? `${escapeHtml(stream.lastFrame.type ?? "?")} · ${groupDigits(stream.lastFrame.chars ?? 0)} 字符 · ${escapeHtml(
+        new Date(stream.lastFrame.at).toLocaleString("zh-CN"))}`
+    : "（无）")}
+</table>
+
+<h2>配置</h2>
+<table>
+${row("入站 token", prefs?.inboundToken ? `<code>${escapeHtml(prefs.inboundToken)}</code>` : "（无）",
+  "请求头 x-dsh-token；只在本机页面显示")}
+${row("Webhook", prefs?.webhookUrl ? `<code>${escapeHtml(prefs.webhookUrl)}</code>` : "（未配置）",
+  '每轮结束 POST 结果；POST /dsh-wechat-media/webhook {"action":"test"} 可试发一条')}
+${row("Webhook 签名", prefs?.webhookUrl && prefs?.webhookSecret ? "已设置" : "（未设置）", `请求头 ${WEBHOOK_SIGNATURE_HEADER} = sha256=<hex>`)}
+</table>
+<p class="m" style="margin-top:22px">仅本机可访问 · 每 30 秒自动刷新</p>
+`;
+}
+
+/**
  * Collects assistant replies and correlates them with the turn this plugin
  * started. Settling on *our* `turn/end` (never on whole-agent idle) matters: a
  * session the human is also using never goes idle, which is the classic way a
  * bridge ends up with replies that never leave the queue.
  */
 export class ReplyCollector {
-  constructor(scope, { onUsage, onDelta } = {}) {
+  constructor(scope, { onUsage, onDelta, onSettled } = {}) {
     this.scope = scope;
     this.onUsage = onUsage;
     this.onDelta = onDelta;
+    this.onSettled = onSettled;
     // Event types this collector does not handle. A bounded ring, reported by /state: if live text
     // arrives under a name nobody told us about, it shows up here instead of vanishing.
     this.unknownEvents = [];
@@ -1166,6 +1369,13 @@ export class ReplyCollector {
     const remaining = queue.filter((candidate) => candidate !== record);
     if (remaining.length > 0) this.pending.set(record.sessionId, remaining);
     else this.pending.delete(record.sessionId);
+    // Everyone who wants to know that a turn finished hears it here, once: a webhook that were emitted by each transport
+    // separately would be emitted three times for the same turn, and a fourth would be missing.
+    try {
+      this.onSettled?.({ sessionId: record.sessionId, ...outcome });
+    } catch {
+      /* an observer must never cost the reply */
+    }
     record.resolve({ ...outcome, deliveredByTool: Boolean(record.deliveredByTool) });
   }
 
@@ -1263,6 +1473,15 @@ export function apply(ctx, config = {}) {
    * session transcript still had it. `/state` now reports it beside `inboundError`.
    */
   let tokenAccountingError = null;
+  /**
+   * The outbound webhook's own record: what was last delivered, and how often it worked.
+   *
+   * Kept here rather than in the token ledger because it is operational state, not accounting: the dashboard needs to
+   * say "the last POST failed with this" without anyone reading a log file.
+   */
+  const webhookState = { last: null, sent: 0, failed: 0 };
+  /** ids of inbound requests already handled, so a CI retry does not run the turn twice. */
+  const inboundSeen = [];
   const collectors = new ReplyCollector(ctx, {
     /**
      * Attribute one model call to the account and chat it belongs to.
@@ -1297,6 +1516,19 @@ export function apply(ctx, config = {}) {
           ctx.logger?.warn?.("[dsh-wechat-media] token accounting failed: %s", error?.message ?? error);
         });
     },
+    /**
+     * Every finished turn lands here exactly once, whichever transport ran it.
+     *
+     * Fire-and-forget on purpose: a webhook receiver that is slow, down or misconfigured must never delay or fail the
+     * answer somebody is waiting for.
+     */
+    onSettled: ({ sessionId, text, stopReason, error }) => {
+      // The catch is not decoration: this runs fire-and-forget, and an unhandled rejection here took the whole host
+      // down once (a webhook built from a variable that did not exist yet).
+      Promise.resolve(emitTurnWebhook({ sessionId, text, stopReason, error })).catch((failure) => {
+        ctx.logger?.warn?.("[dsh-wechat-media] webhook emission failed: %s", failure?.message ?? failure);
+      });
+    },
   });
   /** Injected factories resolved lazily through the loader. */
   const harness = { createUserMessage: undefined, defineTool: undefined };
@@ -1306,6 +1538,124 @@ export function apply(ctx, config = {}) {
   }, "dsh-wechat-media: stop monitors");
 
   // ── helpers ────────────────────────────────────────────────────────────────
+
+  /** Which transport a conversation's account id belongs to, by the prefix the inbound paths use. */
+  function transportOfAccount(accountId) {
+    const id = String(accountId ?? "");
+    if (id.startsWith("wecom")) return "wecom";
+    if (id.startsWith("feishu")) return "feishu";
+    if (id) return "wechat";
+    return "unknown";
+  }
+
+  /**
+   * Deliver one finished turn to the configured webhook.
+   *
+   * Three attempts with a short backoff, because a receiver restarting is a normal Tuesday; a 4xx is not retried, because
+   * it means the URL, the method or the signature is wrong and three more copies will not fix it. The result lands in
+   * `webhookState` so the dashboard can show the last outcome without anyone opening a log.
+   */
+  async function emitTurnWebhook({ sessionId, text, stopReason, error } = {}) {
+    let prefs;
+    try {
+      prefs = await state.loadPrefs();
+    } catch (failure) {
+      ctx.logger?.warn?.("[dsh-wechat-media] webhook skipped, prefs unreadable: %s", failure?.message ?? failure);
+      return;
+    }
+    const url = String(prefs?.webhookUrl ?? "").trim();
+    if (!url) return;
+    const conversation = conversations.get(String(sessionId ?? "")) ?? {};
+    const payload = {
+      event: "turn.end",
+      at: new Date().toISOString(),
+      sessionId: String(sessionId ?? ""),
+      accountId: conversation.accountId ?? null,
+      chatId: conversation.chatId ?? null,
+      peerName: conversation.peerName ?? null,
+      transport: transportOfAccount(conversation.accountId),
+      answer: String(text ?? ""),
+      answerChars: String(text ?? "").length,
+      stopReason: String(stopReason ?? ""),
+      error: error ? String(error) : null,
+      version: String(MANIFEST?.version ?? ""),
+    };
+    const body = JSON.stringify(payload);
+    const secret = String(prefs?.webhookSecret ?? "");
+    const headers = { "content-type": "application/json; charset=utf-8", "user-agent": "dsh-wechat-media" };
+    if (secret) headers[WEBHOOK_SIGNATURE_HEADER] = webhookSignature(secret, body);
+
+    const attempts = [];
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: typeof AbortSignal?.timeout === "function" ? AbortSignal.timeout(10_000) : undefined,
+        });
+        attempts.push(response.status);
+        if (response.ok) {
+          counters.webhookSent += 1;
+          webhookState.sent += 1;
+          webhookState.last = { at: payload.at, ok: true, status: response.status, attempt, url };
+          return;
+        }
+        // A 4xx is a decision, not an outage: retrying a rejected payload only makes noise.
+        if (response.status >= 400 && response.status < 500) break;
+      } catch (failure) {
+        attempts.push(String(failure?.message ?? failure));
+      }
+      if (attempt < 3) await sleep(300 * attempt);
+    }
+    counters.webhookFailed += 1;
+    webhookState.failed += 1;
+    webhookState.last = {
+      at: payload.at,
+      ok: false,
+      status: attempts.at(-1),
+      attempts: attempts.length,
+      url,
+      error: attempts.length ? String(attempts.at(-1)) : "no attempt",
+    };
+    ctx.logger?.warn?.("[dsh-wechat-media] webhook failed: %s", webhookState.last.error);
+  }
+
+  /**
+   * The inbound endpoint's token: generated once, kept in prefs, shown on the dashboard and in the card.
+   *
+   * It exists before the first request so a person can copy it instead of asking the plugin to invent one on demand.
+   */
+  async function ensureInboundToken() {
+    const prefs = await state.loadPrefs();
+    const current = String(prefs?.inboundToken ?? "").trim();
+    if (current) return current;
+    const token = bridgeToken();
+    await state.savePrefs({ inboundToken: token });
+    return token;
+  }
+
+  /**
+   * Which account an inbound request speaks for.
+   *
+   * WeChat needs a paired account because the answer is sent through it, so a named one is honoured and the first paired
+   * account is the default. WeCom and Feishu never send actively from this route, so their account id is whatever the
+   * caller names (the conversation is keyed by it either way).
+   */
+  async function inboundAccountId(request) {
+    if (request.transport !== "wechat") return request.accountId || request.transport;
+    const accounts = await state.loadAccounts();
+    if (!accounts.length) throw new Error("还没有配对的微信账号（面板里扫码一次）");
+    if (!request.accountId) return String(accounts[0].accountId ?? accounts[0].botId);
+    const found = accounts.find((account) => String(account.accountId ?? account.botId) === request.accountId);
+    if (!found) throw new Error(`没有这个微信账号：${request.accountId}`);
+    return String(found.accountId ?? found.botId);
+  }
+
+  // Generate the inbound token at start-up rather than on first use: the dashboard must be able to show it.
+  void ensureInboundToken().catch((error) => {
+    ctx.logger?.warn?.("[dsh-wechat-media] could not prepare the inbound token: %s", error?.message ?? error);
+  });
 
   const rememberSeen = (accountId, messageId) => {
     let bucket = seen.get(accountId);
@@ -2682,7 +3032,7 @@ export function apply(ctx, config = {}) {
    * Visible counters. Silently dropping a message, or answering it, must be
    * observable from GET /state - otherwise "did it work?" means log archaeology.
    */
-  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0, retried: 0, retryFailed: 0, feishuEvents: 0, feishuAnswered: 0, feishuIgnored: 0, feishuErrors: 0 };
+  const counters = { received: 0, forwarded: 0, blocked: 0, answered: 0, unusable: 0, mediaDownloaded: 0, mediaFailed: 0, mediaBytes: 0, commands: 0, groupsSkipped: 0, interjected: 0, streamChunks: 0, streamDeltas: 0, streamRefused: 0, streamFinalized: 0, streamFinalizeFailed: 0, streamFallback: 0, voiceDecoded: 0, interjectFailed: 0, retried: 0, retryFailed: 0, feishuEvents: 0, feishuAnswered: 0, feishuIgnored: 0, feishuErrors: 0, inboundRequests: 0, inboundFailed: 0, inboundDuplicates: 0, webhookSent: 0, webhookFailed: 0 };
 
 /**
  * Every interjection decision, kept for later inspection.
@@ -3200,6 +3550,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       if ("apiKey" in tavily) tavily.apiKey = tavily.apiKey ? "***" : "";
       safe.tavily = tavily;
     }
+    // The webhook secret signs every outbound delivery; echoing it back over a loopback JSON route buys nothing and
+    // turns one readable page into a credential.
+    if ("webhookSecret" in safe) safe.webhookSecret = safe.webhookSecret ? "***" : "";
     return safe;
   }
 
@@ -7353,6 +7706,185 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       },
       {
+        /**
+         * The inbound trigger: another system speaks into one conversation.
+         *
+         * This is the one route that may be reached from outside loopback, because that is its whole purpose (a NAS, a
+         * CI job, a monitor). The token is therefore the gate, not the source address - see `inboundTokenAccepted`.
+         * `reply: false` runs the turn and answers over HTTP only; `reply: true` also sends the answer to the chat.
+         */
+        kind: "exact",
+        path: "/dsh-wechat-media/inbound",
+        handler: async (req, res) => {
+          if (req.method !== "POST") return json(res, 405, { ok: false, error: "POST only" });
+          const prefs = await state.loadPrefs();
+          const auth = inboundTokenAccepted(prefs, req.headers ?? {});
+          if (!auth.ok) return json(res, 401, { ok: false, error: auth.reason });
+          const body = await readArgs(req);
+          const request = normalizeInboundRequest(body);
+          if (request.error) return json(res, 400, { ok: false, error: request.error });
+          if (request.id) {
+            if (inboundSeen.includes(request.id)) {
+              counters.inboundDuplicates += 1;
+              return json(res, 200, { ok: true, duplicate: true, id: request.id });
+            }
+            inboundSeen.push(request.id);
+            if (inboundSeen.length > 200) inboundSeen.shift();
+          }
+          counters.inboundRequests += 1;
+          noteRoute("/inbound", { transport: request.transport, peer: request.peer, chars: request.text.length, reply: request.reply });
+          const started = Date.now();
+          try {
+            const accountId = await inboundAccountId(request);
+            const peerName = `入站 ${request.peer}`;
+            const { agent, sessionId } = await ensureAgent(accountId, request.peer, peerName);
+            const message = await userMessage(`[入站 ${request.transport} ${request.peer}]\n${request.text}`);
+            const waiting = collectors.wait(sessionId, message?.id);
+            await agent.followup(message);
+            const outcome = await waiting;
+            let delivered = false;
+            let deliveryError = null;
+            if (request.reply && !outcome.error && outcome.text) {
+              try {
+                if (request.transport !== "wechat") {
+                  deliveryError = `transport=${request.transport} 目前只能把回答放进 HTTP 响应，不能主动发到该会话`;
+                } else {
+                  const account = await state.loadAccount(accountId);
+                  if (!account?.token) throw new Error(`微信账号 ${accountId || "（无）"} 没有 token（未配对）`);
+                  for (const chunk of chunkText(await chatBody(outcome.text))) {
+                    await sendText(account, request.peer, chunk);
+                  }
+                  delivered = true;
+                }
+              } catch (error) {
+                deliveryError = String(error?.message ?? error);
+              }
+            }
+            if (outcome.error) counters.inboundFailed += 1;
+            return json(res, 200, {
+              ok: !outcome.error,
+              sessionId,
+              transport: request.transport,
+              peer: request.peer,
+              answer: outcome.text ?? "",
+              stopReason: outcome.stopReason ?? "",
+              error: outcome.error ?? null,
+              delivered,
+              deliveryError,
+              ms: Date.now() - started,
+            });
+          } catch (error) {
+            counters.inboundFailed += 1;
+            return json(res, 500, { ok: false, error: String(error?.message ?? error), ms: Date.now() - started });
+          }
+        },
+      },
+      {
+        /** The outbound webhook: status, and a test delivery so a receiver can be proven before a real turn depends on it. */
+        kind: "exact",
+        path: "/dsh-wechat-media/webhook",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method === "GET") {
+            const prefs = await state.loadPrefs();
+            return json(res, 200, {
+              ok: true,
+              url: String(prefs?.webhookUrl ?? ""),
+              configured: Boolean(String(prefs?.webhookUrl ?? "").trim()),
+              secret: Boolean(String(prefs?.webhookSecret ?? "").trim()),
+              sent: counters.webhookSent,
+              failed: counters.webhookFailed,
+              last: webhookState.last,
+            });
+          }
+          if (req.method !== "POST") return json(res, 405, { error: "GET or POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "test").trim().toLowerCase();
+          if (action !== "test") return json(res, 400, { ok: false, error: `未知 action：${action}（只支持 test）` });
+          const prefs = await state.loadPrefs();
+          const url = String(body.url ?? prefs?.webhookUrl ?? "").trim();
+          if (!url) return json(res, 400, { ok: false, error: '还没有配置 webhook 地址：POST /dsh-wechat-media/prefs {"webhookUrl":"https://…"}' });
+          const payload = {
+            event: "webhook.test",
+            at: new Date().toISOString(),
+            sessionId: "test",
+            accountId: null,
+            chatId: null,
+            peerName: null,
+            transport: "unknown",
+            answer: "这是一条来自 dsh-wechat-media 的测试 webhook。",
+            answerChars: 24,
+            stopReason: "test",
+            error: null,
+            version: String(MANIFEST?.version ?? ""),
+          };
+          const text = JSON.stringify(payload);
+          const secret = String(prefs?.webhookSecret ?? "");
+          const headers = { "content-type": "application/json; charset=utf-8", "user-agent": "dsh-wechat-media" };
+          if (secret) headers[WEBHOOK_SIGNATURE_HEADER] = webhookSignature(secret, text);
+          const started = Date.now();
+          try {
+            const response = await fetch(url, {
+              method: "POST",
+              headers,
+              body: text,
+              signal: typeof AbortSignal?.timeout === "function" ? AbortSignal.timeout(10_000) : undefined,
+            });
+            return json(res, 200, {
+              ok: response.ok,
+              status: response.status,
+              ms: Date.now() - started,
+              signed: Boolean(secret),
+              error: response.ok ? null : `接收端返回 HTTP ${response.status}`,
+            });
+          } catch (error) {
+            return json(res, 502, { ok: false, error: String(error?.message ?? error), ms: Date.now() - started });
+          }
+        },
+      },
+      {
+        /** The dashboard: sessions, failures and token spend on one page, script-free like `/panel`. */
+        kind: "exact",
+        path: "/dsh-wechat-media/dashboard",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          const accounts = await state.loadAccounts();
+          const prefs = await state.loadPrefs();
+          const routes = await state.loadRoutes();
+          const build = await buildInfo();
+          const html = dashboardHtml({
+            version: build.version,
+            builtAt: build.builtAt,
+            loadedAt: build.loadedAt,
+            now: Date.now(),
+            counters: { ...counters },
+            tokens: summarize(await state.loadTokens()),
+            peers: await state.loadPeers(),
+            tasks: await taskSummary(),
+            prefs: publicPrefs(prefs),
+            webhook: webhookState,
+            accounts: accounts.map((account) => {
+              const control = monitors.get(account.accountId);
+              return {
+                accountId: account.accountId,
+                botId: account.botId,
+                running: Boolean(control && !control.stopped),
+                lastPollAt: control?.lastPollAt,
+                lastError: control?.lastError,
+              };
+            }),
+            lastInbound: Object.fromEntries(lastInbound.entries()),
+            stream: { lastFrame: lastStreamFrame },
+            tokenAccountingError,
+            routes: [...routeLog],
+            inbound: { seen: inboundSeen.length },
+          });
+          // eslint-disable-next-line no-restricted-syntax -- a page, not JSON
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+          res.end(html);
+        },
+      },
+      {
         kind: "exact",
         path: "/dsh-wechat-media/login",
         handler: async (req, res) => {
@@ -7983,6 +8515,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.wizardDone) !== null) patch.wizardDone = asBool(body.wizardDone);
           // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
           if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
+          // The outbound webhook and its signing secret. An empty string turns the webhook off, which is how a person
+          // stops deliveries without hunting for a delete button.
+          if (body.webhookUrl !== undefined) patch.webhookUrl = String(body.webhookUrl ?? "").trim();
+          if (body.webhookSecret !== undefined) patch.webhookSecret = String(body.webhookSecret ?? "").trim();
+          // The inbound token can be rotated from the card. A short one is refused rather than stored: it is the only
+          // gate on a route that is reachable from outside loopback.
+          if (body.inboundToken !== undefined) {
+            const wanted = String(body.inboundToken ?? "").trim();
+            if (wanted && wanted.length < 16) return json(res, 400, { ok: false, error: "inboundToken 太短（至少 16 字符）" });
+            patch.inboundToken = wanted;
+          }
           // The Feishu block of the Web UI panel writes here. It is handled before the reply because a
           // changed app id/secret has to reconnect the long connection, and the response then carries
           // the fresh state so the panel can show "connected" or the reason it is not.
