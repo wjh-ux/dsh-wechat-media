@@ -306,7 +306,10 @@ export function parseMonitorOutput(stdout) {
 export function runProcess(program, args, { exec = execFile, timeoutMs = FLASH_TIMEOUT_MS, env = process.env } = {}) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    exec(program, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env }, (error, out, err) => {
+    // Any of these flashers may be a python program (stcgal, esptool); without this, a Chinese Windows console turns
+    // their bytes into mojibake before the output ever reaches the transcript.
+    const childEnv = { ...env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
+    exec(program, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: childEnv }, (error, out, err) => {
       if (error && error.killed) {
         reject(new Error(`超时（${Math.round(timeoutMs / 1000)}s）——烧录没有在预期时间内结束`));
         return;
@@ -376,8 +379,20 @@ export async function flashFirmware({
   return { tool: "esptool", program: support.esptool.python, args, ...result };
 }
 
-/** The last `lines` non-empty lines of a stream - where a flasher puts its verdict. */
+/** A tqdm-style progress line: "Writing flash: 18%|██ | 640/3584 [00:00<00:00]". */
+const PROGRESS_LINE = /:?\s*\d{1,3}%\|.*\|\s*\d+\/\d+/;
+
+/**
+ * The last `lines` useful lines of a flasher's output - where it puts its verdict.
+ *
+ * Splits on `\r` as well as `\n` because tqdm rewrites one line with carriage returns, and drops the progress lines: a
+ * bar that ends at 100% is not a result, and in a chat answer it is noise. Measured: without this, the STC flash report
+ * ended with a mojibake progress bar instead of `Target UID: ...`.
+ */
 export function tail(text, lines = 20) {
-  const all = String(text ?? "").split(/\r?\n/).filter((line) => line.trim());
+  const all = String(text ?? "")
+    .split(/[\r\n]+/)
+    .map((line) => line.trim())
+    .filter((line) => line && !PROGRESS_LINE.test(line));
   return all.slice(-Math.max(1, lines)).join("\n");
 }

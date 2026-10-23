@@ -178,6 +178,40 @@ await test("the monitor script opens the port exclusively and closes it even on 
   assert.match(script, /ToBase64String/);
 });
 
+await test("a tqdm progress bar is dropped, and its carriage returns do not glue lines together", () => {
+  // Measured on the real STC flash: the report ended with "Writing flash: 18%|????" because tqdm rewrites one line with
+  // \r and the console codepage mangled it. The verdict ("Target UID: ...") was several lines further up.
+  const noisy = [
+    "Protocol detected: stc8g",
+    "Writing flash:   0%|     | 0/3584",
+    "Writing flash:  50%|###  | 1792/3584",
+    "Finishing write: done",
+    "Target UID: F734C3FC31F408",
+  ].join("\r");
+  const kept = serial.tail(noisy, 10);
+  assert.match(kept, /Target UID: F734C3FC31F408/, "the verdict survives");
+  assert.doesNotMatch(kept, /%\|/, "progress bars are not output");
+  assert.ok(kept.split("\n").every((line) => !line.includes("%|")), "no line keeps a progress bar");
+});
+
+await test("flasher children get a UTF-8 environment", async () => {
+  let seen;
+  const exec = (program, args, options, callback) => {
+    seen = options.env;
+    process.nextTick(() => callback(null, "", ""));
+    return {};
+  };
+  await serial.flashFirmware({
+    support: { ok: true, idf: null, esptool: { python: "py.exe", args: ["-m", "esptool"] }, avrdude: "", stcgal: null },
+    port: "COM3",
+    file: "app.bin",
+    exists: () => true,
+    exec,
+  });
+  assert.equal(seen.PYTHONIOENCODING, "utf-8");
+  assert.equal(seen.PYTHONUTF8, "1");
+});
+
 await test("a missing firmware file is refused here, not inside the flasher", async () => {
   // Measured: stcgal answered a missing path with its whole usage text, which reads like a broken tool rather than a
   // wrong path.

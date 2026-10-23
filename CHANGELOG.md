@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.71.3
+
+- **A flasher's report no longer ends in a mojibake progress bar.** stcgal's tqdm bar is written with carriage returns, and
+  the Windows console codepage turned it into `Writing flash: 18%|????` - pushing the actual verdict (`Target UID: ...`)
+  out of the tail. Two changes: child processes now get `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`, and `tail` splits on
+  `\r` as well as `\n` and drops tqdm-shaped lines. A bar that reached 100% is not a result.
+- Measured on the real flash that produced this report: `DS18B20_TM1650.hex`, STC8H1K08 over COM3 - 3129 bytes loaded,
+  3648 bytes written, `Target UID: F734C3FC31F408`, and the new firmware printed `TEMP:27.7C` straight afterwards.
+- 42 suites / 664 cases.
+
 ## 0.71.2
 
 - **`serial_ports` now lists stcgal.** It reported ESP-IDF, esptool and avrdude but not the tool the STC board had just
