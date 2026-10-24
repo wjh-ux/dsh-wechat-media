@@ -28,7 +28,7 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { accumulate, due, reset, setWindow } from "./tokens.js";
-import { CIPHER_PREFIX, SECRET_PATHS, dpapi, isEncrypted, plaintextSecrets } from "./secrets.js";
+import { CIPHER_PREFIX, SECRET_PATHS, TOP_LEVEL_SECRETS, dpapi, isEncrypted, plaintextSecrets } from "./secrets.js";
 import { execFile } from "node:child_process";
 
 /**
@@ -338,6 +338,15 @@ export class WechatState {
           this.secretError = `无法加密 ${section}.${field}：${String(error?.message ?? error)}`;
         }
       }
+      for (const field of TOP_LEVEL_SECRETS) {
+        const value = merged?.[field];
+        if (typeof value !== "string" || !value || isEncrypted(value)) continue;
+        try {
+          sealed[field] = `${CIPHER_PREFIX}${await seal.protect(value)}`;
+        } catch (error) {
+          this.secretError = `无法加密 ${field}：${String(error?.message ?? error)}`;
+        }
+      }
     }
     await writeJson(join(this.root, "prefs.json"), sealed);
     this._prefsRevealed = undefined;
@@ -361,6 +370,16 @@ export class WechatState {
           // status can say "unreadable" rather than pretending the credential is absent.
           this.secretError = `无法解开 ${section}.${field}：${String(error?.message ?? error)}`;
           out[section] = { ...out[section], [field]: "" };
+        }
+      }
+      for (const field of TOP_LEVEL_SECRETS) {
+        const value = out?.[field];
+        if (!isEncrypted(value)) continue;
+        try {
+          out[field] = await seal.reveal(value.slice("dpapi:".length));
+        } catch (error) {
+          this.secretError = `无法解开 ${field}：${String(error?.message ?? error)}`;
+          out[field] = "";
         }
       }
     }

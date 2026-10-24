@@ -27,7 +27,15 @@ export const SECRET_PATHS = Object.freeze([
   ["wecom", "botSecret"],
   ["wecom", "secret"],
   ["feishu", "webhookUrl"],
+  // QQ arrived after the sealing mechanism did, so its secret was the one credential written in the clear.
+  ["qq", "clientSecret"],
 ]);
+
+/**
+ * Secrets that are not inside a block. `webhookSecret` signs every outbound delivery, so it is as sensitive as the rest and
+ * was stored in plaintext for the same reason: nothing told the sealer it existed.
+ */
+export const TOP_LEVEL_SECRETS = Object.freeze(["webhookSecret"]);
 
 /** A value that already looks like ciphertext. */
 export function isEncrypted(value) {
@@ -50,6 +58,11 @@ export function mapSecrets(prefs, transform, paths = SECRET_PATHS) {
     if (typeof value !== "string" || !value) continue;
     copy[section] = { ...block, [field]: transform(value, section, field) };
   }
+  for (const field of TOP_LEVEL_SECRETS) {
+    const value = copy[field];
+    if (typeof value !== "string" || !value) continue;
+    copy[field] = transform(value, "", field);
+  }
   return copy;
 }
 
@@ -59,6 +72,10 @@ export function plaintextSecrets(prefs, paths = SECRET_PATHS) {
   for (const [section, field] of paths) {
     const value = prefs?.[section]?.[field];
     if (typeof value === "string" && value && !isEncrypted(value)) found.push(`${section}.${field}`);
+  }
+  for (const field of TOP_LEVEL_SECRETS) {
+    const value = prefs?.[field];
+    if (typeof value === "string" && value && !isEncrypted(value)) found.push(field);
   }
   return found;
 }

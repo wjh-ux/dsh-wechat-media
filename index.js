@@ -3774,8 +3774,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     // body holds 20480 bytes; a longer answer becomes several messages.
     await replyWecomInParts(frame, await chatBody(outcome.text), "stream", undefined, chatId);
   }
+  void sealExistingSecrets();
   // Lifecycle-managed when the scope offers `effect`; otherwise started eagerly, so a
   // harness without it still gets the long connection instead of losing the feature.
+  /**
+   * Seal any secret that is still stored in the clear.
+   *
+   * A path added after a prefs file was written - QQ's clientSecret, webhookSecret - sits in plaintext until something
+   * saves the preferences. Waiting for a preference change means "encrypted" is a claim about the future, so this runs once
+   * at activation and stays silent when there is nothing to do.
+   */
+  async function sealExistingSecrets() {
+    try {
+      const status = await state.secretsStatus();
+      const exposed = Array.isArray(status?.exposed) ? status.exposed : [];
+      if (!exposed.length) return;
+      await state.savePrefs({});
+      ctx.logger?.info?.("[dsh-wechat-media] sealed %d secret(s) that were stored in the clear: %s", exposed.length, exposed.join(", "));
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] could not seal existing secrets: %s", error?.message ?? error);
+    }
+  }
+
   if (typeof ctx.effect === "function") {
     ctx.effect(() => {
       void startWecomBot();

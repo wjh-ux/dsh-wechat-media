@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+- **Every secret is now sealed at rest, including the two that arrived late.** `secrets.js` has had a DPAPI-sealed
+  `SECRET_PATHS` table since 0.32 - but a path only gets sealed if it is *in* that table, and QQ's `clientSecret` and the
+  top-level `webhookSecret` were never added, so both sat in `prefs.json` in the clear. They are in the table now, and
+  `prefs.json` holds `dpapi:…` ciphertext bound to this Windows account instead.
+- **Top-level secrets are a real case, not a hack**: `webhookSecret` has no section, so `mapSecrets`, `plaintextSecrets`,
+  `savePrefs` and read-back all learned about a `TOP_LEVEL_SECRETS` list rather than pretending it lives in a block.
+- **A prefs file written before a path existed is sealed on activation.** Waiting for the next preference change would make
+  "encrypted at rest" a claim about the future; `sealExistingSecrets()` runs once, logs what it sealed, and does nothing when
+  there is nothing to do. Unreadable ciphertext (another account or machine) still reports itself instead of pretending the
+  credential is absent.
+- 44 suites / 690 cases.
+
 ## 1.1.7
 
 - **`/state` returned the QQ `clientSecret` in the clear.** Feishu's `appSecret`, Tavily's `apiKey` and the webhook secret are

@@ -29,6 +29,7 @@ const {
   isEncrypted,
   mapSecrets,
   plaintextSecrets,
+  TOP_LEVEL_SECRETS,
 } = await import("../secrets.js");
 
 const PREFS = {
@@ -105,6 +106,28 @@ test("the DPAPI script asks for the current user scope, in both directions", () 
   assert.match(reveal, /ProtectedData\]::Unprotect\(\$bytes, \$null, 'CurrentUser'\)/);
   assert.match(protect, /\$env:DSH_SECRET_IN = 'QUJD'/);
   assert.doesNotMatch(protect, /Unprotect/, "the two directions cannot drift into each other");
+});
+
+// ── the paths that arrived later ──────────────────────────────────────────
+await test("the secret table covers the QQ client secret and the top-level webhook secret", () => {
+  // QQ arrived after the sealing mechanism did, so its secret was the one credential written in the clear; webhookSecret has
+  // no section at all, which is why the walkers needed to learn about top-level fields.
+  const paths = SECRET_PATHS.map(([section, field]) => `${section}.${field}`);
+  assert.ok(paths.includes("qq.clientSecret"), "qq.clientSecret must be sealed at rest");
+  assert.ok(paths.includes("feishu.appSecret"), "and the older ones must still be there");
+  assert.deepEqual([...TOP_LEVEL_SECRETS], ["webhookSecret"]);
+
+  const prefs = { qq: { clientSecret: "abc", enabled: true }, webhookSecret: "s", feishu: { appSecret: "f" } };
+  assert.deepEqual(plaintextSecrets(prefs).sort(), ["feishu.appSecret", "qq.clientSecret", "webhookSecret"]);
+  const sealed = mapSecrets(prefs, (value) => `dpapi:${value}`);
+  assert.equal(sealed.qq.clientSecret, "dpapi:abc");
+  assert.equal(sealed.webhookSecret, "dpapi:s");
+  assert.equal(sealed.qq.enabled, true, "sealing must not touch anything that is not a secret");
+  // Already-sealed values are not wrapped twice.
+  // The no-double-wrap guarantee belongs to encryptSecrets, not to the generic walker - mapSecrets applies the
+  // transform it is given, which is what lets decryptSecrets reuse it.
+  assert.equal(encryptSecrets(sealed, (value) => `dpapi:${value}`).qq.clientSecret, "dpapi:abc");
+  assert.equal(encryptSecrets(sealed, (value) => `dpapi:${value}`).webhookSecret, "dpapi:s");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
