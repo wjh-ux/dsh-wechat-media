@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.4
+
+- **`/agent model list` threw `Cannot access 'hostProvider' before initialization`.** The listing block referenced a variable that
+  belongs to the *set* path further down, so it hit the temporal dead zone - a mistake that only shows up when the command is
+  actually used, which is why the first release of it shipped broken.
+- The provider is now derived inside the listing block from `hostModel` (already in scope there) instead of reaching for a
+  variable that is not initialised yet. Not hoisting it on purpose: `hostProvider` means "the provider being switched to" in
+  the set path, and reusing the name for two meanings is how this happened.
+- 44 suites / 692 cases.
+
 ## 1.4.3
 
 - **`/agent model list`** lists every provider the host's `llm` service knows, with its models, and marks the one the host is

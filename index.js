@@ -2864,6 +2864,10 @@ export function apply(ctx, config = {}) {
               return [`（读取失败：${String(error?.message ?? error)}）`];
             }
           };
+          // Derived here from hostModel: `hostProvider` belongs to the set path below and is not initialised yet at this
+          // point (the first version of this block used it and threw a temporal-dead-zone error, which is exactly the kind
+          // of mistake that only shows up when the command is actually used).
+          const hostProviderId = hostModel ? hostModel.slice(0, hostModel.indexOf("/")) : "";
           const providers = providersOf();
           if (!providers.length) {
             await reply("读不到 provider 列表（宿主的 llm 服务没有 listProviders）。就用 /agent model 里那个宿主默认值。");
@@ -2879,7 +2883,7 @@ export function apply(ctx, config = {}) {
           for (const provider of shown.slice(0, 8)) {
             const models = await modelsOf(provider);
             const marks = [];
-            if (hostProvider && provider === hostProvider) marks.push("宿主在用");
+            if (hostProviderId && provider === hostProviderId) marks.push("宿主在用");
             lines.push("", `${provider}${marks.length ? ` · ${marks.join(" · ")}` : ""}`);
             if (!models.length) lines.push("  （没有模型）");
             for (const model of models.slice(0, 8)) {
