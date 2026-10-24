@@ -146,16 +146,16 @@ await test("no reply path silently truncates to its first part", () => {
   assert.match(host, /for \(const chunk of chunkText\(`❌ agent 出错：\$\{outcome\.error\}`\)\)/);
 });
 
-await test("both inbound paths answer /commands instead of forwarding them", () => {
+await test("every inbound path answers /commands instead of forwarding them", () => {
   const calls = [...host.matchAll(/runChatCommand\(\{\s*transport:\s*"(\w+)"/g)].map((match) => match[1]);
   let sites = 0;
-  assert.deepEqual(calls.sort(), ["feishu", "wechat", "wecom"], "each transport must dispatch commands");
+  assert.deepEqual(calls.sort(), ["feishu", "qq", "wechat", "wecom"], "each transport must dispatch commands");
   for (const match of host.matchAll(/const handled = await runChatCommand\([\s\S]{0,900}?\n\s*\}\);\n(\s*)if \(handled\) return;/g)) {
     assert.ok(match[1].length >= 0, "a command that was answered must not reach the agent");
     sites += 1;
   }
-  assert.equal(sites, 3, "every transport call site must still match the shape this guard expects");
-  assert.equal([...host.matchAll(/if \(handled\) return;/g)].length, 3, "all three call sites must return early");
+  assert.equal(sites, 4, "every transport call site must still match the shape this guard expects");
+  assert.equal([...host.matchAll(/if \(handled\) return;/g)].length, 4, "all four call sites must return early");
 });
 
 await test("/new moves the chat onto a new generation, /stop cancels the turn", () => {

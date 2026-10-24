@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0
+
+- **QQ bot, over the open platform's WebSocket gateway.** `qq-bot.js` speaks QQ Bot API v2: app access token
+  (`bots.qq.com/app/getAppAccessToken`), gateway discovery (`/gateway`), identify/heartbeat/resume, and replies to
+  `/v2/users/{openid}/messages` or `/v2/groups/{group_openid}/messages`. Outbound only - no public URL, like the WeCom and
+  Feishu long connections.
+- **`/qq on|off|status`**, credentials in the card, and the connection is rebuilt when they change (the same rule the WeCom
+  long connection follows). `sandbox` selects the sandbox API host.
+- **Three details that decide whether a QQ bot works**, all handled: a reply must quote the inbound message id as
+  `msg_id`/`msg_seq` or it counts as a *proactive* message (different permission, usually rejected); C2C and group chats are
+  different endpoints and the openid comes from the event; group/C2C events are gated behind intent `1 << 25` - asking for
+  more than the bot was granted is what makes identify fail with 4014.
+- **Honest about what was tested.** No appId/clientSecret was available, so no live bot was connected. What is verified: the
+  token endpoint answers in its own words for bad credentials (`机器人不存在`), and every payload - identify, reply body,
+  both endpoints, event flattening, heartbeat/resume bookkeeping - is asserted by 9 tests, including a fake socket that
+  drives the whole connect → identify → message flow.
+- The transport-dispatch guard in the test suite demanded its fourth transport (a new channel that forwards `/stop` to the
+  model instead of answering it is the bug it exists to catch), and `qq-bot.js` was added to `files[]` before the check
+  could fail for the reason 0.67.1 exists.
+- 44 suites / 685 cases.
+
 ## 1.0.3
 
 - The README's version line said **v1.0.1** on a page shipped inside 1.0.2 - an artefact of writing the line before choosing

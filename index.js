@@ -141,6 +141,7 @@ import {
 // WeCom answer was swallowed and the bot simply never replied. test/wiring.test.mjs now
 // cross-checks every `namespace.name(...)` call against the module it came from.
 import { WecomBot, describeBotMessage, generateReqId, markdownBody, splitForStream, streamBody } from "./wecom-bot.js";
+import { QQLongConnection, QQTokenCache, destinationFor, sendQQMessage } from "./qq-bot.js";
 import { normalizeAccountId, WechatState, defaultStateRoot } from "./state.js";
 
 /** Long-poll budget the platform advertises; used until it tells us otherwise. */
@@ -2095,6 +2096,7 @@ export function apply(ctx, config = {}) {
         // Reported for both transports: "is the other side down?" is exactly what this
         // command is for, and the bot's state is one of the few visible failure signals.
         bot: wecomBotStatus,
+        qq: qqStatus,
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
@@ -2717,6 +2719,41 @@ export function apply(ctx, config = {}) {
         await reply("📋 剪贴板 → **关**。clipboard_read / clipboard_write 现在一律拒绝执行，直到 /clipboard on。");
       }
       noteRoute("/command", { command: "clipboard", value: next, chatId });
+      return true;
+    }
+    if (command.name === "qq") {
+      // The credentials live in the card (or /prefs); this command is the switch and the honest status.
+      const prefs = await state.loadPrefs();
+      const current = prefs?.qq && typeof prefs.qq === "object" ? prefs.qq : {};
+      const [action = "status"] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "on" || action === "off") {
+        const next = { ...current, enabled: action === "on" };
+        await state.savePrefs({ qq: next });
+        if (next.enabled) {
+          if (!next.appId || !next.clientSecret) {
+            await reply("⚠️ QQ 已开启，但还缺 appId / clientSecret —— 在面板的 QQ 机器人一栏填好，或 POST /prefs 设置 qq.appId、qq.clientSecret。");
+            return true;
+          }
+          const started = await startQQ({ force: true });
+          await reply(started ? "🐧 QQ → **开**，正在连接网关（状态见 /qq）" : `⚠️ QQ 已开启，但连接失败：${qqStatus.error || "未知原因"}`);
+        } else {
+          stopQQ();
+          await reply("🐧 QQ → **关**。网关已断开。");
+        }
+        noteRoute("/command", { command: "qq", action, enabled: next.enabled });
+        return true;
+      }
+      const lines = ["QQ 机器人（QQ 开放平台 · WebSocket 长连接）"];
+      lines.push(`  开关：${current.enabled ? "**开**" : "**关**"}`);
+      lines.push(`  appId：${current.appId || "（未填）"}`);
+      lines.push(`  secret：${current.clientSecret ? "已填" : "（未填）"}`);
+      lines.push(`  沙箱：${current.sandbox ? "是" : "否"}`);
+      lines.push(`  连接：${qqStatus.ready ? "已就绪" : qqStatus.connected ? "握手中" : "未连接"}${qqStatus.sessionId ? ` · session ${qqStatus.sessionId.slice(0, 8)}` : ""}`);
+      if (qqStatus.error) lines.push(`  最近错误：${qqStatus.error}`);
+      if (qqInboundError) lines.push(`  最近失败：${qqInboundError.message}`);
+      lines.push("", "用法：/qq on|off · /qq  —— 凭据在面板填写（appId / clientSecret / 沙箱）");
+      await reply(lines.join("\n"));
+      noteRoute("/command", { command: "qq", action: "status" });
       return true;
     }
     if (command.name === "scrapling") {
@@ -3347,6 +3384,158 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     };
   }
 
+  // ── QQ bot (QQ 开放平台, WebSocket long connection) ─────────────────────────
+  let qqBot;
+  let qqStatus = { connected: false, ready: false, sessionId: "", user: "", error: "", attempts: 0 };
+  let qqInboundError = null;
+  let qqSeen = new Set();
+  const qqTokens = new QQTokenCache();
+
+  function qqAccountId(appId) {
+    return `qq-${String(appId ?? "").trim() || "bot"}`;
+  }
+
+  function stopQQ() {
+    if (!qqBot) return;
+    try {
+      void qqBot.close();
+    } catch {
+      // a socket that is already gone is fine
+    }
+    qqBot = undefined;
+    qqStatus = { connected: false, ready: false, sessionId: "", user: "", error: "", attempts: 0 };
+  }
+
+  /** Connect (or reconnect) from the stored credentials. Called on activation and after a config change. */
+  async function startQQ({ force = false } = {}) {
+    if (qqBot && !force) return qqBot;
+    stopQQ();
+    const prefs = await state.loadPrefs();
+    const cfg = prefs?.qq && typeof prefs.qq === "object" ? prefs.qq : {};
+    const appId = String(cfg.appId ?? "").trim();
+    const clientSecret = String(cfg.clientSecret ?? "").trim();
+    if (cfg.enabled !== true || !appId || !clientSecret) {
+      qqStatus = { ...qqStatus, error: cfg.enabled === true ? "缺少 appId / clientSecret" : "" };
+      return undefined;
+    }
+    const accountId = qqAccountId(appId);
+    const bot = new QQLongConnection({
+      appId,
+      clientSecret,
+      sandbox: cfg.sandbox === true,
+      tokens: qqTokens,
+      onStatus: (status) => {
+        qqStatus = {
+          ...qqStatus,
+          attempts: qqStatus.attempts + (status.state === "ready" ? 0 : 1),
+          connected: status.state === "ready" ? true : status.state === "closed" ? false : qqStatus.connected,
+          ready: status.state === "ready" ? true : qqStatus.ready,
+          sessionId: status.sessionId ?? qqStatus.sessionId,
+          user: status.user ?? qqStatus.user,
+          error: status.state === "ready" ? "" : String(status.reason ?? ""),
+        };
+        if (status.state === "error" || status.state === "invalid-session") {
+          ctx.logger?.warn?.("[dsh-wechat-media] qq connection: %s", status.reason ?? status.state);
+        }
+      },
+      onMessage: (message) => {
+        void handleQQInbound(accountId, message).catch((error) => {
+          ctx.logger?.warn?.("[dsh-wechat-media] qq inbound failed: %s", error?.message ?? error);
+        });
+      },
+    });
+    try {
+      await bot.connect();
+      qqBot = bot;
+      ctx.logger?.info?.("[dsh-wechat-media] qq bot connecting as %s", appId);
+    } catch (error) {
+      qqStatus = { ...qqStatus, connected: false, ready: false, error: String(error?.message ?? error) };
+      ctx.logger?.warn?.("[dsh-wechat-media] qq bot did not start: %s", error?.message ?? error);
+      return undefined;
+    }
+    return bot;
+  }
+
+  /** One inbound QQ message -> one turn -> one reply, quoted to the message that caused it. */
+  async function handleQQInbound(accountId, message) {
+    if (!message?.messageId) return;
+    if (qqSeen.has(message.messageId)) return;
+    qqSeen.add(message.messageId);
+    if (qqSeen.size > 500) qqSeen = new Set([...qqSeen].slice(-250));
+    const chatId = String(message.chatId ?? "");
+    if (!chatId) return;
+    const isGroup = message.chatType === "group";
+    const peerName = isGroup ? `QQ群 ${chatId}` : `QQ ${message.peerName || chatId}`;
+    counters.received += 1;
+    lastInbound.set(accountId, { accountId, chatId, peerName, isGroup, at: Date.now() });
+    await state.setPeer(accountId, chatId, { name: peerName, kind: isGroup ? "group" : "direct", seenAt: new Date().toISOString() });
+
+    const verdict = await classifyWecomInbound({
+      accountId,
+      message: { chatId, chatType: message.chatType, text: message.content },
+      text: message.content,
+      state,
+      consumeApproval: consumeApprovalReply,
+    });
+    if (verdict.action === "ignore") {
+      counters.blocked += 1;
+      if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
+      await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
+      return;
+    }
+    if (verdict.action === "answer") {
+      counters.answered += 1;
+      return;
+    }
+
+    const destination = destinationFor(message.raw);
+    const reply = async (answer) => {
+      const token = (await qqTokens.get({
+        appId: String((await state.loadPrefs())?.qq?.appId ?? "").trim(),
+        clientSecret: String((await state.loadPrefs())?.qq?.clientSecret ?? "").trim(),
+      })).token;
+      const prefs = await state.loadPrefs();
+      return sendQQMessage({
+        token,
+        destination,
+        content: answer,
+        msgId: message.messageId,
+        sandbox: prefs?.qq?.sandbox === true,
+      });
+    };
+
+    if (verdict.text) {
+      const handled = await runChatCommand({
+        transport: "qq",
+        accountId,
+        chatId,
+        peerName,
+        text: verdict.text,
+        reply: (answer) => reply(answer).catch((error) => {
+          ctx.logger?.warn?.("[dsh-wechat-media] qq command reply failed: %s", error?.message ?? error);
+        }),
+      });
+      if (handled) return;
+    }
+
+    counters.forwarded += 1;
+    try {
+      const { agent, sessionId } = await ensureAgent(accountId, chatId, peerName);
+      const prompt = `[${peerName}]\n${message.content}`;
+      const userMsg = await userMessage(prompt);
+      const waiting = collectors.wait(sessionId, userMsg?.id);
+      await agent.followup(userMsg);
+      const outcome = await waiting;
+      const answer = String(outcome?.text ?? "").trim() || "（这一轮没有产生文本回答）";
+      await reply(answer);
+      counters.answered += 1;
+    } catch (error) {
+      qqInboundError = { at: new Date().toISOString(), message: String(error?.message ?? error) };
+      ctx.logger?.warn?.("[dsh-wechat-media] qq turn failed: %s", error?.message ?? error);
+      await reply(`❌ 处理这条 QQ 消息时出错：${error?.message ?? error}`).catch(() => {});
+    }
+  }
+
   function stopWecomBot() {
     if (!wecomBot) return;
     try {
@@ -3578,8 +3767,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       void startWecomBot();
       return () => stopWecomBot();
     }, "dsh-wechat-media: wecom bot");
+    // QQ is a separate long connection with its own credentials; a bot with them stored connects on its own.
+    ctx.effect(() => {
+      void startQQ();
+      return () => stopQQ();
+    }, "dsh-wechat-media: qq bot");
   } else {
     void startWecomBot();
+    void startQQ();
   }
 
   // ── Feishu (飞书 / Lark) ─────────────────────────────────────────────────────
@@ -9053,6 +9248,22 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.clipboard) !== null) patch.clipboard = asBool(body.clipboard);
           // The SSH block (host list + switch) is validated as a whole: a host list that quietly lost an entry is
           // worse than one that refuses to save.
+          // QQ bot credentials: one validated object. The secret is stored like the Feishu app secret - in prefs,
+          // never echoed back by /state.
+          if (body.qq !== undefined) {
+            const source = typeof body.qq === "string" ? JSON.parse(body.qq) : body.qq;
+            const appId = String(source?.appId ?? "").trim();
+            const clientSecret = String(source?.clientSecret ?? "").trim();
+            if (appId && !/^\d{6,}$/.test(appId)) {
+              return json(res, 400, { ok: false, error: `appId 不像话：${appId}（QQ 开放平台里是一串数字）` });
+            }
+            patch.qq = {
+              enabled: source?.enabled === true,
+              sandbox: source?.sandbox === true,
+              ...(appId ? { appId } : {}),
+              ...(clientSecret ? { clientSecret } : {}),
+            };
+          }
           // Scrapling defaults: a proxy for the sites that need one, stealth for the ones that fight back.
           if (body.scrapling !== undefined) {
             const source = typeof body.scrapling === "string" ? JSON.parse(body.scrapling) : body.scrapling;
@@ -9080,6 +9291,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               return json(res, 400, { ok: false, error: String(error?.message ?? error) });
             }
           }
+          // A changed QQ credential rebuilds the gateway connection, the same rule the WeCom long connection follows.
+          const restartQQ = patch.qq !== undefined
+            ? () => {
+                void (async () => {
+                  const prefs = await state.loadPrefs();
+                  if (prefs?.qq?.enabled === true && prefs.qq.appId && prefs.qq.clientSecret) {
+                    await startQQ({ force: true });
+                  } else {
+                    stopQQ();
+                  }
+                })();
+              }
+            : null;
           // Where the office tools put relative paths. A string, so it is validated as one (never as a boolean).
           if (body.officeDir !== undefined) patch.officeDir = String(body.officeDir ?? "").trim();
           // The outbound webhook and its signing secret. An empty string turns the webhook off, which is how a person
@@ -9167,6 +9391,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             else patch.inboxDir = value;
           }
           const prefs = await state.savePrefs(patch);
+          // Fire-and-forget: connecting must not delay the response the card is waiting for.
+          restartQQ?.();
           json(res, 200, { ok: true, prefs: publicPrefs(prefs) });
         },
       },

@@ -108,6 +108,12 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "qq",
+    aliases: ["QQ", "qqbot"],
+    usage: "/qq [on|off|status]",
+    summary: "QQ 机器人开关（QQ 开放平台 · WebSocket 长连接）：appId / clientSecret / 沙箱在面板填写；开关与连接状态用这个命令",
+  },
+  {
     name: "scrapling",
     aliases: ["抓取", "scrape"],
     usage: "/scrapling [status|proxy <url>|stealth on|off]",

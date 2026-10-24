@@ -260,6 +260,33 @@ AES key is `sha256(encryptKey)` with the **first 16 bytes of the ciphertext as t
 unencrypted). The custom-webhook signature is the trap of that API - `HMAC-SHA256(key = timestamp + "\n" + secret,
 data = "")`, base64 - and it is checked against an independent implementation's published test vector.
 
+## QQ bot (QQ 开放平台) / QQ 机器人
+
+An official QQ bot, over the open platform's **WebSocket gateway** - outbound only, so it works from a plugin on your own
+machine with no public URL, exactly like the WeCom and Feishu long connections.
+
+```text
+/qq                     # switch, credentials presence, connection state, last error
+/qq on | off            # connect / disconnect
+```
+
+Credentials go in the card's QQ block (or `POST /prefs` with `{"qq":{...}}`): `appId`, `clientSecret`, and `sandbox` for a
+sandbox bot (which also uses a different API host). The secret is stored, never echoed back.
+
+Three details that decide whether a QQ bot works at all, all handled here:
+
+- **The reply must quote the message it answers.** `sendMessage` sends the inbound `id` as `msg_id` (plus a `msg_seq`), or the
+  platform treats it as a *proactive* message - a different permission, usually a rejection.
+- **C2C and group chats are different endpoints**: `/v2/users/{user_openid}/messages` vs
+  `/v2/groups/{group_openid}/messages`, and the openid comes from the event, not from anything you can guess.
+- **The intent matters**: group and C2C messages are gated behind `1 << 25`; asking for more than the bot was granted is
+  what makes an identify fail with 4014.
+
+**Not verified on a live bot**: this needs an appId/clientSecret from the open platform, which the author does not have.
+What *is* verified is the protocol surface - the token endpoint answers in its own words for bad credentials
+(`机器人不存在`), and every payload (identify, reply body, endpoints, event flattening, heartbeat/resume bookkeeping) is
+asserted by tests. Treat the first real connection as the acceptance test.
+
 ### Receiving: the long connection / 用长连接接收（不需要公网地址）
 
 An app bot receives events over Feishu's **long connection** - a WebSocket the bot opens itself - so **no public URL,
@@ -810,6 +837,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/qq` | `/QQ` | The QQ bot's switch and status: `/qq on|off`, or no argument for credentials presence, connection state and the last error. Credentials live in the card. |
 | `/scrapling` | `/抓取`, `/scrape` | Scrapling's defaults: `/scrapling proxy <url>`, `/scrapling stealth on|off`, or no argument for the interpreter, proxy and stealth status. The fetching itself is the `scrapling_fetch` tool. |
 | `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and with no argument it reports the switch, the toolchain it found and the ports that are plugged in. **Off by default** - flashing writes a board's flash. |
 | `/ssh` | `/远程` | Arms or disarms the SSH tools and manages the host list: `/ssh on|off`, `/ssh add <name> <user@host[:port]> [identity]`, `/ssh remove <name>`. **Off by default** - these run commands on other machines. |
