@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.3
+
+README only, recording what the live test showed:
+
+- The multi-agent section now names the four presets this host declares (`standard`, `ptc`, `minimal`, `cordis`) and states
+  what the switch is *for*: two conversations can run different presets at the same time, and the choice survives a restart
+  because it lives on the peer record.
+- The verification table gained the row from the actual run: `/agent minimal` then `/new`, and after the next message
+  `GET /state` reported `conversations[].agentPreset = "minimal"` `-` with the reply arriving, so the preset is applied when
+  the agent is created rather than merely stored.
+- A correction worth recording: an earlier reading of `counters.answered = 0` as "the reply failed" was wrong - that counter
+  tracks consumed approval answers, not WeCom turns. The reply had arrived.
+
 ## 1.3.2
 
 - **"跟随默认" now has a name.** `/agent` prints the host's default preset id and marks it in the list. A chat that follows the
