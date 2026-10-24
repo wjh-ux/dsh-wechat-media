@@ -245,7 +245,8 @@ export const COMMAND_GROUPS = Object.freeze([
   ["授权与联系人", ["auth", "friends", "allowlist", "name"]],
   ["工具", ["desktop", "clipboard", "ssh", "serial", "scrapling"]],
   ["通道", ["wecom", "feishu", "qq", "vscode", "browser", "office"]],
-  ["运维", ["doctor", "task", "tokens", "multiagent", "agent"]],
+  ["多 agent", ["multiagent", "agent"]],
+  ["运维", ["doctor", "task", "tokens"]],
 ]);
 
 /** `/clip`, `/剪贴板` - the aliases, inline, so they are discoverable instead of folklore. */
@@ -283,7 +284,7 @@ export function helpText() {
  * The examples are here rather than in the summary because the list must stay readable; this is the page you get when you
  * have already decided which command you need.
  */
-export function commandHelpText(name) {
+export function commandHelpText(name, options = {}) {
   const command = findCommand(String(name ?? "").replace(/^\/+/, ""));
   if (!command) return `没有这个命令：/${String(name ?? "").replace(/^\/+/, "")}\n\n${helpText()}`;
   const lines = [
@@ -291,13 +292,49 @@ export function commandHelpText(name) {
     `  用法：${command.usage}`,
     `  作用：${command.summary}`,
   ];
+  const values = COMMAND_VALUES[command.name];
+  if (Array.isArray(values) && values.length) {
+    lines.push("  可用值：");
+    for (const value of values) lines.push(`    · ${value}`);
+  }
+  // "现状" is computed by the caller: this module has no state, and inventing a cache here is how a help page starts lying.
+  const live = Array.isArray(options.live) ? options.live.filter(Boolean) : [];
+  if (live.length) {
+    lines.push("  现状：");
+    for (const line of live) lines.push(`    · ${line}`);
+  }
   const examples = COMMAND_EXAMPLES[command.name];
   if (Array.isArray(examples) && examples.length) {
     lines.push("  例：");
     for (const example of examples) lines.push(`    ${example}`);
   }
+  lines.push("", "（/help 看全部命令）");
   return lines.join("\n");
 }
+
+/**
+ * The values a command accepts, when the set is fixed.
+ *
+ * Printed on the detail page because "on|off" in a usage line does not say whether `/delivery` also takes `stream`, or which
+ * four authorization levels exist.
+ */
+export const COMMAND_VALUES = Object.freeze({
+  delivery: ["whole（整段，写完一次发）", "stream（逐字，仅企业微信）"],
+  format: ["plain（清洗 markdown）", "raw（原样）"],
+  auth: ["严格", "适中", "完全权限", "仅查看"],
+  friends: ["on", "off", "（不带参数 = 切换）"],
+  interject: ["on", "off", "（不带参数 = 切换）"],
+  retry: ["on", "off", "（不带参数 = 切换）"],
+  desktop: ["on", "off", "status"],
+  clipboard: ["on", "off", "status"],
+  ssh: ["on", "off", "list", "add <名字> <user@host[:port]> [identity]", "remove <名字>"],
+  serial: ["on", "off", "status", "baud <数值>", "port <COMx>"],
+  scrapling: ["status", "proxy <地址>", "proxy off", "stealth on|off"],
+  qq: ["on", "off", "status"],
+  multiagent: ["on", "off", "status"],
+  agent: ["<预设 id>", "model <provider>/<model>", "model list [provider]", "model reset", "reset", "status"],
+  tokens: ["reset", "1-30（清零窗口天数）"],
+});
 
 /** The forms worth spelling out per command - the ones a summary cannot hold. */
 export const COMMAND_EXAMPLES = Object.freeze({

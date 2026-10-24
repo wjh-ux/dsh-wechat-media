@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.1
+
+- **多 agent has its own group in `/help`.** It was filed under 运维 next to `/doctor` and `/tokens`, which is the one place a
+  reader looking for the newest pair would never look. The groups are now 会话 / 发送 / 授权与联系人 / 工具 / 通道 / **多 agent** /
+  运维.
+- **Detail pages carry values and current state.** `/help <command>` now shows `可用值` (the fixed set a command accepts -
+  `/delivery` really does take `stream`, `/auth` really has four levels) and `现状` (what this install is set to right now:
+  the multi-agent switch, this chat's preset and model, the host default model, serial baud and port, the QQ connection, the
+  delivery and format modes…).
+- The split is deliberate: static enumerations live in `commands.js` (`COMMAND_VALUES`), and the live lines are computed in
+  `index.js` where the state already is - a help page that caches state is a help page that starts lying.
+- `/help <alias>` resolves too (`/help /clip`, `/help 预设`), which is what makes printing aliases worth anything.
+- Same lesson, twice in two releases: **a helper inserted inside `runChatCommand` truncates the dispatcher slice the wiring test
+  scans**, and the test caught it again (`/new must bump the generation` failed). Both helpers live above the dispatcher now.
+- 44 suites / 695 cases.
+
 ## 1.5.0
 
 - **`/help` was a wall of 26 flat lines** with no aliases and no way to ask about one command. It is now **grouped** (会话 /

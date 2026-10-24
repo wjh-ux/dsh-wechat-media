@@ -104,7 +104,7 @@ import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
 import { openSessionAgent } from "./session.js";
-import { STOP_REASON, commandHelpText, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
+import { COMMANDS, STOP_REASON, commandHelpText, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
 import { FeishuLongConnection } from "./feishu-ws.js";
@@ -2120,6 +2120,82 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /** Which command a `/help <x>` argument means: a name or an alias. */
+  function resolveCommandName(wanted) {
+    const cleaned = String(wanted ?? "").replace(/^\/+/, "").trim().toLowerCase();
+    const hit = COMMANDS.find(
+      (entry) => entry.name === cleaned || (Array.isArray(entry.aliases) ? entry.aliases.some((alias) => String(alias).toLowerCase() === cleaned) : false),
+    );
+    return hit?.name ?? cleaned;
+  }
+
+  async function liveHelpLines(name) {
+    const prefs = await state.loadPrefs();
+    const lines = [];
+    switch (name) {
+      case "multiagent":
+        lines.push(`开关：${prefs?.multiAgent?.enabled === true ? "开" : "关"}`);
+        break;
+      case "agent": {
+        lines.push(`开关：${prefs?.multiAgent?.enabled === true ? "开" : "关"}`);
+        const peer = await state.getPeer(accountId, chatId);
+        lines.push(`本会话预设：${String(peer?.agentPreset ?? "").trim() || "（跟随默认）"}`);
+        lines.push(`本会话模型：${String(peer?.agentModel ?? "").trim() || "（跟随宿主默认）"}`);
+        const selection = ctx.get("agentDefaultModel")?.currentSelection?.() ?? null;
+        if (selection?.provider && selection?.model) lines.push(`宿主默认：${selection.provider}/${selection.model}`);
+        break;
+      }
+      case "serial":
+        lines.push(`开关：${prefs?.serial?.enabled === true ? "开" : "关"}`);
+        lines.push(`波特率：${prefs?.serial?.baud ?? 115200}${prefs?.serial?.port ? ` · 默认端口：${prefs.serial.port}` : ""}`);
+        break;
+      case "clipboard":
+        lines.push(`开关：${prefs?.clipboard !== false ? "开" : "关"}`);
+        break;
+      case "desktop":
+        lines.push(`开关：${prefs?.desktopControl === true ? "开" : "关"}`);
+        break;
+      case "ssh":
+        lines.push(`开关：${prefs?.ssh?.enabled === true ? "开" : "关"}`);
+        lines.push(`主机：${(Array.isArray(prefs?.ssh?.hosts) ? prefs.ssh.hosts : []).map((host) => host.name).join("、") || "（无）"}`);
+        break;
+      case "qq": {
+        const state2 = qqStatus.ready ? "已就绪" : qqStatus.connected ? "握手中" : "未连接";
+        lines.push(`开关：${prefs?.qq?.enabled === true ? "开" : "关"}`);
+        lines.push(`连接：${state2}` + (qqStatus.user ? ` · ${qqStatus.user}` : ""));
+        break;
+      }
+      case "delivery":
+        lines.push(`当前：${prefs?.delivery === "stream" ? "stream（逐字，仅企业微信）" : "whole（整段）"}`);
+        break;
+      case "format":
+        lines.push(`当前：${prefs?.format === "raw" ? "raw（原样）" : "plain（清洗）"}`);
+        break;
+      case "auth":
+        lines.push(`当前档位：${prefs?.authorization ?? "适中"}`);
+        break;
+      case "friends":
+        lines.push(`当前：${prefs?.friendOnly === true ? "只处理私聊" : "群聊也处理"}`);
+        break;
+      case "interject":
+        lines.push(`当前：${prefs?.interject === true ? "开" : "关"}`);
+        break;
+      case "retry":
+        lines.push(`当前：${prefs?.retry !== false ? "开" : "关"}`);
+        break;
+      case "tokens":
+        lines.push(`清零窗口：${prefs?.tokenWindowDays ?? 30} 天`);
+        break;
+      case "scrapling":
+        lines.push(`代理：${prefs?.scrapling?.proxy || "（直连）"}`);
+        lines.push(`stealth：${prefs?.scrapling?.stealth === true ? "开" : "关"}`);
+        break;
+      default:
+        break;
+    }
+    return lines;
+  }
+
   async function runChatCommand({ transport, accountId, chatId, peerName, text, reply }) {
     const command = parseCommand(text);
     if (!command) return false;
@@ -2132,10 +2208,15 @@ export function apply(ctx, config = {}) {
       return true;
     }
 
+  /**
+   * The "现状" section of `/help <command>`: what this install is currently set to, for the commands where that is the
+   * question. It lives here rather than in commands.js because this is where the state is - a help page that guesses is worse
+   * than one that leaves the section out.
+   */
     if (command.name === "help") {
       // `/help agent` is the detail page; `/help` alone is the grouped list.
       const wanted = String(command.args ?? "").trim();
-      await reply(wanted ? commandHelpText(wanted) : helpText());
+      await reply(wanted ? commandHelpText(wanted, { live: await liveHelpLines(resolveCommandName(wanted)) }) : helpText());
       return true;
     }
 
