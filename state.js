@@ -314,7 +314,24 @@ export class WechatState {
     };
   }
 
+  /**
+   * Save preferences, one writer at a time.
+   *
+   * This method is a read-modify-write over a single JSON file, so two concurrent calls both read the old file and the later
+   * write silently discards the earlier call's field. `_prefsWriteQueue` chains them: each patch merges onto the previous
+   * result, which is the only order that keeps every field.
+   */
   async savePrefs(patch) {
+    const run = async () => this.savePrefsNow(patch);
+    const previous = this._prefsWriteQueue ?? Promise.resolve();
+    // Swallow the predecessor's failure for chaining purposes only: the caller still sees its own error.
+    const chained = previous.catch(() => {}).then(run);
+    this._prefsWriteQueue = chained.catch(() => {});
+    return chained;
+  }
+
+  /** The body of {@link savePrefs}: read, merge, seal, write. Never called concurrently. */
+  async savePrefsNow(patch) {
     const merged = { ...(await this.loadPrefs()), ...patch };
     await this.init();
     // Written sealed: on disk the secret is DPAPI ciphertext bound to this Windows account, so a copy of the

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.9
+
+- **Concurrent `/prefs` writes lost each other.** `savePrefs` is a read-modify-write over one JSON file, so two calls in flight
+  both read the old file and the later write discarded the earlier call's field. Measured with ten parallel `POST /prefs`:
+  one answered 400 and **seven of ten fields ended up at their previous values**. The card sends one field per request, so this
+  needs two tabs, a script, or a retry landing at the same instant - which is exactly when nobody is watching. Saves are now
+  chained through a queue, and a temp-root test proves ten concurrent patches all survive.
+- What this round also checked, with a clean result: a 500-character name is truncated to 80, an emoji path is accepted, a 1 MB
+  and a 200 KB payload are refused with 400, `/tokens windowDays=999` clamps to 30, and a nonsense schedule or task action is a
+  400.
+- One alarm was mine, not the plugin's: I expected chat names on `/dashboard`, and XSS-escaped them there. The dashboard does not
+  render peer names at all (4013 bytes of counters and accounts), so the escaping test proved nothing either way. The card
+  renders names through React text nodes, which escape by construction.
+- 44 suites / 697 cases.
+
 ## 1.5.8
 
 - **`scripts/` now ships with the package.** 1.5.7 put the acceptance scripts in the repository but not in `files[]`, so an

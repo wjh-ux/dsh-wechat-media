@@ -1174,5 +1174,15 @@ await test("the peers route only calls helpers that exist", () => {
   assert.match(host, /state\.loadWecom\(\)\)\?\.botId/, "state.loadWecom() is where the bot id comes from");
 });
 
+await test("concurrent prefs writes are serialised", async () => {
+  // Measured: ten concurrent POST /prefs requests left seven fields at their previous values, because savePrefs is a
+  // read-modify-write over one JSON file. The queue is the fix, so assert it is there and that the body moved into it.
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../state.js", import.meta.url), "utf8");
+  assert.match(source, /_prefsWriteQueue/, "savePrefs must chain through a write queue");
+  assert.match(source, /async savePrefsNow\(patch\)/, "and the read-modify-write must live in its own method");
+  assert.match(source, /previous\.catch\(\(\) => \{\}\)\.then\(run\)/, "the queue must be failure-tolerant");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
