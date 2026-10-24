@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.3
+
+- **`test/commands.test.mjs` was missing from the repository** since 1.5.0, while three releases shipped without anyone
+  noticing. Cause: each publish script carried a hand-maintained list of files, assembled by string replacement, and one of
+  those replacements matched nothing - so the test file was simply never uploaded. A release that names a version while a
+  file it changed is absent is the same class of failure as 1.0.0 shipping four files.
+- **The list is gone.** `publish-diff.cjs` compares the work tree against `main` and uploads exactly what differs or is new,
+  then reads every uploaded file back and compares hashes. There is no list to keep in sync, so it cannot drift again.
+- Verified after this release: `main` matches the work tree file for file (98 identical, 0 different, 0 missing).
+- 44 suites / 693 cases.
+
 ## 1.5.2
 
 - **`/help agent` threw `accountId is not defined`.** The live-state helper was moved above `runChatCommand` in 1.5.1 (a nested
