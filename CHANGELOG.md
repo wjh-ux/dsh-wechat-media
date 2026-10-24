@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.4
+
+- **`/help <命令>` answers "what is the default?" and "when does it take effect?"** - two lines per command from a single
+  `COMMAND_META` table, e.g. `默认：whole（整段）` / `生效：立即`, and for `/agent`: `默认：跟随宿主默认（预设与模型都不覆盖）` /
+  `生效：下次新建 agent 时生效`. That last pair is the difference between a feature that looks broken and one that is waiting
+  for the next agent.
+- **The coverage test earned its keep on its first run.** It requires an entry for every state-changing command and refuses
+  entries for names that are not commands, and it immediately exposed **three phantom names** I had introduced in the help
+  tables: `allowlist`, and `wecom` twice - there is no `/allowlist` and no `/wecom` command (both are panel features).
+  `helpText` had been skipping unresolvable names silently, which is why a group could list a command that never existed.
+- The group table is now asserted to contain only real commands, so a typo in it fails the suite instead of quietly shrinking
+  a section.
+- 44 suites / 695 cases.
+
 ## 1.5.3
 
 - **`test/commands.test.mjs` was missing from the repository** since 1.5.0, while three releases shipped without anyone

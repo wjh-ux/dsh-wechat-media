@@ -242,9 +242,9 @@ export function parseCommand(text) {
 export const COMMAND_GROUPS = Object.freeze([
   ["会话", ["help", "status", "new", "stop"]],
   ["发送", ["format", "delivery", "interject", "retry"]],
-  ["授权与联系人", ["auth", "friends", "allowlist", "name"]],
+  ["授权与联系人", ["auth", "friends", "name"]],
   ["工具", ["desktop", "clipboard", "ssh", "serial", "scrapling"]],
-  ["通道", ["wecom", "feishu", "qq", "vscode", "browser", "office"]],
+  ["通道", ["feishu", "qq", "vscode", "browser", "office"]],
   ["多 agent", ["multiagent", "agent"]],
   ["运维", ["doctor", "task", "tokens"]],
 ]);
@@ -292,6 +292,9 @@ export function commandHelpText(name, options = {}) {
     `  用法：${command.usage}`,
     `  作用：${command.summary}`,
   ];
+  const meta = COMMAND_META[command.name];
+  if (meta?.default) lines.push(`  默认：${meta.default}`);
+  if (meta?.restart) lines.push(`  生效：${meta.restart}`);
   const values = COMMAND_VALUES[command.name];
   if (Array.isArray(values) && values.length) {
     lines.push("  可用值：");
@@ -336,6 +339,38 @@ export const COMMAND_VALUES = Object.freeze({
   tokens: ["reset", "1-30（清零窗口天数）"],
 });
 
+/**
+ * Per-command facts that a summary cannot hold: the default value, and when a change takes effect.
+ *
+ * `restart` is the one that prevents surprises: a WeChat-side switch is live immediately, a `/agent` preset only applies when a
+ * session next creates an agent, and an edited credential means reconnecting a long connection rather than waiting.
+ */
+export const COMMAND_META = Object.freeze({
+  new: { restart: "立即（旧会话文件保留）" },
+  stop: { restart: "立即" },
+  friends: { default: "关（群消息也处理）", restart: "立即" },
+  retry: { default: "开（失败重试一次）", restart: "立即" },
+  interject: { default: "关（新消息排队成下一轮）", restart: "立即" },
+  format: { default: "plain（清洗 markdown）", restart: "立即" },
+  delivery: { default: "whole（整段）", restart: "立即" },
+  auth: { default: "适中（询问，超时转 GUI）", restart: "立即" },
+  name: { default: "（未命名时显示 id）", restart: "立即" },
+  desktop: { default: "关", restart: "立即" },
+  clipboard: { default: "开", restart: "立即" },
+  ssh: { default: "关（且主机列表为空）", restart: "立即" },
+  serial: { default: "关 · 波特率 115200 · 无默认端口", restart: "立即" },
+  scrapling: { default: "直连 · stealth 关", restart: "立即" },
+  qq: { default: "关", restart: "保存凭据后立即重连网关" },
+  vscode: { default: "开", restart: "立即（编辑器侧自动发现）" },
+  browser: { default: "own 独立 profile · 窗口可见", restart: "立即" },
+  office: { default: "保存到桥接进程自己的目录", restart: "立即" },
+  task: { default: "允许本机命令：关", restart: "立即" },
+  tokens: { default: "30 天清零窗口", restart: "立即" },
+  multiagent: { default: "关", restart: "立即；已有会话在下次建 agent 时才换" },
+  agent: { default: "跟随宿主默认（预设与模型都不覆盖）", restart: "下次新建 agent 时生效" },
+  feishu: { default: "应用机器人 / webhook 未配置", restart: "保存凭据后立即重连" },
+});
+
 /** The forms worth spelling out per command - the ones a summary cannot hold. */
 export const COMMAND_EXAMPLES = Object.freeze({
   help: ["/help", "/help agent"],
@@ -344,7 +379,6 @@ export const COMMAND_EXAMPLES = Object.freeze({
   format: ["/format plain", "/format raw"],
   delivery: ["/delivery whole", "/delivery stream（仅企业微信）"],
   auth: ["/auth 适中", "/auth 完全权限", "/auth 仅查看"],
-  allowlist: ["/allowlist", "/allowlist add <chatId>", "/allowlist remove <chatId>"],
   name: ["/name 老板的群"],
   desktop: ["/desktop on", "/desktop off", "/desktop status"],
   clipboard: ["/clipboard on", "/clipboard off", "/clipboard status"],

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-import { COMMANDS, STOP_REASON, commandHelpText, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
+import { COMMANDS, COMMAND_META, STOP_REASON, commandHelpText, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
 
 let passed = 0;
 let failed = 0;
@@ -271,6 +271,25 @@ test("help can be asked about one command, and says so when it cannot", () => {
   for (const command of COMMANDS) {
     assert.ok(rows.some((row) => row.startsWith(command.usage)), `${command.name} must have its own row`);
   }
+});
+
+test("every command with a default or a timing says so, and no entry is orphaned", () => {
+  // Coverage: a command that changes state must answer "what is the default?" or "when does it apply?".
+  const stateless = new Set(["help", "status", "doctor"]);
+  for (const command of COMMANDS) {
+    if (stateless.has(command.name)) continue;
+    assert.ok(COMMAND_META[command.name], `${command.name} needs a COMMAND_META entry`);
+  }
+  // No orphans: an entry for a command that does not exist is a rename someone forgot to finish.
+  for (const name of Object.keys(COMMAND_META)) {
+    assert.ok(findCommand(name), `COMMAND_META mentions unknown command ${name}`);
+  }
+  // And the page actually shows them.
+  const page = commandHelpText("delivery");
+  assert.match(page, /默认：whole/);
+  assert.match(page, /生效：立即/);
+  const agentPage = commandHelpText("agent");
+  assert.match(agentPage, /生效：下次新建 agent 时生效/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
