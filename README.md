@@ -22,6 +22,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 | Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools. |
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
+| Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - with CSS selectors, link extraction, per-call proxy and an optional real browser. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
 
@@ -575,11 +576,25 @@ one tool:
 /scrapling stealth on|off         # off by default: a real browser is slow and needs its deps
 ```
 
-Measured on this machine (scrapling 0.5, python 3.11): `https://example.com` returned 200 with its body;
-`https://quotes.toscrape.com/` with `selector: "span.text"` returned the three quotes as separate items. Two failure modes
-are reported rather than guessed: a selector that matches nothing still returns the page text **and** a warning, and a
-missing dependency comes back as the exception's own words (`ModuleNotFoundError: No module named 'msgspec'` was the real
-one here, fixed by installing it).
+Measured on this machine (scrapling 0.5, python 3.11), four cases worth keeping apart:
+
+| Case | Result |
+| --- | --- |
+| `https://example.com`, no selector | 200, body in 2.4 s |
+| `https://quotes.toscrape.com/` with `selector: "span.text"` | 200, three quotes as separate items in 1.7 s |
+| `https://www.baidu.com`, `links: true` | 200, the page text plus eight anchors in 0.9 s |
+| `https://news.ycombinator.com/` **without** a proxy | hard failure after 21 s: `curl: (28) Failed to connect` |
+| the same URL **with** `proxy: "http://127.0.0.1:7897"` | 200 in 1.8 s, five headlines |
+
+The last two are the point: an unreachable host is reported with curl's own words after a bounded wait, rather than
+looking like a hang - and the same call answers in under two seconds once a proxy is given. Two more failure modes are
+reported rather than guessed: a selector that matches nothing still returns the page text **and** a warning, and a missing
+dependency comes back as the exception's own words (`ModuleNotFoundError: No module named 'msgspec'` was the real one
+here, fixed by installing it).
+
+Stealth needs a browser runtime besides the library. On this machine `camoufox`/`playwright` are **not** installed, so
+`stealth: true` fails loudly instead of quietly falling back to the plain fetcher - a silent downgrade would make an
+anti-bot failure look like a selector problem.
 
 Behind it, the python side is one self-contained script embedded in `scrapling.js` - not a second file, because a plugin
 that installs and then fails on a missing helper is worse than one that does not install.

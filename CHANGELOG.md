@@ -1,6 +1,18 @@
 # Changelog
 
+## 0.72.1
+
+README only - the Scrapling work is documented as measured, not as claimed:
+
+- **Scraping is its own capability row** (browser-shaped TLS fingerprint and headers), not a footnote under automation;
+- the section now keeps four cases apart: example.com 200 in 2.4 s, quotes.toscrape.com with span.text returning three
+  items, baidu with links returning eight anchors, and the pair that matters - news.ycombinator.com failing hard after
+  21 s with curl's own words, then answering 200 in 1.8 s with proxy: http://127.0.0.1:7897;
+- **stealth is stated honestly**: camoufox/playwright are not installed here, so stealth: true fails loudly instead of
+  quietly falling back - a silent downgrade would make an anti-bot failure look like a selector problem.
+
 ## 0.72.0
+
 
 - **Scrapling, as one tool.** `scrapling_fetch` drives the Scrapling scraping library (browser-shaped TLS fingerprint and
   headers), so pages that reject a plain HTTP client can be read: pass `selector` and each match comes back as an item,
