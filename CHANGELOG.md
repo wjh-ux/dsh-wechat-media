@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.6
+
+- **Every `POST /peers` answered 400 with an empty body.** The known-account check added in 1.5.5 called `wecomConfig()` - a helper
+  that **does not exist in this file** (the WeCom bot id lives in `state.loadWecom()`). The ReferenceError was caught by the
+  dispatcher, which answers 400 with no body, so renaming a chat simply stopped working with nothing to read.
+- **The same phantom call was already there, latent, in `targetByTransport`**: a task that targeted WeCom by transport would have
+  thrown the moment it ran. Both call sites read the store now, and a test forbids `wecomConfig(` from coming back.
+- Worth recording because it is the fourth variant of one root cause in this session: **a helper referenced from new code has to be
+  looked up, not assumed** - `feishuConfig()` does exist, `wecomConfig()` never did, and at a call site the two look identical.
+- 44 suites / 696 cases.
+
 ## 1.5.5
 
 A deliberate bug hunt on the live plugin (hostile HTTP input plus a fuzz of every pure function) found four real defects. All
