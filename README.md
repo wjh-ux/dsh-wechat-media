@@ -894,6 +894,7 @@ through (a blocked chat cannot run commands either).
 | `/feishu` | `/飞书` `/lark` | Reports the Feishu channels that are configured (**never the secret itself** - only whether one is set), and `/feishu test [id] [type]` sends a self-test through the available channel. |
 | `/retry` | `/重试` | Retries a turn **once** when it fails in the transport (a timeout, a reset connection, a rate limit, a 5xx). A deterministic failure is never retried - that would only spend a second call to fail the same way. On by default, and the same switch is a checkbox in the Web UI panel. |
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
+| `/help` | `/h`, `/?`, `/帮助` | `/help` lists every command **grouped by purpose** with its aliases; `/help <命令>` (e.g. `/help agent`) shows one command's usage, aliases, summary and the sub-forms worth knowing. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
 | `/multiagent` | `/多agent` | The switch for one agent per conversation: `/multiagent on|off`, or no argument for the switch and this chat's preset. **Off by default.** |

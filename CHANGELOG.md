@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.0
+
+- **`/help` was a wall of 26 flat lines** with no aliases and no way to ask about one command. It is now **grouped** (会话 /
+  发送 / 授权与联系人 / 工具 / 通道 / 运维), each row shows its **aliases inline** (`/clipboard（/clip、/剪贴板）`), and a command that
+  is not in the grouping table still appears under 其它 - so forgetting to classify one degrades the order, never the
+  completeness.
+- **`/help <命令>`** answers about one command: usage, aliases, summary, and the sub-forms that a summary cannot hold. That is
+  where `/agent model list` / `/agent model reset` are documented now, and where `/ssh add`, `/serial baud`, `/browser hosts`
+  and friends stop being folklore.
+- `/agent`'s usage line now names its sub-commands (`model <p>/<m>`, `model list`, `model reset`), which the old line omitted
+  entirely.
+- The suite gained a test for the detail page: an alias resolves to the same page, an unknown name falls back to the list
+  instead of silence, and every command has exactly one row. That last assertion originally counted substrings and failed on
+  `/help` itself, because the footer hint mentions it - a row check is what the help actually promises.
+- 44 suites / 693 cases.
+
 ## 1.4.5
 
 README only, recording what the last two live runs established:

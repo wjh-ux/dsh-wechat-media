@@ -116,7 +116,7 @@ export const COMMANDS = [
   {
     name: "agent",
     aliases: ["预设", "preset"],
-    usage: "/agent [<预设 id>|reset|status]",
+    usage: "/agent [<预设 id>|model <p>/<m>|model list|model reset|reset|status]",
     summary: "本会话的 agent 预设：不开多 agent 时不生效；开了就按会话记住，下次建 agent 时换用",
   },
   {
@@ -233,15 +233,97 @@ export function parseCommand(text) {
   };
 }
 
-/** The `/help` body: every command the dispatcher answers, with its summary. */
+/**
+ * What each command is *for*, so 26 of them can be read in six groups instead of one wall.
+ *
+ * A separate table rather than a field on every entry: the entries stay a list of names and summaries, and a command missing
+ * from here still appears (under 其它), so forgetting to classify something degrades the order, never the completeness.
+ */
+export const COMMAND_GROUPS = Object.freeze([
+  ["会话", ["help", "status", "new", "stop"]],
+  ["发送", ["format", "delivery", "interject", "retry"]],
+  ["授权与联系人", ["auth", "friends", "allowlist", "name"]],
+  ["工具", ["desktop", "clipboard", "ssh", "serial", "scrapling"]],
+  ["通道", ["wecom", "feishu", "qq", "vscode", "browser", "office"]],
+  ["运维", ["doctor", "task", "tokens", "multiagent", "agent"]],
+]);
+
+/** `/clip`, `/剪贴板` - the aliases, inline, so they are discoverable instead of folklore. */
+export function aliasText(command) {
+  const aliases = Array.isArray(command?.aliases) ? command.aliases.filter(Boolean) : [];
+  return aliases.length ? `（${aliases.map((alias) => `/${alias}`).join("、")}）` : "";
+}
+
+/** The grouped `/help` body. */
 export function helpText() {
-  const lines = ["dsh-wechat-media 命令："];
-  for (const command of COMMANDS) {
-    lines.push(`${command.usage} — ${command.summary}`);
+  const placed = new Set();
+  const lines = [`dsh-wechat-media 命令（${COMMANDS.length} 个）：`];
+  for (const [title, names] of COMMAND_GROUPS) {
+    const rows = [];
+    for (const name of names) {
+      const command = findCommand(name);
+      if (!command) continue;
+      placed.add(command.name);
+      rows.push(`${command.usage}${aliasText(command)} — ${command.summary}`);
+    }
+    if (!rows.length) continue;
+    lines.push("", `—— ${title} ——`, ...rows);
   }
-  lines.push("", "直接发消息（不以 / 开头）就是和 agent 对话。");
+  const rest = COMMANDS.filter((command) => !placed.has(command.name));
+  if (rest.length) {
+    lines.push("", "—— 其它 ——", ...rest.map((command) => `${command.usage}${aliasText(command)} — ${command.summary}`));
+  }
+  lines.push("", "看单个命令：/help <命令名>（例如 /help agent）", "直接发消息（不以 / 开头）就是和 agent 对话。");
   return lines.join("\n");
 }
+
+/**
+ * `/help <名字>`: one command in full, including the sub-forms that are easy to get wrong.
+ *
+ * The examples are here rather than in the summary because the list must stay readable; this is the page you get when you
+ * have already decided which command you need.
+ */
+export function commandHelpText(name) {
+  const command = findCommand(String(name ?? "").replace(/^\/+/, ""));
+  if (!command) return `没有这个命令：/${String(name ?? "").replace(/^\/+/, "")}\n\n${helpText()}`;
+  const lines = [
+    `/${command.name}${aliasText(command)}`,
+    `  用法：${command.usage}`,
+    `  作用：${command.summary}`,
+  ];
+  const examples = COMMAND_EXAMPLES[command.name];
+  if (Array.isArray(examples) && examples.length) {
+    lines.push("  例：");
+    for (const example of examples) lines.push(`    ${example}`);
+  }
+  return lines.join("\n");
+}
+
+/** The forms worth spelling out per command - the ones a summary cannot hold. */
+export const COMMAND_EXAMPLES = Object.freeze({
+  help: ["/help", "/help agent"],
+  new: ["/new", "/stop（打断正在跑的回合）"],
+  friends: ["/friends", "/friends off"],
+  format: ["/format plain", "/format raw"],
+  delivery: ["/delivery whole", "/delivery stream（仅企业微信）"],
+  auth: ["/auth 适中", "/auth 完全权限", "/auth 仅查看"],
+  allowlist: ["/allowlist", "/allowlist add <chatId>", "/allowlist remove <chatId>"],
+  name: ["/name 老板的群"],
+  desktop: ["/desktop on", "/desktop off", "/desktop status"],
+  clipboard: ["/clipboard on", "/clipboard off", "/clipboard status"],
+  ssh: ["/ssh", "/ssh on", "/ssh add nas root@192.168.1.10:22", "/ssh remove nas"],
+  serial: ["/serial", "/serial on", "/serial baud 460800", "/serial port COM3"],
+  scrapling: ["/scrapling", "/scrapling proxy http://127.0.0.1:7897", "/scrapling stealth on"],
+  qq: ["/qq", "/qq on", "/qq off（凭据在面板里填）"],
+  vscode: ["/vscode status", "/vscode on", "/vscode off"],
+  browser: ["/browser status", "/browser mode headed", "/browser hosts add x.com", "/browser proxy 127.0.0.1:7897"],
+  office: ["/office"],
+  doctor: ["/doctor"],
+  task: ["/task list", "/task rm <id>", "/task command on"],
+  tokens: ["/tokens", "/tokens reset", "/tokens 30"],
+  multiagent: ["/multiagent", "/multiagent on", "/multiagent off"],
+  agent: ["/agent", "/agent minimal", "/agent model deepseek-account/deepseek-v4-pro", "/agent model list", "/agent model reset", "/agent reset"],
+});
 
 /** Answers for an unknown command: name what was typed, then the list. */
 export function unknownCommandText(name) {

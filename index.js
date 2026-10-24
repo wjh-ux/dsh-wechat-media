@@ -104,7 +104,7 @@ import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
 import { openSessionAgent } from "./session.js";
-import { STOP_REASON, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
+import { STOP_REASON, commandHelpText, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
 import { FeishuLongConnection } from "./feishu-ws.js";
@@ -2133,7 +2133,9 @@ export function apply(ctx, config = {}) {
     }
 
     if (command.name === "help") {
-      await reply(helpText());
+      // `/help agent` is the detail page; `/help` alone is the grouped list.
+      const wanted = String(command.args ?? "").trim();
+      await reply(wanted ? commandHelpText(wanted) : helpText());
       return true;
     }
 
