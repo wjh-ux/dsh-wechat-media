@@ -2073,6 +2073,36 @@ export function apply(ctx, config = {}) {
    *
    * @returns {Promise<boolean>} true when the message was a command and has been answered.
    */
+  /**
+   * The presets the host declares, with display metadata and loading diagnostics.
+   *
+   * `agentPresets.list()` is a method returning `{ presets: [...] }` - it is not an array property, which is what the first
+   * version of /agent assumed. A preset whose definition failed to load comes back with `broken`, and that is worth showing:
+   * choosing it would mount nothing.
+   */
+  async function listAgentPresets() {
+    const presets = ctx.get("agentPresets");
+    if (!presets) return { presets: [], error: "宿主没有 agentPresets 服务" };
+    try {
+      const answer = typeof presets.list === "function" ? await presets.list() : presets.list;
+      const rows = Array.isArray(answer?.presets) ? answer.presets : Array.isArray(answer) ? answer : [];
+      return {
+        presets: rows
+          .map((row) => ({
+            id: String(row?.id ?? "").trim(),
+            name: String(row?.name ?? "").trim(),
+            description: String(row?.description ?? "").trim(),
+            isDefault: row?.isDefault === true,
+            broken: row?.broken ? String(row.broken) : "",
+          }))
+          .filter((row) => row.id),
+        error: "",
+      };
+    } catch (error) {
+      return { presets: [], error: String(error?.message ?? error) };
+    }
+  }
+
   async function runChatCommand({ transport, accountId, chatId, peerName, text, reply }) {
     const command = parseCommand(text);
     if (!command) return false;
@@ -2766,9 +2796,9 @@ export function apply(ctx, config = {}) {
       // other "opt-in capability" in this plugin: the feature says why it is not doing anything.
       const prefs = await state.loadPrefs();
       const enabled = prefs?.multiAgent?.enabled === true;
-      const presets = ctx.get("agentPresets");
-      const list = Array.isArray(presets?.list) ? presets.list : Array.isArray(presets?.all) ? presets.all : [];
-      const idOf = (entry) => String(entry?.id ?? entry?.presetId ?? entry?.name ?? "").trim();
+      const found = await listAgentPresets();
+      const list = found.presets;
+      const idOf = (entry) => String(entry?.id ?? "").trim();
       const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
       if (action === "reset") {
         await state.setPeer(accountId, chatId, { agentPreset: "" });
@@ -2799,11 +2829,15 @@ export function apply(ctx, config = {}) {
         `  当前预设：${peer?.agentPreset || "（跟随默认）"}`,
         enabled ? "" : "  （开关关着时，指定预设不会生效）",
       ];
-      if (known.length) {
-        lines.push("", `可用预设（${known.length}）：`);
-        for (const id of known.slice(0, 12)) lines.push(`  · ${id}`);
+      if (list.length) {
+        lines.push("", `可用预设（${list.length}）：`);
+        for (const preset of list.slice(0, 12)) {
+          const marks = [preset.isDefault ? "默认" : "", preset.broken ? `加载失败：${preset.broken}` : ""].filter(Boolean);
+          const label = preset.name && preset.name !== preset.id ? `${preset.id}（${preset.name}）` : preset.id;
+          lines.push(`  · ${label}${marks.length ? ` · ${marks.join(" · ")}` : ""}`);
+        }
       } else {
-        lines.push("", "宿主没有暴露预设列表，但 /agent <id> 仍然可以设（id 写错会在建 agent 时暴露）。");
+        lines.push("", found.error ? `读不到预设列表：${found.error}` : "宿主没有声明任何 agent 预设，所以只能跟随默认。");
       }
       lines.push("", "用法：/agent <预设 id> · /agent reset");
       await reply(lines.join("\n"));

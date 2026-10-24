@@ -1,6 +1,19 @@
 # Changelog
 
+## 1.3.1
+
+- **/agent could not list the presets, and said so wrongly.** The first version checked Array.isArray(presets.list) - but
+  list is a **method**: sync list() returns { presets: [{ id, isDefault, name?, description?, broken? }] }. That is what
+  the packed app bundle's schema says (read from pp.asar, not guessed), and it means the reply '宿主没有暴露预设列表' was
+  false: the host does expose them, the plugin was looking at the wrong shape.
+- The listing now shows the id, the display name when it differs, a 默认 marker, and **加载失败：<diagnostic>** for a preset whose
+  definition is broken - choosing one of those would mount nothing, so hiding it is the one thing that would mislead.
+- /agent <id> validates against that list when it is available, so a typo is refused immediately instead of at agent-build
+  time.
+- 44 suites / 690 cases.
+
 ## 1.3.0
+
 
 - **Multi-agent: one independent agent per conversation.** Every session already held its own agent object, so the feature is
   about *what that agent mounts*: with the option on, a chat may mount **its own agent preset** - its own prompt, tools and
