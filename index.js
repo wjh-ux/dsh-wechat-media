@@ -1936,7 +1936,7 @@ export function apply(ctx, config = {}) {
     }
     ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${resolvedId}`);
     conversationHandles.set(resolvedId, handle);
-    conversations.set(resolvedId, { accountId, chatId, peerName, generation });
+    conversations.set(resolvedId, { accountId, chatId, peerName, generation, agentPreset: mountId ?? "" });
     if (options.cwd) await enforceProjectMode(handle.agent?.session, Boolean(options.write));
     // Keep the generation: `/new` must not be undone by this write.
     await state.setRoute(accountId, chatId, {
@@ -2829,10 +2829,13 @@ export function apply(ctx, config = {}) {
         `  当前预设：${peer?.agentPreset || "（跟随默认）"}`,
         enabled ? "" : "  （开关关着时，指定预设不会生效）",
       ];
+      // The host's default, by name: "跟随默认" without a name is a shrug.
+      const defaultId = String(ctx.get("agentPresets")?.defaultId ?? "").trim();
+      if (defaultId && !peer?.agentPreset) lines.push(`  默认预设：${defaultId}`);
       if (list.length) {
         lines.push("", `可用预设（${list.length}）：`);
         for (const preset of list.slice(0, 12)) {
-          const marks = [preset.isDefault ? "默认" : "", preset.broken ? `加载失败：${preset.broken}` : ""].filter(Boolean);
+          const marks = [preset.isDefault || preset.id === defaultId ? "默认" : "", preset.broken ? `加载失败：${preset.broken}` : ""].filter(Boolean);
           const label = preset.name && preset.name !== preset.id ? `${preset.id}（${preset.name}）` : preset.id;
           lines.push(`  · ${label}${marks.length ? ` · ${marks.join(" · ")}` : ""}`);
         }
@@ -8541,6 +8544,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // A counter that stopped counting must be visible, not inferred from the numbers.
             tokenAccountingError,
             peers: await state.loadPeers(),
+            // Which agent preset each live conversation mounted. The agent is created lazily, so this is the only way to see
+            // the effect of `/agent <preset>` from outside the chat.
+            conversations: [...conversations.entries()].map(([sessionId, entry]) => ({
+              sessionId,
+              accountId: entry.accountId,
+              chatId: entry.chatId,
+              agentPreset: entry.agentPreset ?? "",
+            })),
             counters: { ...counters },
             interjections: interjections.slice(-10),
             feishu: await feishuState(),

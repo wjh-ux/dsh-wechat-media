@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.2
+
+- **"跟随默认" now has a name.** `/agent` prints the host's default preset id and marks it in the list. A chat that follows the
+  default used to say so without saying *what* it was following.
+- **`/state` reports which preset each live conversation mounted.** The agent is created lazily, so after `/agent <preset>` the
+  only proof was a log line; `GET /state` now carries `conversations[].agentPreset`, which makes the effect verifiable from
+  outside the chat.
+- The live result that prompted this: `/agent` lists four presets on this machine - `standard`, `ptc`, `minimal`, `cordis` -
+  and none was marked default, which is exactly the ambiguity the first point removes.
+- 44 suites / 690 cases.
+
 ## 1.3.1
 
 - **/agent could not list the presets, and said so wrongly.** The first version checked Array.isArray(presets.list) - but
