@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.1
+
+- **The per-chat model worked, and then taught the lesson it needed to teach.** `/agent model deepseek-official/deepseek-chat`
+  was applied - the turn really did switch provider routes - and failed with `llm-deepseek: no API key for provider route
+  "deepseek-official"`. The error is correct and well placed, but nobody should have to discover which routes have credentials
+  by breaking their chat.
+- **`/agent model` with no argument now prints the host's own selection** (`provider/model`), which is the value known to work
+  because the host is already using it: change the model half, keep the provider half, and nothing new has to be authorised.
+- **Switching provider is warned about at the moment it is set**, not at the next failed turn: the reply says the new route
+  needs its own API key and names the host's current value for comparison.
+- The override itself is unchanged - it is opt-in, so it remains the caller's decision.
+- 44 suites / 691 cases.
+
 ## 1.4.0
 
 - **A model per conversation, and only when you ask for one.** `/agent model <provider>/<model>` pins that chat's model;

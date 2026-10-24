@@ -2822,14 +2822,21 @@ export function apply(ctx, config = {}) {
       if (action === "model") {
         const [what = "", ...more] = rest;
         const current = String((await state.getPeer(accountId, chatId))?.agentModel ?? "").trim();
+        // The host's own selection: the value that is known to work, because the host is already using it. Printing it turns
+        // "which model name is valid here?" into a copy-and-paste instead of a guess.
+        const hostSelection = ctx.get("agentDefaultModel")?.currentSelection?.() ?? null;
+        const hostModel = hostSelection?.provider && hostSelection?.model ? `${hostSelection.provider}/${hostSelection.model}` : "";
         if (!what) {
           await reply(
             [
               "🧠 本会话的模型",
               `  覆盖值：${current || "（未设置，跟随宿主默认）"}`,
+              `  宿主默认：${hostModel || "（宿主没有默认模型）"}`,
               "",
               "用法：/agent model <provider>/<model> · /agent model reset",
               "没设置时不覆盖任何东西 —— 这条会话用的是宿主默认模型。",
+              hostModel ? `想换模型时，最稳的是先照抄 ${hostModel}，再改后面的模型名。` : "",
+              "换了 provider 就要有那个 provider 的 API key，否则这一轮会报 no API key。",
             ].join("\n"),
           );
           return true;
@@ -2851,7 +2858,12 @@ export function apply(ctx, config = {}) {
           return true;
         }
         await state.setPeer(accountId, chatId, { agentModel: wanted });
-        await reply(`✅ 本会话模型 → **${wanted}**（下次新建 agent 时生效）\n没设置就一直是宿主默认，这个覆盖只影响这条会话。`);
+        const wantedProvider = wanted.slice(0, wanted.indexOf("/"));
+        const hostProvider = hostModel ? hostModel.slice(0, hostModel.indexOf("/")) : "";
+        const warning = hostProvider && wantedProvider !== hostProvider
+          ? `\n⚠️ 这条会话会切到另一个 provider route（${wantedProvider}）；它需要自己的 API key（通过 credentials 服务或环境变量），否则下一轮会报 no API key。宿主当前用的是 ${hostModel}。`
+          : "";
+        await reply(`✅ 本会话模型 → **${wanted}**（下次新建 agent 时生效）\n没设置就一直是宿主默认，这个覆盖只影响这条会话。${warning}`);
         noteRoute("/command", { command: "agent", action: "model", model: wanted });
         return true;
       }

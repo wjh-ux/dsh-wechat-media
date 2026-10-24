@@ -307,6 +307,9 @@ record. With it off (the default) every chat mounts the host default, exactly as
 every conversation onto a model nobody chose and show up as a billing surprise rather than a setting. The override obeys the
 same switch as the presets, and `/state`'s `conversations[].agentModel` proves which model a chat actually asked for.
 
+\`/agent model\` with no argument prints the host's own selection, because that value is known to work - change the model half
+and keep the provider half. Switching provider is warned about when it is set, since the new route needs its own API key.
+
 Three statements the commands make rather than hide:
 
 - **A preset change is not a live swap.** It applies when the session next creates an agent, and the reply says so.
