@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.3.2** · 44 test suites / 690 cases · every capability below has been exercised against a real
+**Current release: v1.4.1** · 44 test suites / 691 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -309,6 +309,12 @@ same switch as the presets, and `/state`'s `conversations[].agentModel` proves w
 
 \`/agent model\` with no argument prints the host's own selection, because that value is known to work - change the model half
 and keep the provider half. Switching provider is warned about when it is set, since the new route needs its own API key.
+
+On this machine the host's own selection is `deepseek-account/deepseek-flash`, and that is the value to copy: the provider
+half is the part that carries credentials. Pinning `deepseek-official/deepseek-chat` instead fails with
+`no API key for provider route "deepseek-official"` - a different provider route is a different account, not a different
+model name. `/agent model` prints the host's value for exactly that reason, and switching provider is warned about when it is
+set.
 
 Three statements the commands make rather than hide:
 
@@ -1157,6 +1163,7 @@ came back. Anything not on this list is covered by tests but not by a real devic
 | Office | Word/Excel/PowerPoint written, converted to PDF, rendered to PNG |
 | Integrations | `/inbound` 401 without the token and 200 with it; webhook `turn.end` HMAC verified; dashboard screenshot |
 | Multi-agent | `/agent minimal` on a WeCom chat, then `/new`: after the next message, `GET /state` reported `conversations[].agentPreset = "minimal"` and the reply arrived - the preset is applied when the agent is created, not just stored |
+| Multi-agent: model | `/agent model deepseek-account/deepseek-flash` then `/new`: `GET /state` reported `conversations[].agentModel = "deepseek-account/deepseek-flash"` and the turn answered - and `deepseek-official/deepseek-chat` was shown to fail with `no API key`, which is why `/agent model` prints the host's own value |
 | Secrets at rest | A 32-character QQ secret became a 358-character `dpapi:…` value on disk, `/state` returned `***`, and the bot stayed `ready` - so the seal neither breaks the connection nor leaks the value |
 | QQ bot: private chat | Live bot **PawDesk** (appId 1903374412): `C2C_MESSAGE_CREATE` -> session -> reply through `/v2/users/{openid}/messages`; `received 2 / forwarded 1 / answered 1` |
 | QQ bot: group @ | `GROUP_AT_MESSAGE_CREATE` from a real group -> reply through `/v2/groups/{group_openid}/messages`; `received 4 / forwarded 2 / answered 2`, and the first two attempts were correctly blocked by the allowlist |

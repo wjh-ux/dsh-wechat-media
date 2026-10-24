@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.2
+
+README only, recording the two results the live runs produced:
+
+- The verification table gained **Multi-agent: model** - `/agent model deepseek-account/deepseek-flash`, then `/new`, then a
+  message: `GET /state` reported `conversations[].agentModel = "deepseek-account/deepseek-flash"` and the answer arrived. The
+  same row records the trap that made the value worth writing down: `deepseek-official/deepseek-chat` fails with
+  `no API key for provider route "deepseek-official"`.
+- The multi-agent section now says why: **the provider half is the part that carries credentials**, so copying the host's
+  `provider/model` and changing only the model name is the safe edit, and switching provider is a different account rather
+  than a different model.
+- 44 suites / 691 cases.
+
 ## 1.4.1
 
 - **The per-chat model worked, and then taught the lesson it needed to teach.** `/agent model deepseek-official/deepseek-chat`
