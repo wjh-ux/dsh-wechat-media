@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.3
+
+- **Readable chat names.** `/name 老板的群` renames the chat the command came from, and `POST /peers` accepts a `name` for any
+  chat, so the panel can do the same for one you are not talking in. This matters most on QQ, where a chat's identity is an
+  openid (`A32A7C20732D…`) and every list - peers, task targets, the allowlist panel - shows the name.
+- Scoped on purpose: the command only renames *the chat it was sent in*, because a bridge serving six channels must not have
+  a command that quietly renames another one.
+- 44 suites / 686 cases.
+
 ## 1.1.2
 
 - **`GET /peers` without ids answered 400**, so a caller could ask about one chat but never list them. The panel always

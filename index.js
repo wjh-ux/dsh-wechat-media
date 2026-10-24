@@ -2721,6 +2721,20 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "clipboard", value: next, chatId });
       return true;
     }
+    if (command.name === "name") {
+      // Rename the chat the command came from. Scoped to that chat on purpose: a bridge serving six channels must not
+      // have a command that silently renames some other one.
+      const wanted = String(command.args ?? "").trim();
+      if (!wanted) {
+        const current = await state.getPeer(accountId, chatId);
+        await reply(`当前名字：${current?.name ?? "（未命名）"}\n改名：/name 新名字`);
+        return true;
+      }
+      const saved = await state.setPeer(accountId, chatId, { name: wanted.slice(0, 80) });
+      await reply(`✅ 已改名：${saved?.name ?? wanted}`);
+      noteRoute("/command", { command: "name", transport, name: saved?.name ?? wanted });
+      return true;
+    }
     if (command.name === "qq") {
       // The credentials live in the card (or /prefs); this command is the switch and the honest status.
       const prefs = await state.loadPrefs();
@@ -8742,7 +8756,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
           // true = allowed, false = blocked, anything else = undecided (unlisted).
           const allowed = asBool(body.allowed);
-          const peer = await state.setPeer(accountId, chatId, { allowed });
+          // A readable name is what every list shows - a QQ chat's identity is an openid, which is not a name.
+          const name = String(body.name ?? "").trim();
+          const peer = await state.setPeer(accountId, chatId, {
+            ...(allowed === undefined ? {} : { allowed }),
+            ...(name ? { name: name.slice(0, 80) } : {}),
+          });
           json(res, 200, { ok: true, peer, peers: await state.loadPeers() });
         },
       },

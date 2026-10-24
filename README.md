@@ -837,6 +837,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/name` | `/命名` | Renames the chat you are talking in: `/name 老板的群`. A QQ chat's identity is an openid (`A32A7C20…`), so this is the only way a list of chats reads like something a person recognises. `POST /peers` takes the same `name` for any chat. |
 | `/qq` | `/QQ` | The QQ bot's switch and status: `/qq on|off`, or no argument for credentials presence, connection state and the last error. Credentials live in the card. |
 | `/scrapling` | `/抓取`, `/scrape` | Scrapling's defaults: `/scrapling proxy <url>`, `/scrapling stealth on|off`, or no argument for the interpreter, proxy and stealth status. The fetching itself is the `scrapling_fetch` tool. |
 | `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and with no argument it reports the switch, the toolchain it found and the ports that are plugged in. **Off by default** - flashing writes a board's flash. |

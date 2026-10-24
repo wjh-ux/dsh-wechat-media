@@ -108,6 +108,12 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "name",
+    aliases: ["命名", "rename"],
+    usage: "/name <新名字>",
+    summary: "给当前会话改个可读名字（QQ 会话的 id 是 openid，改完后列表、任务目标、白名单里都显示这个名字）",
+  },
+  {
     name: "qq",
     aliases: ["QQ", "qqbot"],
     usage: "/qq [on|off|status]",
