@@ -811,6 +811,19 @@ window.__ModuleLoader__.load({
          * Save the QQ block. The host validates appId (digits) and rebuilds the gateway connection, so the card only has to
          * send what was typed - and an empty secret means "keep the stored one", because the host never sends it back.
          */
+        /** The multi-agent switch: the same preference `/multiagent on` writes. Off by default. */
+        async function setMultiAgent(enabled) {
+          setBusy(true);
+          try {
+            await api("/prefs", { method: "POST", body: { multiAgent: { enabled } } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         async function saveQQ() {
           setBusy(true);
           try {
@@ -1594,6 +1607,18 @@ window.__ModuleLoader__.load({
             ]),
             // The clipboard: on unless turned off, because a clipboard can hold a password. Same preference as
             // `/clipboard off`, read from the host rather than kept here.
+            // Multi-agent: off by default. With it on, a chat may mount its own agent preset, so "each conversation has its
+            // own agent" changes what gets mounted rather than merely describing the session map.
+            h("label", { key: "ma", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: Boolean(snapshot?.prefs?.multiAgent?.enabled),
+                disabled: busy,
+                onChange: (event) => setMultiAgent(event.target.checked),
+              }),
+              " " + t("multiAgent", "Multi-agent: each chat may mount its own agent preset"),
+            ]),
             h("label", { key: "cb", className: "dswxMeta" }, [
               h("input", {
                 key: "c",

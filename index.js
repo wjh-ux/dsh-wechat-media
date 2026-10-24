@@ -1864,13 +1864,20 @@ export function apply(ctx, config = {}) {
     const sessionId = sessionIdFor(accountId, chatId, generation);
     const existing = ctx.agents.get(sessionId);
     if (existing) {
-      conversations.set(sessionId, { accountId, chatId, peerName, generation });
+      conversations.set(sessionId, { accountId, chatId, peerName, generation, agentPreset: conversations.get(sessionId)?.agentPreset ?? "" });
       if (options.cwd) await enforceProjectMode(existing.session, Boolean(options.write));
       return { agent: existing, sessionId, accountId, chatId, peerName, generation, handle: conversationHandles.get(sessionId) };
     }
 
     const presets = ctx.get("agentPresets");
-    const mountId = config.agentPreset || presets?.defaultId;
+    // Multi-agent: with the option on, a chat may mount its own preset - which is what makes "each conversation has its own
+    // agent" a difference rather than a description. Off (the default) every chat mounts the host default, exactly as before.
+    const multiAgentOn = (await state.loadPrefs())?.multiAgent?.enabled === true;
+    const peerPreset = multiAgentOn ? String((await state.getPeer(accountId, chatId))?.agentPreset ?? "").trim() : "";
+    const mountId = (peerPreset || config.agentPreset || presets?.defaultId) ?? undefined;
+    if (peerPreset) {
+      ctx.logger?.info?.("[dsh-wechat-media] chat %s mounts its own agent preset %s", chatId, peerPreset);
+    }
     // The host's default model, or - when that configuration has been deleted - whatever last opened a session.
     // Without the second half a deleted `agent-default-model` block turned every chat into
     // `no API key for provider route "deepseek-official"`, because the fallback route wants DEEPSEEK_API_KEY.
@@ -2721,6 +2728,89 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "clipboard", value: next, chatId });
       return true;
     }
+    if (command.name === "multiagent") {
+      // The switch that makes "each conversation has its own agent" mean something: with it on, a chat may mount its own
+      // preset, so its prompt/tools/model wiring are its own. Off by default.
+      const prefs = await state.loadPrefs();
+      const current = prefs?.multiAgent && typeof prefs.multiAgent === "object" ? prefs.multiAgent : {};
+      const [action = "status"] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "on" || action === "off") {
+        const next = { ...current, enabled: action === "on" };
+        await state.savePrefs({ multiAgent: next });
+        const lines = [
+          next.enabled
+            ? "🧩 多 agent → **开**：每个会话可以有独立的 agent 预设（自己在哪条会话用哪个预设，用 /agent 设）"
+            : "🧩 多 agent → **关**：所有会话共用默认预设（原有行为）",
+        ];
+        if (next.enabled) lines.push("", "提示：把开关打开后，已有会话**下次新建 agent 时**才生效；正在跑的会话保持原样。");
+        await reply(lines.join("\n"));
+        noteRoute("/command", { command: "multiagent", action, enabled: next.enabled });
+        return true;
+      }
+      const peer = await state.getPeer(accountId, chatId);
+      await reply(
+        [
+          "🧩 多 agent（每会话独立 agent）",
+          `  开关：${current.enabled ? "**开**" : "**关**"}`,
+          `  本会话预设：${peer?.agentPreset || "（跟随默认）"}`,
+          "",
+          "用法：/multiagent on|off · /agent（看有哪些预设）· /agent <预设 id> · /agent reset",
+        ].join("\n"),
+      );
+      noteRoute("/command", { command: "multiagent", action: "status" });
+      return true;
+    }
+
+    if (command.name === "agent") {
+      // Which preset this chat mounts, and how to change it. Only meaningful with /multiagent on - the same rule as every
+      // other "opt-in capability" in this plugin: the feature says why it is not doing anything.
+      const prefs = await state.loadPrefs();
+      const enabled = prefs?.multiAgent?.enabled === true;
+      const presets = ctx.get("agentPresets");
+      const list = Array.isArray(presets?.list) ? presets.list : Array.isArray(presets?.all) ? presets.all : [];
+      const idOf = (entry) => String(entry?.id ?? entry?.presetId ?? entry?.name ?? "").trim();
+      const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "reset") {
+        await state.setPeer(accountId, chatId, { agentPreset: "" });
+        await reply("✅ 本会话已恢复跟随默认预设（下次新建 agent 时生效）");
+        return true;
+      }
+      if (action !== "status" && action !== "list") {
+        const wanted = action;
+        if (!enabled) {
+          await reply("多 agent 还没开 —— 先发 /multiagent on，再给会话指定预设。");
+          return true;
+        }
+        const known = list.map(idOf).filter(Boolean);
+        if (known.length && !known.includes(wanted)) {
+          await reply(`没有这个预设：${wanted}\n现有：${known.slice(0, 12).join("、")}`);
+          return true;
+        }
+        await state.setPeer(accountId, chatId, { agentPreset: wanted });
+        await reply(`✅ 本会话预设 → **${wanted}**（下次新建 agent 时生效）`);
+        noteRoute("/command", { command: "agent", action: "set", preset: wanted });
+        return true;
+      }
+      const peer = await state.getPeer(accountId, chatId);
+      const known = list.map(idOf).filter(Boolean);
+      const lines = [
+        "🤖 本会话的 agent",
+        `  多 agent 开关：${enabled ? "**开**" : "**关**"}`,
+        `  当前预设：${peer?.agentPreset || "（跟随默认）"}`,
+        enabled ? "" : "  （开关关着时，指定预设不会生效）",
+      ];
+      if (known.length) {
+        lines.push("", `可用预设（${known.length}）：`);
+        for (const id of known.slice(0, 12)) lines.push(`  · ${id}`);
+      } else {
+        lines.push("", "宿主没有暴露预设列表，但 /agent <id> 仍然可以设（id 写错会在建 agent 时暴露）。");
+      }
+      lines.push("", "用法：/agent <预设 id> · /agent reset");
+      await reply(lines.join("\n"));
+      noteRoute("/command", { command: "agent", action: "status" });
+      return true;
+    }
+
     if (command.name === "name") {
       // Rename the chat the command came from. Scoped to that chat on purpose: a bridge serving six channels must not
       // have a command that silently renames some other one.
@@ -9330,6 +9420,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               ...(appId ? { appId } : {}),
               ...(clientSecret ? { clientSecret } : {}),
             };
+          }
+          // Multi-agent: one switch, per-chat presets live on the peer record.
+          if (body.multiAgent !== undefined) {
+            const source = typeof body.multiAgent === "string" ? JSON.parse(body.multiAgent) : body.multiAgent;
+            patch.multiAgent = { enabled: source?.enabled === true };
           }
           // Scrapling defaults: a proxy for the sites that need one, stealth for the ones that fight back.
           if (body.scrapling !== undefined) {

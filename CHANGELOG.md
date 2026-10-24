@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0
+
+- **Multi-agent: one independent agent per conversation.** Every session already held its own agent object, so the feature is
+  about *what that agent mounts*: with the option on, a chat may mount **its own agent preset** - its own prompt, tools and
+  model wiring - and the choice is remembered on the peer record. Off (the default) every chat mounts the host default
+  exactly as before.
+- **`/multiagent on|off`** is the switch, **`/agent`** lists the presets and shows this chat's choice, `/agent <preset>` sets
+  it, `/agent reset` goes back to the default. A preset change takes effect when the session next creates an agent - the
+  command says that instead of implying a live swap.
+- **With the switch off, `/agent` refuses to look like it worked**: it names the switch that is off and why the setting has no
+  effect, the same rule the other opt-in capabilities follow.
+- The card gained the checkbox, and `prefs.multiAgent` is validated on the way in (only the literal `true` enables it).
+- Honest limit: the host's preset list is read defensively (`list` or `all`, ids or names). If a host exposes neither, setting
+  a preset by id still works but stays unverified until an agent is built - and that sentence is in the command's own output.
+- 44 suites / 690 cases.
+
 ## 1.2.1
 
 README only, and it was overdue in two places:

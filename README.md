@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.2.0** · 44 test suites / 690 cases · every capability below has been exercised against a real
+**Current release: v1.3.0** · 44 test suites / 690 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -26,6 +26,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
+| Multi-agent | With one switch, **each conversation can mount its own agent preset** - its own prompt, tools and model wiring - instead of every chat sharing the host default. Off by default; `/multiagent on`, then `/agent <preset>` per chat. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
 
@@ -286,6 +287,30 @@ Three details that decide whether a QQ bot works at all, all handled here:
 chat message produced an answer through `/v2/users/{openid}/messages`, and an @ in a real group produced one through
 `/v2/groups/{group_openid}/messages`. The allowlist blocked both the first private message and the first group message until
 the chat was allowed - which is what it is for, and it is visible in the counters (`blocked`) rather than silent.
+
+## Multi-agent: one agent per conversation / 多 agent
+
+Every conversation already had its own session *and its own agent object*; what this switch changes is **what that agent
+mounts**. With it on, a chat can mount its own agent preset - its own prompt, tools and model wiring - remembered on the peer
+record. With it off (the default) every chat mounts the host default, exactly as before.
+
+```text
+/multiagent                # the switch and this chat's preset
+/multiagent on | off       # off by default
+/agent                     # the presets the host exposes, and which one this chat uses
+/agent <preset id>         # set it for this chat
+/agent reset               # back to the default
+```
+
+Three statements the commands make rather than hide:
+
+- **A preset change is not a live swap.** It applies when the session next creates an agent, and the reply says so.
+- **With the switch off, `/agent <id>` refuses to look like it worked.** It names the switch that is off, because storing a
+  value that will never be read is worse than declining.
+- **The preset list is read defensively** (`list` or `all`, ids or names). If a host exposes neither, setting by id still
+  works but stays unverified until an agent is built - and the command prints that sentence itself.
+
+The card carries the matching checkbox: **每个会话可挂自己的 agent 预设**.
 
 ### Receiving: the long connection / 用长连接接收（不需要公网地址）
 
@@ -837,6 +862,8 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/multiagent` | `/多agent` | The switch for one agent per conversation: `/multiagent on|off`, or no argument for the switch and this chat's preset. **Off by default.** |
+| `/agent` | `/预设` | Lists the agent presets the host exposes, shows which one this chat mounts, `/agent <id>` sets it and `/agent reset` returns to the default. Only takes effect with `/multiagent on`. |
 | `/name` | `/命名` | Renames the chat you are talking in: `/name 老板的群`. A QQ chat's identity is an openid (`A32A7C20…`), so this is the only way a list of chats reads like something a person recognises. `POST /peers` takes the same `name` for any chat. |
 | `/qq` | `/QQ` | The QQ bot's switch and status: `/qq on|off`, or no argument for credentials presence, connection state and the last error. Credentials live in the card. |
 | `/scrapling` | `/抓取`, `/scrape` | Scrapling's defaults: `/scrapling proxy <url>`, `/scrapling stealth on|off`, or no argument for the interpreter, proxy and stealth status. The fetching itself is the `scrapling_fetch` tool. |

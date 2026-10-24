@@ -108,6 +108,18 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "multiagent",
+    aliases: ["多agent", "magent"],
+    usage: "/multiagent [on|off|status]",
+    summary: "多 agent 开关（默认关）：开了之后每个会话可以挂自己的 agent 预设，各自独立的提示词/工具/模型接线；配置用 /agent",
+  },
+  {
+    name: "agent",
+    aliases: ["预设", "preset"],
+    usage: "/agent [<预设 id>|reset|status]",
+    summary: "本会话的 agent 预设：不开多 agent 时不生效；开了就按会话记住，下次建 agent 时换用",
+  },
+  {
     name: "name",
     aliases: ["命名", "rename"],
     usage: "/name <新名字>",
