@@ -8754,12 +8754,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return json(res, 200, { ok: true, peers });
           }
           if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
-          // true = allowed, false = blocked, anything else = undecided (unlisted).
-          const allowed = asBool(body.allowed);
+          // true = allowed, false = blocked, absent = leave it alone. "Leave it alone" is its own case: a rename used to
+          // store `allowed: null`, because every call went through asBool() and a missing field read as null - which is not
+          // `true`, so renaming a chat silently dropped it back to "unlisted".
+          const hasAllowed = Object.prototype.hasOwnProperty.call(body, "allowed");
+          const allowed = hasAllowed ? asBool(body.allowed) : undefined;
           // A readable name is what every list shows - a QQ chat's identity is an openid, which is not a name.
           const name = String(body.name ?? "").trim();
           const peer = await state.setPeer(accountId, chatId, {
-            ...(allowed === undefined ? {} : { allowed }),
+            ...(hasAllowed && allowed !== undefined ? { allowed } : {}),
             ...(name ? { name: name.slice(0, 80) } : {}),
           });
           json(res, 200, { ok: true, peer, peers: await state.loadPeers() });

@@ -1116,5 +1116,13 @@ await test("the tenant host is configurable from the panel, the route and the en
   assert.match(clientSource, /feishuDraft\.feishuTenantHost \?\? snapshot\?\.feishu\?\.tenantHost/, "and shows the saved value after a reload");
   assert.match(clientSource, /feishuTenantHost: event\.target\.value/, "typing fills the draft that Save submits");
 });;
+// ── the peers route ───────────────────────────────────────────────────────
+await test("a rename must not clear the allow flag", () => {
+  // Measured: renaming a peer stored allowed: null, because the route ran every call through asBool() and a missing field
+  // read as null - and null is not true, so a rename quietly un-allowlisted the chat.
+  assert.match(host, /hasOwnProperty\.call\(body, "allowed"\)/, "the route must know whether allowed was sent at all");
+  assert.match(host, /hasAllowed && allowed !== undefined \? \{ allowed \}/, "and only then write it");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

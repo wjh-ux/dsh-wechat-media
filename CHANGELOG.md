@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.4
+
+- **A rename no longer clears the allow flag.** `/peers` ran every call through `asBool(body.allowed)`, so a request that
+  only carried `name` stored `allowed: null` - and `null` is not `true`, which put both renamed QQ chats back to
+  "unlisted". Measured immediately after the rename: `allowed=null` on both. The route now distinguishes "not sent" from
+  "sent as false", and a source-level test pins it.
+- 44 suites / 687 cases.
+
 ## 1.1.3
 
 - **Readable chat names.** `/name 老板的群` renames the chat the command came from, and `POST /peers` accepts a `name` for any
