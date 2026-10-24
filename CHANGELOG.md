@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.72.0
+
+- **Scrapling, as one tool.** `scrapling_fetch` drives the Scrapling scraping library (browser-shaped TLS fingerprint and
+  headers), so pages that reject a plain HTTP client can be read: pass `selector` and each match comes back as an item,
+  `links` to list anchors, `mode=html` for the markup, `stealth` for a real browser, `proxy` per call.
+- **`/scrapling`** shows which python has the library and manages the two defaults: `proxy <url>` and `stealth on|off`.
+- **Failures are reported, not guessed.** A selector that matches nothing still returns the page text **and** a warning;
+  a missing dependency comes back as the exception's own words. Both were needed while wiring this up: scrapling 0.5
+  wanted `curl_cffi`, then `patchright`, then `browserforge`, then `msgspec`, and each one first appeared as a traceback.
+- **The python side is embedded**, not a second file - `files[]` is a list, and a plugin that installs and then fails on a
+  missing helper is worse than one that does not install.
+- Measured here: `https://example.com` -> 200 + body; `https://quotes.toscrape.com/` with `selector: "span.text"` -> the
+  three quotes as separate items.
+- 43 suites / 674 cases.
+
 ## 0.71.5
 
 - **`projectDir` reached the tool's schema but not `idf.py`.** The parameter was documented and passed by

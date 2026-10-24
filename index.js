@@ -99,6 +99,7 @@ import * as desktop from "./desktop.js";
 import * as clipboard from "./clipboard.js";
 import * as ssh from "./ssh.js";
 import * as serial from "./serial.js";
+import * as scrapling from "./scrapling.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -2716,6 +2717,44 @@ export function apply(ctx, config = {}) {
         await reply("📋 剪贴板 → **关**。clipboard_read / clipboard_write 现在一律拒绝执行，直到 /clipboard on。");
       }
       noteRoute("/command", { command: "clipboard", value: next, chatId });
+      return true;
+    }
+    if (command.name === "scrapling") {
+      // Defaults only - proxy for the sites that need it, stealth for the ones that fight back. Fetching itself needs no
+      // arming, so this command never turns the tool off.
+      const prefs = await state.loadPrefs();
+      const current = prefs?.scrapling && typeof prefs.scrapling === "object" ? prefs.scrapling : {};
+      const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "proxy" || action === "stealth") {
+        if (action === "stealth") {
+          const wanted = String(rest[0] ?? "").toLowerCase();
+          const next = { ...current, stealth: wanted === "on" || wanted === "true" };
+          await state.savePrefs({ scrapling: next });
+          await reply(`Scrapling stealth → ${next.stealth ? "**开**（需要 camoufox/playwright 浏览器，否则抓取会报错）" : "**关**"}`);
+          noteRoute("/command", { command: "scrapling", action, value: next.stealth });
+          return true;
+        }
+        const value = String(rest[0] ?? "").trim();
+        const next = { ...current };
+        if (!value || value === "off") delete next.proxy;
+        else next.proxy = value;
+        await state.savePrefs({ scrapling: next });
+        await reply(next.proxy ? `Scrapling 代理 → ${next.proxy}` : "已清掉 Scrapling 的代理");
+        noteRoute("/command", { command: "scrapling", action, value: next.proxy ?? "" });
+        return true;
+      }
+      const python = scrapling.findPython();
+      const lines = [
+        "Scrapling（抓取引擎）",
+        `  python：${python || "没找到装了 scrapling 的解释器"}`,
+        `  代理：${current.proxy || "（直连）"}`,
+        `  stealth：${current.stealth ? "开" : "关"}`,
+        "",
+        "工具：scrapling_fetch（url + selector / links / mode=html / stealth）",
+        "用法：/scrapling proxy http://127.0.0.1:7897 · /scrapling stealth on · /scrapling",
+      ];
+      await reply(lines.join("\n"));
+      noteRoute("/command", { command: "scrapling", action: "status" });
       return true;
     }
     if (command.name === "serial") {
@@ -7342,6 +7381,53 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       const sshUploadTool = sshTransferTool("ssh_upload", "upload", "Copy a local file (or directory) to another machine over SSH, through the platform scp. Key-based auth only.");
       const sshDownloadTool = sshTransferTool("ssh_download", "download", "Copy a file (or directory) from another machine over SSH, through the platform scp. Key-based auth only.");
 
+      // ── Scrapling: a real scraping engine ───────────────────────────────────
+      //
+      // No switch: fetching a public page is what the web tools already do, and a scrape that has to be armed is a scrape
+      // nobody uses. What it does add is an honest failure: the exception text, the status line, and warnings when a
+      // selector matched nothing.
+      const scraplingFetchTool = define({
+        name: "scrapling_fetch",
+        description:
+          "Fetch a page with Scrapling (browser-shaped TLS fingerprint and headers, so it works where a plain http client is blocked) and return its text, a CSS selector's matches, links, or the raw HTML. Prefer this over a plain fetch for sites that reject scripts. Give selector to extract structured items ('span.text', 'h2 a::text'); links=true to list anchors; mode='html' for the markup.",
+        parameters: {
+          url: { type: "string", description: "http(s) URL to fetch." },
+          selector: { type: "string", description: "CSS selector; each match becomes one item with its text." },
+          mode: { type: "string", description: "text (default) or html." },
+          limit: { type: "number", description: `Max items/links (default 20, max ${scrapling.SCRAPLING_ITEMS_MAX}).` },
+          textLimit: { type: "number", description: `Max body characters (default 10000, max ${scrapling.SCRAPLING_TEXT_MAX}).` },
+          links: { type: "boolean", description: "Also return the page's anchors." },
+          stealth: { type: "boolean", description: "Use StealthyFetcher (a real browser; needs camoufox/playwright installed)." },
+          proxy: { type: "string", description: "Proxy URL, e.g. http://127.0.0.1:7897." },
+          timeout: { type: "number", description: "Seconds (default 30, max 120)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: scrapling.SCRAPLING_TIMEOUT_MS + 30_000,
+        async execute(args) {
+          const prefs = await state.loadPrefs();
+          const defaults = prefs?.scrapling && typeof prefs.scrapling === "object" ? prefs.scrapling : {};
+          try {
+            const result = await scrapling.scrape({
+              url: args?.url,
+              selector: args?.selector,
+              mode: args?.mode,
+              limit: args?.limit,
+              textLimit: args?.textLimit,
+              links: args?.links,
+              stealth: args?.stealth ?? defaults.stealth === true,
+              proxy: String(args?.proxy ?? defaults.proxy ?? ""),
+              timeout: args?.timeout,
+            });
+            noteRoute("/scrapling", { action: "fetch", ok: true, status: result.status, ms: result.ms });
+            return scrapling.renderScrape(result);
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/scrapling", { action: "fetch", ok: false, error: reason });
+            return `scrapling_fetch 失败：${reason}`;
+          }
+        },
+      });
+
       // ── Serial: ports, flashing, monitor ────────────────────────────────────
       //
       // Off until armed: writing a board's flash is not a default capability, and reading a port takes it away from the
@@ -7712,7 +7798,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -8963,6 +9049,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (asBool(body.clipboard) !== null) patch.clipboard = asBool(body.clipboard);
           // The SSH block (host list + switch) is validated as a whole: a host list that quietly lost an entry is
           // worse than one that refuses to save.
+          // Scrapling defaults: a proxy for the sites that need one, stealth for the ones that fight back.
+          if (body.scrapling !== undefined) {
+            const source = typeof body.scrapling === "string" ? JSON.parse(body.scrapling) : body.scrapling;
+            const proxy = String(source?.proxy ?? "").trim();
+            patch.scrapling = {
+              ...(proxy ? { proxy } : {}),
+              stealth: source?.stealth === true,
+            };
+          }
           // The serial block: one validated object, so a half-written preference cannot land in prefs. Without this
           // the route answered 200 and dropped the value - the card's checkbox flipped straight back.
           if (body.serial !== undefined) {

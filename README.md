@@ -553,6 +553,37 @@ The flasher's verdict lives in its last lines ("Hash of data verified", "avrdude
 than capped from the start. Discovery is real: on this machine it found `D:\Espressif\frameworks\esp-idf-v4.4.8` with
 its `python_env` interpreter - and reported "no serial ports" when no board was plugged in, rather than inventing one.
 
+## Scrapling: fetch what a plain client cannot / 抓取引擎
+
+Scrapling is a python scraping library with a browser-shaped TLS fingerprint, real-browser headers and adaptive selectors,
+so it reads pages that reject a plain `fetch` (`403`, Cloudflare's challenge, a UA check). `scrapling_fetch` exposes it as
+one tool:
+
+| Argument | What it does |
+| --- | --- |
+| `url` | the http(s) page (http and https only - a `file://` path is refused) |
+| `selector` | CSS selector; **each match becomes one item** with its text (`span.text`, `h2 a::text`) |
+| `links` | also return the page's anchors |
+| `mode` | `text` (default) or `html` |
+| `limit` / `textLimit` | caps (items, characters) - a page can be megabytes, the transcript should not be |
+| `stealth` | run `StealthyFetcher` (a real browser; needs `camoufox`/`playwright` installed, otherwise it fails loudly) |
+| `proxy` | per-call proxy, or set a default with `/scrapling proxy …` |
+
+```text
+/scrapling                        # which python has scrapling, the proxy and stealth defaults
+/scrapling proxy http://127.0.0.1:7897
+/scrapling stealth on|off         # off by default: a real browser is slow and needs its deps
+```
+
+Measured on this machine (scrapling 0.5, python 3.11): `https://example.com` returned 200 with its body;
+`https://quotes.toscrape.com/` with `selector: "span.text"` returned the three quotes as separate items. Two failure modes
+are reported rather than guessed: a selector that matches nothing still returns the page text **and** a warning, and a
+missing dependency comes back as the exception's own words (`ModuleNotFoundError: No module named 'msgspec'` was the real
+one here, fixed by installing it).
+
+Behind it, the python side is one self-contained script embedded in `scrapling.js` - not a second file, because a plugin
+that installs and then fails on a missing helper is worse than one that does not install.
+
 ## Web search (Tavily) / 联网搜索
 
 A `tavily_search` tool lets a WeChat, WeCom or Feishu conversation ask about something current and get real titles,
@@ -756,6 +787,7 @@ through (a blocked chat cannot run commands either).
 | `/tokens` | `/token`, `/用量` | Token usage per account (and per chat inside it). `/tokens reset` zeroes it; `/tokens 7` sets the clearing window to 1-30 days. |
 | `/desktop` | `/桌面` | Arms or disarms the desktop tools (mouse, keyboard, screenshot, windows). **Off by default** - they act on your own screen. |
 | `/clipboard` | `/clip`, `/剪贴板` | Arms or disarms the clipboard tools. **On by default**: a clipboard can hold a password, so one command turns reading off. |
+| `/scrapling` | `/抓取`, `/scrape` | Scrapling's defaults: `/scrapling proxy <url>`, `/scrapling stealth on|off`, or no argument for the interpreter, proxy and stealth status. The fetching itself is the `scrapling_fetch` tool. |
 | `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and with no argument it reports the switch, the toolchain it found and the ports that are plugged in. **Off by default** - flashing writes a board's flash. |
 | `/ssh` | `/远程` | Arms or disarms the SSH tools and manages the host list: `/ssh on|off`, `/ssh add <name> <user@host[:port]> [identity]`, `/ssh remove <name>`. **Off by default** - these run commands on other machines. |
 | `/stop` | `/cancel`, `/停止` | Interrupts the turn running in this chat's session, and says so honestly when nothing is running. |

@@ -108,6 +108,12 @@ export const COMMANDS = [
     summary: "剪贴板开关：开/关 clipboard_read、clipboard_write（默认开；读剪贴板可能读到密码这类东西）",
   },
   {
+    name: "scrapling",
+    aliases: ["抓取", "scrape"],
+    usage: "/scrapling [status|proxy <url>|stealth on|off]",
+    summary: "抓取引擎 Scrapling：看解释器、改代理与 stealth 默认值；抓取本身用 scrapling_fetch 工具（浏览器指纹，普通 http 被拦的站也能读）",
+  },
+  {
     name: "serial",
     aliases: ["串口", "flash"],
     usage: "/serial [on|off|ports] · /serial baud 460800 · /serial port COM3",
