@@ -368,7 +368,12 @@ export function describeTask(task, now = Date.now()) {
   const state = task.enabled === false ? "⏸ 已暂停" : next ? `下次 ${formatWhen(next)}` : "✅ 已跑完";
   const last = task.lastRunAt ? ` · 上次 ${formatWhen(task.lastRunAt)} ${task.lastResult === "ok" ? "成功" : `失败：${task.lastResult ?? "?"}`}` : "";
   const runs = task.runs ? ` · 已运行 ${task.runs} 次` : "";
-  return `${task.id} · ${when} · ${task.action} · ${state}${runs}${last} · ${task.payload.slice(0, 40)}`;
+  // Every field is optional here on purpose: this line feeds `/task list`, the panel and the route, so one odd record must
+  // degrade to a strange-looking row rather than break the whole list.
+  const payload = String(task.payload ?? "").replace(/\s+/g, " ").slice(0, 40);
+  const id = String(task.id ?? "(no id)");
+  const action = String(task.action ?? "(no action)");
+  return `${id} · ${when} · ${action} · ${state}${runs}${last}${payload ? ` · ${payload}` : ""}`;
 }
 
 /**

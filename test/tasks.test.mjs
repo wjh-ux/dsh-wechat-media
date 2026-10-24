@@ -363,5 +363,15 @@ test("trimHistory keeps history bounded (the GUI port file uses the same idea)",
   assert.equal(trimHistory(ports, { limit: 8 }).at(-1).port, 19011, "the newest survives");
 });
 
+test("describeTask survives a record with missing fields", () => {
+  // Found by fuzzing: `task.payload.slice(0, 40)` threw a TypeError, which would take out the entire task list over one odd
+  // record. A strange-looking row is the right outcome, not a broken page.
+  for (const task of [{}, { schedule: {} }, { schedule: { kind: "daily" } }, { id: "t1", action: "message", payload: "" }]) {
+    const line = describeTask(task, Date.now());
+    assert.equal(typeof line, "string");
+    assert.ok(!/undefined/.test(line), `the row must not print "undefined": ${line}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

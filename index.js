@@ -2120,6 +2120,24 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * Remember an inbound id as handled, and forget it again when the request failed.
+   *
+   * The list is the whole duplicate guard, so what it means matters: an id in `inboundSeen` claims "this was answered". A
+   * request that threw must not claim that - otherwise the retry finds the id, returns `duplicate: true`, and no turn runs.
+   */
+  function noteInboundHandled(id, handled) {
+    const key = String(id ?? "");
+    if (!key) return;
+    const at = inboundSeen.indexOf(key);
+    if (handled && at < 0) {
+      inboundSeen.push(key);
+      if (inboundSeen.length > 200) inboundSeen.shift();
+    } else if (!handled && at >= 0) {
+      inboundSeen.splice(at, 1);
+    }
+  }
+
   /** Which command a `/help <x>` argument means: a name or an alias. */
   function resolveCommandName(wanted) {
     const cleaned = String(wanted ?? "").replace(/^\/+/, "").trim().toLowerCase();
@@ -2210,6 +2228,7 @@ export function apply(ctx, config = {}) {
       await reply(unknownCommandText(command.name));
       return true;
     }
+
 
   /**
    * The "现状" section of `/help <command>`: what this install is currently set to, for the commands where that is the
@@ -8858,13 +8877,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const body = await readArgs(req);
           const request = normalizeInboundRequest(body);
           if (request.error) return json(res, 400, { ok: false, error: request.error });
-          if (request.id) {
-            if (inboundSeen.includes(request.id)) {
-              counters.inboundDuplicates += 1;
-              return json(res, 200, { ok: true, duplicate: true, id: request.id });
-            }
-            inboundSeen.push(request.id);
-            if (inboundSeen.length > 200) inboundSeen.shift();
+          // Seen, not "claimed": the id is recorded by `noteInboundHandled` only after the turn has run. Recording it here
+          // meant a request that threw answered 500 while its id stayed marked, so every retry was answered "duplicate: true"
+          // and no turn ran - a lost message that reported success.
+          if (request.id && inboundSeen.includes(request.id)) {
+            counters.inboundDuplicates += 1;
+            return json(res, 200, { ok: true, duplicate: true, id: request.id });
           }
           counters.inboundRequests += 1;
           noteRoute("/inbound", { transport: request.transport, peer: request.peer, chars: request.text.length, reply: request.reply });
@@ -8895,6 +8913,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 deliveryError = String(error?.message ?? error);
               }
             }
+            // The turn has run: only now is the id "handled".
+            noteInboundHandled(request.id, !outcome.error);
             if (outcome.error) counters.inboundFailed += 1;
             return json(res, 200, {
               ok: !outcome.error,
@@ -8909,6 +8929,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               ms: Date.now() - started,
             });
           } catch (error) {
+            // Nothing was answered, so the id must not claim otherwise: the next attempt with the same id may run.
+            noteInboundHandled(request.id, false);
             counters.inboundFailed += 1;
             return json(res, 500, { ok: false, error: String(error?.message ?? error), ms: Date.now() - started });
           }

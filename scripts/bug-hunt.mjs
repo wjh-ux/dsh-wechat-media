@@ -127,6 +127,62 @@ if (wantsOffline) {
       if (parsed !== null && !parsed.chatId) throw new Error("parsed without a chat");
     }
   });
+  // The scheduler fires unattended, so its arithmetic is checked rather than trusted.
+  const TASKS = await import(`file://${join(root, "tasks.js").replace(/\\/g, "/")}`);
+  const FIXED_NOW = Date.UTC(2026, 9, 24, 3, 30, 0);
+  for (const text2 of ["daily 08:30", "每天 08:30", "weekly mon 09:00", "每周日 00:00", "every 30m", "every 1m", "every 2h", "每30分钟", "once 2026-12-31 23:59"]) {
+    check(`the schedule parser accepts ${text2}`, () => {
+      const schedule = TASKS.parseSchedule(text2);
+      const next = TASKS.nextRunAt(schedule, FIXED_NOW);
+      if (!Number.isFinite(next) || next <= FIXED_NOW) throw new Error(`next run is not in the future: ${next}`);
+    });
+  }
+  for (const text2 of ["daily 24:00", "daily 23:60", "weekly 8 09:00", "every 0m", "every 30s", "once 2026-02-30 09:00", "whenever", ""]) {
+    check(`the schedule parser refuses ${JSON.stringify(text2)}`, () => {
+      try {
+        TASKS.parseSchedule(text2);
+      } catch {
+        return;
+      }
+      throw new Error("accepted");
+    });
+  }
+  check("daily intervals are exactly 24h", () => {
+    const schedule = TASKS.parseSchedule("daily 08:30");
+    const first = TASKS.nextRunAt(schedule, FIXED_NOW);
+    const second = TASKS.nextRunAt(schedule, first);
+    if (second - first !== 24 * 60 * 60_000) throw new Error(`${(second - first) / 3_600_000}h between runs`);
+  });
+  check("a paused task is never due", () => {
+    const task = TASKS.createTask({ transport: "wechat", accountId: "a", chatId: "c", action: "message", payload: { text: "hi" }, schedule: "every 1m", now: FIXED_NOW });
+    task.enabled = false;
+    if (TASKS.dueTasks([task], FIXED_NOW + 10 * 60_000).length !== 0) throw new Error("a paused task fired");
+  });
+  check("an odd task record cannot break its own row", () => {
+    for (const task of [{}, { schedule: {} }, { id: "t", action: "message", payload: "" }]) {
+      if (/undefined/.test(TASKS.describeTask(task, FIXED_NOW))) throw new Error("the row printed undefined");
+    }
+  });
+
+  // Session ids decide "same conversation" or "fresh one": /new must really change them, and chats must never collide.
+  const { sessionIdFor } = await import(`file://${join(root, "index.js").replace(/\\/g, "/")}`);
+  check("session ids change with the generation", () => {
+    if (sessionIdFor("acct", "chat", 0) === sessionIdFor("acct", "chat", 1)) throw new Error("generation 1 reused the id");
+  });
+  check("session ids never collide across awkward chats", () => {
+    // Every entry is distinct - a duplicated chat in this list is a bug in the test, not a collision (it was, once).
+    const chats = ["a", "A", "b", "a-b", "a/b", "..", "群 1", "群1", "a b"];
+    const seen = new Set();
+    for (const chat of chats) {
+      for (const generation of [0, 1]) {
+        const id = sessionIdFor("acct", chat, generation);
+        if (seen.has(id)) throw new Error(`${JSON.stringify(chat)}/${generation} collided`);
+        if (/[\\/]|\.\.|\s/.test(id)) throw new Error(`unsafe id: ${JSON.stringify(id)}`);
+        seen.add(id);
+      }
+    }
+  });
+
   for (const url of ["file:///c:/windows/win.ini", "javascript:alert(1)", "ftp://x", "data:text/html,x", ""]) {
     await checkAsync(`scrapling refuses ${url || "(empty)"}`, async () => {
       try {
