@@ -1,6 +1,17 @@
 # Changelog
 
+## 1.1.5
+
+README only: a **Release history** section. 0.1.0 to 1.1.4 is 198 releases, which is too many to list - so the table
+groups them by era (the bridge, secrets at rest, Office, the browser and its proxy, flow automation and the extension, the
+VS Code bridge, the network layer, integrations, SSH, serial, Scrapling, 1.0 as the stability statement, 1.1 QQ) and
+names the releases that mattered.
+
+The section ends with the discipline the numbers came from: a release goes out after the suite passes, and a claim goes
+into the README only after something real produced it.
+
 ## 1.1.4
+
 
 - **A rename no longer clears the allow flag.** `/peers` ran every call through `asBool(body.allowed)`, so a request that
   only carried `name` stored `allowed: null` - and `null` is not `true`, which put both renamed QQ chats back to

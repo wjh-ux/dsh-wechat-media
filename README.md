@@ -1119,6 +1119,30 @@ came back. Anything not on this list is covered by tests but not by a real devic
 | QQ bot: private chat | Live bot **PawDesk** (appId 1903374412): `C2C_MESSAGE_CREATE` -> session -> reply through `/v2/users/{openid}/messages`; `received 2 / forwarded 1 / answered 1` |
 | QQ bot: group @ | `GROUP_AT_MESSAGE_CREATE` from a real group -> reply through `/v2/groups/{group_openid}/messages`; `received 4 / forwarded 2 / answered 2`, and the first two attempts were correctly blocked by the allowlist |
 
+## Release history / 版本历程
+
+`0.1.0` to `1.1.4` is **198 releases** - this plugin was built in public, one verified change at a time. Grouped by what
+each era added, with the releases that mattered most:
+
+| Era | What it added |
+| --- | --- |
+| 0.1 – 0.29 | The bridge itself: QR pairing, one session per chat, media both ways, multiple accounts, the command set, and the card in the Plugins panel |
+| 0.30 – 0.32 | Reliability and secrets: retries, monthly token accounting, and credentials on disk that are no longer readable credentials |
+| 0.33 – 0.38 | Office documents from the chat, an office output folder, the first-run wizard, and Feishu scopes copied as the minimum payload |
+| 0.39 – 0.47 | A browser a person can watch, a proxy for it, `/doctor`, proxy host lists, and a long run of crash fixes (a slow page could take the app down) |
+| 0.48 – 0.56 | Flow automation, three browser sessions, the Chrome extension (own Chrome / attach / Edge), the debugging banner as a choice, and a visible click cursor |
+| 0.57 – 0.67 | The VS Code bridge: ask from the editor, streaming answers, the open project as context, and finally the AI editing the folder it was opened on |
+| 0.58 – 0.63 | The network layer: capture the JSON behind a page, turn it into rows, save it, and a Maps place collector that scrolls past the first screen |
+| 0.68 – 0.69 | Integrations: `POST /inbound`, a signed outbound webhook, the dashboard - and the clipboard as two tools |
+| 0.70 | SSH: `ssh_exec`, `ssh_upload`, `ssh_download`, key-based only, host key learnt once, off until `/ssh on` |
+| 0.71 | Serial: list ports, flash (ESP-IDF \`idf.py\`, `esptool`, `avrdude`, STC via `stcgal`), and read the board back - verified on an STC8H1K08 |
+| 0.72 | Scrapling, including a real-browser mode that drives the Chrome you already have |
+| 1.0 | The stability statement: same features, winget-installed tools found, `projectDir` reaching `idf.py`, and the README's verification table |
+| 1.1 | QQ bot over the open platform's WebSocket gateway - private chats and group @, verified against a live bot |
+
+Each era ended with the same discipline: a release only goes out after the suite passes, and a claim only goes in the README
+after something real produced the number.
+
 ## Limitations / 已知限制
 
 - **Group sending is unverified but well-founded.** Receiving from a group works today. Every reference
