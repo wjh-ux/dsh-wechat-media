@@ -10473,6 +10473,30 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
         },
       },
       {
+        /**
+         * The QQ connection: its state, and a way to reconnect now.
+         *
+         * `reconnect` exists because the card cannot re-save the credentials - the client secret is never sent back to the browser, so
+         * "save and connect" is not available as a retry button. The credentials are already in prefs; this just rebuilds the gateway
+         * connection with them.
+         */
+        kind: "exact",
+        path: "/dsh-wechat-media/qq",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const body = req.method === "POST" ? await readArgs(req) : {};
+          const action = String(body.action ?? "status");
+          if (action === "reconnect") {
+            await startQQ({ force: true });
+            noteRoute("/qq", { action });
+            return json(res, 200, { ok: true, qq: qqStatus });
+          }
+          if (action !== "status") return json(res, 400, { ok: false, error: `未知 action：${action}（status / reconnect）` });
+          return json(res, 200, { ok: true, qq: qqStatus });
+        },
+      },
+      {
         // WeCom setup and self-test as a plain page: a browser that cannot fetch from
         // the card still navigates fine, and the corpsecret never has to pass through
         // the card's own JavaScript.

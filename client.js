@@ -175,6 +175,10 @@ window.__ModuleLoader__.load({
           qqSecretSet: "clientSecret (stored; leave empty to keep it)",
           qqSave: "Save and connect",
           qqStatus: "connection",
+          qqReconnect: "Reconnect now",
+          qqReconnecting: "reconnecting",
+          qqRetryIn: "retry in",
+          qqAttempts: "attempts",
           officeDirSet: "using the folder above",
           officeDirDefault: "default: the bridge's own directory",
           officeHint: "relative paths from the four office tools land here",
@@ -346,6 +350,10 @@ window.__ModuleLoader__.load({
           qqSecretSet: "clientSecret（已保存，留空不改）",
           qqSave: "保存并连接",
           qqStatus: "连接状态",
+          qqReconnect: "重新连接",
+          qqReconnecting: "重连中",
+          qqRetryIn: "后重试",
+          qqAttempts: "次",
           officeDirSet: "使用上面的目录",
           officeDirDefault: "默认：桥接进程自己的目录",
           officeHint: "四个 office 工具的相对路径都落在这里",
@@ -819,6 +827,20 @@ window.__ModuleLoader__.load({
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
+         * Ask the host to rebuild the QQ connection. The credentials stay on the host (the secret never round-trips), so this is the
+         * only retry the card can offer - and after a 1.5.16-style disconnect it is usually not needed at all.
+         */
+        async function reconnectQQ() {
+          setBusy(true);
+          try {
+            await api("/qq", { method: "POST", body: { action: "reconnect" } });
+            await refresh();
           } finally {
             setBusy(false);
           }
@@ -1711,9 +1733,35 @@ window.__ModuleLoader__.load({
               ]),
               h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: saveQQ }, t("qqSave", "Save and connect")),
             ]),
-            h("div", { key: "qq-status", className: "dswxMeta" }, snapshot?.qq
-              ? `${t("qqStatus", "connection")}: ${snapshot.qq.ready ? "✅ 已就绪" : snapshot.qq.connected ? "⏳ 握手中" : "❌ 未连接"}${snapshot.qq.user ? ` · ${snapshot.qq.user}` : ""}${snapshot.qq.error ? ` · ${snapshot.qq.error}` : ""}`
-              : `${t("qqStatus", "connection")}: —`),
+            h("div", { key: "qq-status", className: "dswxMeta" }, [
+              (() => {
+                const qq = snapshot?.qq;
+                if (!qq) return `${t("qqStatus", "connection")}: —`;
+                const state = qq.ready
+                  ? `✅ 已就绪`
+                  : qq.reconnecting
+                    ? `⏳ ${t("qqReconnecting", "reconnecting")}`
+                    : qq.connected
+                      ? "⏳ 握手中"
+                      : "❌ 未连接";
+                // A half-dead connection is only diagnosable if it says *why* and *when it tries again*: "未连接" on its own sends
+                // people looking for a bug in their credentials.
+                const when = qq.reconnecting && qq.nextAttemptAt
+                  ? ` · ${Math.max(0, Math.round((Number(qq.nextAttemptAt) - Date.now()) / 1000))}s ${t("qqRetryIn", "retry in")}`
+                  : "";
+                const attempts = qq.reconnecting && Number(qq.attempts ?? 0) > 0 ? ` · ${t("qqAttempts", "attempts")} ${qq.attempts}` : "";
+                const why = qq.reconnectReason || qq.error;
+                return `${t("qqStatus", "connection")}: ${state}${when}${attempts}${qq.user ? ` · ${qq.user}` : ""}${why ? ` · ${why}` : ""}`;
+              })(),
+              h("button", {
+                key: "r",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: reconnectQQ,
+                style: { marginLeft: "8px" },
+              }, t("qqReconnect", "Reconnect now")),
+            ]),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
             // latter - personal WeChat has no way to edit a message that was already sent - and the
             // hint says so rather than letting the option look broken.

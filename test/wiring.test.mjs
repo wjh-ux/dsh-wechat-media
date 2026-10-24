@@ -1204,5 +1204,15 @@ await test("/new refuses to cut off a running turn", () => {
   assert.match(host, /collectors\.isWaiting\(runningSession\)/, "and it must ask the collector, not a guess");
 });
 
+await test("the QQ route answers status and reconnect, and nothing else", () => {
+  const at = host.indexOf('path: "/dsh-wechat-media/qq"');
+  assert.ok(at > -1, "the route exists");
+  const body = host.slice(at, at + 900);
+  assert.match(body, /isLoopback\(req\)/, "loopback only");
+  assert.match(body, /action === "reconnect"/, "reconnect is one of the actions");
+  assert.match(body, /startQQ\(\{ force: true \}\)/, "which rebuilds the connection");
+  assert.match(body, /未知 action/, "and an unknown action is refused rather than ignored");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -295,6 +295,18 @@ await test("the QQ block is on the card, translated, and saves through /prefs", 
   assert.match(code, /snapshot\?\.qq/, "the status line reads the host's qq state");
 });
 
+test("the QQ block explains a reconnect and offers a retry button", () => {
+  // 1.5.16 made the connection heal itself, but the card said only "未连接": nothing about why, nothing about when it tries again,
+  // and no way to say "now" without re-saving credentials the card does not hold.
+  assert.match(code, /qqReconnecting/, "the card has a 'reconnecting' label");
+  assert.match(code, /qqRetryIn/, "and a label for the wait");
+  assert.match(code, /qq\.nextAttemptAt/, "the status line reads when the next attempt is");
+  assert.match(code, /qq\.reconnectReason \|\| qq\.error/, "and shows the reason");
+  assert.match(code, /async function reconnectQQ\(\)/, "there is a reconnect action");
+  assert.match(code, /api\("\/qq", \{ method: "POST", body: \{ action: "reconnect" \} \}\)/, "which posts to the /qq route");
+  assert.match(code, /t\("qqReconnect", "Reconnect now"\)/, "and it is on a button");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
 
