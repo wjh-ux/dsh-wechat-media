@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.1
+
+- **The QQ callbacks were passed to the constructor and ignored.** `index.js` wires every transport the same way -
+  `new QQLongConnection({ appId, clientSecret, onMessage, onStatus })` - but this class only initialised those two fields to
+  no-ops, so a connected bot received events and dropped all of them: `counters.received` stayed at 0 while the platform
+  was delivering perfectly well. Measured with a hand-held socket on the same bot: `C2C_MESSAGE_CREATE text="你好"` arrived;
+  the plugin counted nothing. The constructor now takes both callbacks, and a test asserts it (the failure mode was silent,
+  which is exactly why it needs a test rather than a comment).
+- **`/state` exposes the QQ connection** (`ready`, `sessionId`, `user`, last `error`) next to the other live fields. The
+  first two attempts anchored on strings that also appear in the dashboard text, so the field kept landing in the wrong
+  object - the third anchors on a block only the `/state` handler has.
+- 44 suites / 686 cases.
+
 ## 1.1.0
 
 - **QQ bot, over the open platform's WebSocket gateway.** `qq-bot.js` speaks QQ Bot API v2: app access token

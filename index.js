@@ -8348,6 +8348,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             builtAt: build.builtAt,
             loadedAt: build.loadedAt,
             pluginRoot: build.pluginRoot,
+            qq: qqStatus,
+            // The QQ long connection: ready / session / last error, so the card does not have to guess.
             inboxRoot: await resolvedInbox(),
             inboxRootDefault: inboxRoot(dshHome),
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,

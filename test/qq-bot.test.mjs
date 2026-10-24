@@ -158,6 +158,24 @@ await test("the long connection identifies on hello and dispatches messages", as
   await connection.close();
 });
 
+await test("the constructor accepts the callbacks the way the other transports do", () => {
+  // Measured: index.js passes onMessage/onStatus to the constructor (as it does for WeCom and Feishu), and the first
+  // version of this class ignored them - so a connected bot received events and dropped every one, while
+  // counters.received stayed at 0.
+  const messages = [];
+  const statuses = [];
+  const connection = new qq.QQLongConnection({
+    appId: "1",
+    clientSecret: "s",
+    onMessage: (message) => messages.push(message),
+    onStatus: (status) => statuses.push(status),
+  });
+  connection.onMessage({ chatId: "U1" });
+  connection.onStatus({ state: "ready" });
+  assert.equal(messages.length, 1, "onMessage from the constructor must be the one that fires");
+  assert.equal(statuses.length, 1, "onStatus too");
+});
+
 await test("the module ships", async () => {
   const { readFileSync } = await import("node:fs");
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));

@@ -194,6 +194,8 @@ export class QQLongConnection {
     webSocketFactory = (url) => new MiniWebSocket(url),
     tokens = null,
     heartbeatGraceMs = 5_000,
+    onMessage = () => {},
+    onStatus = () => {},
   } = {}) {
     this.appId = appId;
     this.clientSecret = clientSecret;
@@ -209,8 +211,8 @@ export class QQLongConnection {
     this.lastSeq = 0;
     this.heartbeatTimer = null;
     this.closed = false;
-    this.onMessage = () => {};
-    this.onStatus = () => {};
+    this.onMessage = onMessage;
+    this.onStatus = onStatus;
   }
 
   /** Fetch the gateway URL. Exported behaviour so a wrong credential fails here, with the platform's words. */
