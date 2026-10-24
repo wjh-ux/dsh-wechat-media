@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.3
+
+- The README's version line said **v1.0.1** on a page shipped inside 1.0.2 - an artefact of writing the line before choosing
+  the tag. It now names the release it is part of, so a reader can tell whether the page is stale at a glance.
+- Nothing else changed.
+
 ## 1.0.2
 
 README only:
