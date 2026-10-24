@@ -172,6 +172,7 @@ window.__ModuleLoader__.load({
           qqAppId: "appId",
           qqSecret: "clientSecret",
           qqSandbox: "sandbox bot",
+          qqSecretSet: "clientSecret (stored; leave empty to keep it)",
           qqSave: "Save and connect",
           qqStatus: "connection",
           officeDirSet: "using the folder above",
@@ -342,6 +343,7 @@ window.__ModuleLoader__.load({
           qqAppId: "appId",
           qqSecret: "clientSecret",
           qqSandbox: "沙箱机器人",
+          qqSecretSet: "clientSecret（已保存，留空不改）",
           qqSave: "保存并连接",
           qqStatus: "连接状态",
           officeDirSet: "使用上面的目录",
@@ -489,6 +491,10 @@ window.__ModuleLoader__.load({
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
         // The SSH host draft: "name user@host[:port] [identity]". Empty until somebody types one.
         const [sshDraft, setSshDraft] = react.useState("");
+        // QQ credentials as typed; undefined = follow /state until edited (the secret never comes back from the host).
+        const [qqAppId, setQqAppId] = react.useState(undefined);
+        const [qqSecret, setQqSecret] = react.useState("");
+        const [qqSandbox, setQqSandbox] = react.useState(undefined);
         // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
         const [wizardStep, setWizardStep] = react.useState(0);
         // The result of the wizard's test message: undefined = not tried yet.
@@ -793,6 +799,29 @@ window.__ModuleLoader__.load({
           setBusy(true);
           try {
             await api(`/prefs?desktopControl=${desktopControl ? "true" : "false"}`);
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        /**
+         * Save the QQ block. The host validates appId (digits) and rebuilds the gateway connection, so the card only has to
+         * send what was typed - and an empty secret means "keep the stored one", because the host never sends it back.
+         */
+        async function saveQQ() {
+          setBusy(true);
+          try {
+            const appId = String(qqAppId ?? snapshot?.prefs?.qq?.appId ?? "").trim();
+            const clientSecret = String(qqSecret ?? "").trim();
+            const sandbox = qqSandbox ?? snapshot?.prefs?.qq?.sandbox === true;
+            await api("/prefs", {
+              method: "POST",
+              body: { qq: { enabled: Boolean(appId && (clientSecret || snapshot?.prefs?.qq?.clientSecret === "***")), appId, clientSecret, sandbox } },
+            });
+            setQqSecret("");
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -1622,6 +1651,44 @@ window.__ModuleLoader__.load({
               h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addSshHost }, t("sshAdd", "Add host")),
             ]),
             ]),
+            // QQ bot: the credentials the gateway needs, and what the connection is doing right now. The status comes
+            // from /state's qq field, so a failure shows the platform's own words instead of "not connected".
+            h("div", { key: "qq", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, t("qqTitle", "QQ bot (QQ 开放平台)")),
+            ]),
+            h("div", { key: "qq-id", className: "dswxRow" }, [
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("qqAppId", "appId"),
+                value: qqAppId ?? snapshot?.prefs?.qq?.appId ?? "",
+                disabled: busy,
+                onChange: (event) => setQqAppId(event.target.value),
+              }),
+              h("input", {
+                key: "s",
+                className: "dswxInput",
+                type: "password",
+                placeholder: snapshot?.prefs?.qq?.clientSecret === "***" ? t("qqSecretSet", "clientSecret（已保存，留空不改）") : t("qqSecret", "clientSecret"),
+                value: qqSecret,
+                disabled: busy,
+                onChange: (event) => setQqSecret(event.target.value),
+              }),
+              h("label", { key: "sb", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c",
+                  type: "checkbox",
+                  checked: qqSandbox ?? snapshot?.prefs?.qq?.sandbox === true,
+                  disabled: busy,
+                  onChange: (event) => setQqSandbox(event.target.checked),
+                }),
+                " " + t("qqSandbox", "sandbox bot"),
+              ]),
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: saveQQ }, t("qqSave", "Save and connect")),
+            ]),
+            h("div", { key: "qq-status", className: "dswxMeta" }, snapshot?.qq
+              ? `${t("qqStatus", "connection")}: ${snapshot.qq.ready ? "✅ 已就绪" : snapshot.qq.connected ? "⏳ 握手中" : "❌ 未连接"}${snapshot.qq.user ? ` · ${snapshot.qq.user}` : ""}${snapshot.qq.error ? ` · ${snapshot.qq.error}` : ""}`
+              : `${t("qqStatus", "connection")}: —`),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
             // latter - personal WeChat has no way to edit a message that was already sent - and the
             // hint says so rather than letting the option look broken.

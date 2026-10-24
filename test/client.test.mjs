@@ -282,6 +282,19 @@ test("the clipboard and SSH switches are on the card, in both languages, wired t
   assert.match(code, /removeSshHost\(/, "a saved host can be removed from the card");
 });
 
+await test("the QQ block is on the card, translated, and saves through /prefs", () => {
+  // The labels existed for a while before the block did, so "the dictionary has the keys" was not enough: assert the render
+  // and the save path too.
+  for (const key of ["qqTitle", "qqAppId", "qqSecret", "qqSecretSet", "qqSandbox", "qqSave", "qqStatus"]) {
+    const occurrences = code.split(key).length - 1;
+    assert.ok(occurrences >= 2, `locale key ${key} must exist in both languages (found ${occurrences})`);
+  }
+  assert.match(code, /async function saveQQ\(/, "the card must have a save handler");
+  assert.match(code, /body: \{ qq: \{ enabled/, "and it must post the qq block, not a loose field");
+  assert.match(code, /t\("qqTitle"/, "the block is labelled through the translator");
+  assert.match(code, /snapshot\?\.qq/, "the status line reads the host's qq state");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
 

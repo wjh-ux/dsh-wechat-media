@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.6
+
+- **The QQ block is on the card.** The labels were added with the first QQ release but the block itself never was, so the only
+  way to enter appId / clientSecret was `POST /prefs` - which is not what "add it to the panel" means. The card now has the
+  two fields, a sandbox checkbox, **Save and connect**, and a live status line from `/state` (`✅ 已就绪` / `⏳ 握手中` /
+  `❌ 未连接`, the bot name, and the platform's own error when there is one).
+- The secret input starts empty with "stored; leave empty to keep it": the host masks the stored secret as `***` and only
+  overwrites it when a non-empty value arrives, so opening the card cannot wipe a working credential.
+- 44 suites / 688 cases.
+
 ## 1.1.5
 
 README only: a **Release history** section. 0.1.0 to 1.1.4 is 198 releases, which is too many to list - so the table
