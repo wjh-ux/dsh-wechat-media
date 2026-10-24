@@ -1124,5 +1124,20 @@ await test("a rename must not clear the allow flag", () => {
   assert.match(host, /hasAllowed && allowed !== undefined \? \{ allowed \}/, "and only then write it");
 });
 
+// ── secrets at rest ───────────────────────────────────────────────────────
+await test("every stored secret is redacted in what /state returns", () => {
+  // publicPrefs is nested inside apply() and cannot be imported, so this asserts the shape of the code: each of these blocks
+  // must exist, and each must assign "***". The QQ clientSecret was the one that slipped through, so it is named first.
+  const blocks = [
+    ['qq', /for \(const key of \["clientSecret", "secret"\]\)/],
+    ['feishu', /for \(const key of \["appSecret", "secret", "verificationToken", "encryptKey"\]\)/],
+    ['tavily', /tavily\.apiKey = tavily\.apiKey \? "\*\*\*" : ""/],
+    ['webhook', /safe\.webhookSecret = safe\.webhookSecret \? "\*\*\*" : ""/],
+  ];
+  for (const [name, pattern] of blocks) {
+    assert.match(host, pattern, `${name} secrets must be masked before /state returns them`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

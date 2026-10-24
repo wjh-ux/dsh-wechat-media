@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.7
+
+- **`/state` returned the QQ `clientSecret` in the clear.** Feishu's `appSecret`, Tavily's `apiKey` and the webhook secret are
+  all masked as `***`; QQ's was not, which made it the only stored secret readable from a page. Loopback-only or not, a
+  readable page is still a credential when it does not have to be. It is masked now, and a source-level test asserts **all
+  four** blocks so the next newly-stored secret cannot slip through the same way.
+- A note on how this went: the first attempt tried to move `publicPrefs` out of `apply` so a test could call it, and the
+  brace matching that extracted the function was fooled by braces inside its template literals - leaving `index.js`
+  syntactically broken. Restored from the installed package, redaction added in place, guarantee checked by the guard test
+  plus a live `GET /state`.
+- 44 suites / 689 cases.
+
 ## 1.1.6
 
 - **The QQ block is on the card.** The labels were added with the first QQ release but the block itself never was, so the only

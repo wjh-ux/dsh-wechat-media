@@ -3942,6 +3942,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       if ("apiKey" in tavily) tavily.apiKey = tavily.apiKey ? "***" : "";
       safe.tavily = tavily;
     }
+    // The QQ bot's clientSecret is the same kind of value, and it was the only stored secret that came back in the clear.
+    // A readable page is still a credential when it does not have to be.
+    const qq = prefs?.qq && typeof prefs.qq === "object" ? { ...prefs.qq } : undefined;
+    if (qq) {
+      for (const key of ["clientSecret", "secret"]) {
+        if (key in qq) qq[key] = qq[key] ? "***" : "";
+      }
+      safe.qq = qq;
+    }
     // The webhook secret signs every outbound delivery; echoing it back over a loopback JSON route buys nothing and
     // turns one readable page into a credential.
     if ("webhookSecret" in safe) safe.webhookSecret = safe.webhookSecret ? "***" : "";
