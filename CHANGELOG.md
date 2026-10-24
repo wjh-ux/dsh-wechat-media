@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0
+
+The feature set is where it should be, so this is the version that says so - not a rewrite, a statement that the surface
+is stable: five channels, twenty-odd tool families, 43 suites / 675 cases, every capability exercised against real
+hardware or a real service at least once.
+
+- **`which` now searches winget's packages directory.** Measured: avrdude 8.3 installed cleanly with winget, its directory
+  was appended to the *user* PATH, and `serial_ports` still said "没找到" - a process keeps the PATH it started with, and a
+  tool that is installed but invisible is the worst of both. AVR boards therefore work on a fresh install with no manual
+  PATH editing.
+- **AVR flashing is now actually available** on this machine: `avrdude 8.3` (winget), found by `serial_support` and used by
+  `flasher=avrdude` (`-c arduino -p <mcu> -P COMx -b 115200 -U flash:w:<hex>:i`). No AVR board was plugged in, so the argv
+  is covered by tests rather than by a write - the same distinction the serial section makes explicit.
+- **Stealth scraping works, and it cost no download.** camoufox's own browser is a 1.25 GB zip - measured at ~150 KB/s
+  single-stream and ~620 KB/s across eight ranges, still stalling in practice. The way out was already installed:
+  `StealthyFetcher` takes an `executable_path`, so the stealth session now drives the machine's own Chrome (then Edge),
+  which returned 200 with a real Chrome UA. `cloudflare: true` additionally solves a Cloudflare challenge -
+  `https://nowsecure.nl` came back 200 in 11 s.
+- **scrapling 0.5's two fetchers have different APIs** and the first build assumed one: `Fetcher.get` takes `headers`,
+  `timeout` in seconds; `StealthyFetcher` has no `.get` at all - it is `.fetch`, with `extra_headers`, `wait`,
+  `solve_cloudflare`, `executable_path` and a timeout in milliseconds. Sharing one kwargs object across both produced
+  `AttributeError: type object 'StealthyFetcher' has no attribute 'get'` even though the library was importable.
+- **Nothing else changed**: no serialisation, no API, no preference key. An upgrade from 0.72.1 is a rename of the version.
+
 ## 0.72.1
 
 README only - the Scrapling work is documented as measured, not as claimed:
@@ -25,7 +49,7 @@ README only - the Scrapling work is documented as measured, not as claimed:
   missing helper is worse than one that does not install.
 - Measured here: `https://example.com` -> 200 + body; `https://quotes.toscrape.com/` with `selector: "span.text"` -> the
   three quotes as separate items.
-- 43 suites / 674 cases.
+- 43 suites / 676 cases.
 
 ## 0.71.5
 

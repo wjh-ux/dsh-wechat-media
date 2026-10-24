@@ -65,6 +65,27 @@ await test("stcgal is found in any python env, not just the newest one", () => {
   assert.match(found.program, /py3\.11_env\\Scripts\\stcgal\.exe$/);
 });
 
+await test("a tool winget installed is found even though this process never saw the PATH change", () => {
+  // Measured: avrdude 8.3 was installed by winget, its directory was appended to the *user* PATH, and serial_ports still
+  // reported "没找到" - because a running process keeps the PATH it started with. A tool that is installed but invisible is
+  // the worst of both.
+  const fake = {
+    exists: (path) => [
+      "C:\\Users\\me\\AppData\\Local\\Microsoft\\WinGet\\Packages",
+      "C:\\Users\\me\\AppData\\Local\\Microsoft\\WinGet\\Packages\\AVRDudes.AVRDUDE_abc\\avrdude.EXE",
+    ].includes(path),
+    readdir: (path) =>
+      path === "C:\\Users\\me\\AppData\\Local\\Microsoft\\WinGet\\Packages" ? ["AVRDudes.AVRDUDE_abc"] : [],
+  };
+  const found = serial.which("avrdude", {
+    env: { PATH: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" },
+    exists: fake.exists,
+    readdir: fake.readdir,
+  });
+  assert.match(found, /AVRDUDE_abc\\avrdude\.EXE$/i);
+  assert.equal(serial.which("definitely-not-installed", { env: { PATH: "C:\\Windows" }, exists: fake.exists, readdir: fake.readdir }), "");
+});
+
 await test("a machine with no toolchain at all says so", () => {
   const fs = fakeFs({});
   const support = serial.serialSupport({ env: { PATH: "C:\\Windows" }, platform: "win32", exists: fs.exists });

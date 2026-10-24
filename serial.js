@@ -35,7 +35,7 @@ export function compareVersions(a, b) {
 }
 
 /** Locate a program on PATH without starting it. */
-export function which(name, { env = process.env, exists = existsSync } = {}) {
+export function which(name, { env = process.env, exists = existsSync, readdir = readdirSync } = {}) {
   const pathValue = String(env.PATH ?? env.Path ?? "");
   const extensions = [""].concat(String(env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").filter(Boolean));
   for (const dir of pathValue.split(";").filter(Boolean)) {
@@ -43,6 +43,23 @@ export function which(name, { env = process.env, exists = existsSync } = {}) {
       const suffix = extension && !name.toLowerCase().endsWith(extension.toLowerCase()) ? extension : "";
       const candidate = join(dir, `${name}${suffix}`);
       if (exists(candidate)) return candidate;
+    }
+  }
+  // winget's packages directory: it appends the path to the *user* PATH, which a long-running process never re-reads.
+  const winget = join(env.LOCALAPPDATA ?? "", "Microsoft", "WinGet", "Packages");
+  if (winget && exists(winget)) {
+    let packages = [];
+    try {
+      packages = readdir(winget);
+    } catch {
+      packages = [];
+    }
+    for (const entry of packages) {
+      for (const extension of extensions) {
+        const suffix = extension && !name.toLowerCase().endsWith(extension.toLowerCase()) ? extension : "";
+        const candidate = join(winget, entry, `${name}${suffix}`);
+        if (exists(candidate)) return candidate;
+      }
     }
   }
   return "";
