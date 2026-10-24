@@ -2169,6 +2169,28 @@ export function apply(ctx, config = {}) {
     return hit?.name ?? cleaned;
   }
 
+  /**
+   * Tell a blocked direct chat why it got nothing, once.
+   *
+   * Silence is indistinguishable from a broken bot, and it is how a lost message goes unnoticed: with the allowlist on, three
+   * messages in a row were dropped without a reply and the only evidence was a counter. One line, remembered per chat, keeps that
+   * discoverable without turning the bot into an echo service for strangers.
+   */
+  const BLOCKED_NOTICE_MS = 24 * 60 * 60_000;
+  async function explainBlockedOnce({ accountId, chatId, isGroup, reply, verdict }) {
+    try {
+      if (isGroup) return; // a group does not need to be told about the owner's allowlist
+      const peer = await state.getPeer(accountId, chatId);
+      const lastAt = Number(peer?.allowNoticeAt ?? 0);
+      if (Date.now() - lastAt < BLOCKED_NOTICE_MS) return;
+      await state.setPeer(accountId, chatId, { allowNoticeAt: Date.now() });
+      const why = verdict?.reason === "blocked" ? "这个会话被标记为「不允许」" : "这个会话不在白名单里";
+      await reply(`🔒 ${why}，所以消息不会被处理，也不会转给我。\n让管理员在面板里允许这个会话（或关掉「只应答白名单」）。`);
+    } catch {
+      /* explaining is best effort; the message is already dropped */
+    }
+  }
+
   async function liveHelpLines(name, context = {}) {
     // `accountId`/`chatId` are the dispatcher's parameters, so they arrive in `context` - this helper sits above
     // `runChatCommand` and does not close over them.
@@ -2364,6 +2386,13 @@ export function apply(ctx, config = {}) {
     }
 
     if (command.name === "new") {
+      // Disposing the old handle aborts a turn that is still streaming: the person's answer stops mid-sentence and the request that
+      // was waiting for it resolves empty. Refusing is the honest option - it says what is happening and what can be done.
+      const runningSession = sessionIdFor(accountId, chatId, await generationOf(accountId, chatId));
+      if (collectors.isWaiting(runningSession)) {
+        await reply("⏳ 上一轮还在回答，现在开新会话会把这段回答直接掐断。\n等它写完再 /new，或者先 /stop 打断。");
+        return true;
+      }
       const previous = await generationOf(accountId, chatId);
       const previousId = sessionIdFor(accountId, chatId, previous);
       const generation = previous + 1;
@@ -4100,6 +4129,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       ctx.logger?.info?.("[dsh-wechat-media] ignored wecom message from %s (%s)", chatId, verdict.reason);
+      await explainBlockedOnce({ accountId, chatId, isGroup: verdict.isGroup === true, reply: (text2) => replyWecomInParts(frame, text2, "blocked-notice", undefined, chatId), verdict });
       return;
     }
     if (verdict.action === "answer") {
@@ -6034,6 +6064,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       if (verdict.reason === "group-skipped") counters.groupsSkipped += 1;
       // Keep the drop countable so the card can show it.
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
+      // A silent drop is indistinguishable from a broken bot: say it once per chat.
+      await explainBlockedOnce({ accountId, chatId, isGroup: verdict.isGroup === true, reply, verdict });
       return;
     }
     if (verdict.action === "answer") {

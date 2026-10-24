@@ -141,7 +141,7 @@ await test("no reply path silently truncates to its first part", () => {
   // long answer *must* be split and sent in pieces. Three call sites used to send
   // `splitForStream(text)[0]`: the tail disappeared without a trace.
   assert.doesNotMatch(host, /splitForStream\([^)]*\)\[0\]/, "a WeCom reply must not be cut to its first part");
-  assert.equal([...host.matchAll(/replyWecomInParts\(/g)].length, 6, "the helper plus its five call sites: the command answer, the three turn outcomes and the retry notice");
+  assert.equal([...host.matchAll(/replyWecomInParts\(/g)].length, 7, "the helper plus its six call sites (the blocked-chat notice is the sixth: the command answer, the three turn outcomes and the retry notice");
   assert.doesNotMatch(host, /outcome\.error\}`\.slice\(0, MAX_TEXT_CHARS\)/, "the WeChat error notice is chunked, not sliced");
   assert.match(host, /for \(const chunk of chunkText\(`❌ agent 出错：\$\{outcome\.error\}`\)\)/);
 });
@@ -1192,6 +1192,16 @@ await test("the prefs route refuses a typo instead of ignoring it, and reads a b
   assert.match(host, /if \(nearMiss\.length\)/, "a near-miss is a 400 before anything is saved");
   assert.match(host, /function prefsBoolean\(value, field\)/, "booleans are read through one lenient reader");
   assert.match(host, /ignored: unknownFields/, "anything genuinely extra is reported in the response");
+});
+
+await test("/new refuses to cut off a running turn", () => {
+  // Measured: /new disposed the conversation handle mid-answer, so the turn resolved with an empty answer and the person's reply
+  // stopped mid-sentence. The guard has to be before the generation bump, or it is decoration.
+  const guard = host.indexOf("上一轮还在回答");
+  const bump = host.indexOf("const generation = previous + 1");
+  assert.ok(guard > -1, "/new must check for a running turn");
+  assert.ok(guard < bump, "the check must come before the generation is bumped");
+  assert.match(host, /collectors\.isWaiting\(runningSession\)/, "and it must ask the collector, not a guess");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
