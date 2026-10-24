@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.8
+
+- **`scripts/` now ships with the package.** 1.5.7 put the acceptance scripts in the repository but not in `files[]`, so an
+  installed copy had no `scripts/bug-hunt.mjs` - and the release verifier did not notice, because it only checks what `files[]`
+  claims. Anyone who installed the plugin could not run the check that is supposed to gate a release.
+- 44 suites / 696 cases.
+
 ## 1.5.7
 
 - **The acceptance scripts now ship**, as `scripts/bug-hunt.mjs` and `scripts/verify-release.mjs`, with a short
