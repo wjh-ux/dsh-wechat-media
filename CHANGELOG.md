@@ -12,7 +12,7 @@
   `helpText` had been skipping unresolvable names silently, which is why a group could list a command that never existed.
 - The group table is now asserted to contain only real commands, so a typo in it fails the suite instead of quietly shrinking
   a section.
-- 44 suites / 695 cases.
+- 44 suites / 694 cases.
 
 ## 1.5.3
 
