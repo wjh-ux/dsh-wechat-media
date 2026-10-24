@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2
+
+README only:
+
+- the page now states **which release it documents** (v1.0.1, 43 suites / 676 cases) instead of leaving the reader to guess;
+- the Scraping row says the real-browser mode **drives the Chrome already installed** - the 1.25 GB download is the
+  alternative that was avoided, not a requirement;
+- a new **What was actually verified** table replaces general confidence with the numbers that came back: 46 delta frames
+  for the VS Code edit, 1721 ms for a WeCom reply, Target UID: F734C3FC31F408 for the STC flash, 11 s for a Cloudflare
+  challenge, 21 s failure then 1.8 s success for the same URL with and without a proxy.
+
 ## 1.0.1
 
 - **1.0.0 shipped only four files.** The release script still carried an older file list, so index.js, scrapling.js and

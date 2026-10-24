@@ -7,6 +7,9 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
+**Current release: v1.0.1** · 43 test suites / 676 cases · every capability below has been exercised against a real
+service or real hardware at least once (see *What was actually verified*).
+
 ---
 
 ## What it gives you / 它能做什么
@@ -22,7 +25,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 | Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools. |
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
-| Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - with CSS selectors, link extraction, per-call proxy and an optional real browser. |
+| Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
 
@@ -1064,6 +1067,26 @@ Everything here was learned against the live platform; each item broke something
    keyed by package name, `plugins.row.config` keyed `<package>#<row id>`), wrapped in
    `window.__ModuleLoader__.load({ id, factory })`. Exporting a schema is not enough, and a missing wrapper
    fails the web boot.
+
+## What was actually verified / 真机验证过什么
+
+A plugin README can claim anything; this is the list of things that were *run* while building it, with the numbers that
+came back. Anything not on this list is covered by tests but not by a real device.
+
+| Capability | How it was verified |
+| --- | --- |
+| WeChat text, files, images | Live account, two-way messages and file transfers into `$DSH_HOME/wechat-inbox` |
+| WeCom / Feishu | Long connection connected; a real message answered (`answer:"收到"`, 1721 ms) |
+| VS Code editor bridge | An edit applied in the open folder: 46 delta frames over 8.5 s, `app.js` became `你好，世界` |
+| Desktop control | Focus, click, screenshots of the DSH window on this machine |
+| Clipboard | Chinese round-trip (`剪贴板自检 中文 ✔`), plus the file-list shape |
+| SSH | `ssh -V` 56 ms; a named-but-absent port refused with the list of the present ones |
+| Serial: STC | `DS18B20_TM1650.hex` written to an STC8H1K08 over COM3 - 3129 bytes loaded, 3648 written, `Target UID: F734C3FC31F408` - then `TEMP:27.6C` read back |
+| Serial: ESP-IDF | `hello_world` built through the same `export.ps1` wrapper the flash uses (`hello_world.bin`, 175 kB, 83% partition free). The write itself needs the board |
+| Scrapling | `example.com` 200; `quotes.toscrape.com` + `span.text` -> three items; `baidu.com` + `links` -> eight anchors; HN fails in 21 s without a proxy and answers in 1.8 s with one |
+| Scrapling stealth | Real Chrome UA; `nowsecure.nl` (Cloudflare) -> 200 in 11 s with `cloudflare: true` |
+| Office | Word/Excel/PowerPoint written, converted to PDF, rendered to PNG |
+| Integrations | `/inbound` 401 without the token and 200 with it; webhook `turn.end` HMAC verified; dashboard screenshot |
 
 ## Limitations / 已知限制
 
