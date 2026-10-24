@@ -1184,5 +1184,15 @@ await test("concurrent prefs writes are serialised", async () => {
   assert.match(source, /previous\.catch\(\(\) => \{\}\)\.then\(run\)/, "the queue must be failure-tolerant");
 });
 
+await test("the prefs route refuses a typo instead of ignoring it, and reads a boolean leniently", () => {
+  // Both measured live: {multiAgent:{enabled:"true"}} stored false (a caller turning it on turned it off, with a 200), and
+  // {"multiagent":...} was dropped silently so a wrong case looked like success.
+  assert.match(host, /function prefsFields\(\)/, "the known-field list is built when used, not at load time");
+  assert.match(host, /function classifyPrefsFields\(body\)/, "unknown and near-miss names are classified");
+  assert.match(host, /if \(nearMiss\.length\)/, "a near-miss is a 400 before anything is saved");
+  assert.match(host, /function prefsBoolean\(value, field\)/, "booleans are read through one lenient reader");
+  assert.match(host, /ignored: unknownFields/, "anything genuinely extra is reported in the response");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

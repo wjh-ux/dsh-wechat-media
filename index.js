@@ -2217,6 +2217,70 @@ export function apply(ctx, config = {}) {
     return lines;
   }
 
+  /**
+   * Every field name `POST /prefs` understands, built when it is asked for.
+   *
+   * Not a module-level constant: several of these groups (`FEISHU_PREF_FIELDS`, `TAVILY_PREF_FIELDS`, `BROWSER_PREF_*`) are
+   * declared further down the file, and a constant computed at load time would throw a temporal-dead-zone error before anything
+   * ran - which is exactly what happened when this was a `const`.
+   */
+  function prefsFields() {
+    return [
+      "requireAllowlist", "friendOnly", "interject", "retry", "desktopControl", "wizardDone", "clipboard",
+      "qq", "multiAgent", "scrapling", "serial", "ssh", "officeDir", "webhookUrl", "webhookSecret", "inboundToken",
+      "autoReply", "delivery", "format", "authorization", "tokenWindowDays", "taskGraceMinutes", "taskCommand", "inboxDir",
+      ...Object.keys(FEISHU_PREF_FIELDS ?? {}), ...Object.keys(FEISHU_PREF_SWITCHES ?? {}),
+      ...Object.keys(TAVILY_PREF_FIELDS ?? {}),
+      ...Object.keys(BROWSER_PREF_FIELDS ?? {}), ...Object.keys(BROWSER_PREF_SWITCHES ?? {}), ...Object.keys(BROWSER_PREF_MODES ?? {}),
+    ].map(String);
+  }
+
+  /** Levenshtein distance, for "did you mean" on a field name. Short strings only: this runs on a handful of keys. */
+  function editDistance(left, right) {
+    const a = String(left);
+    const b = String(right);
+    const rows = Array.from({ length: a.length + 1 }, (_, index) => [index, ...Array(b.length).fill(0)]);
+    for (let column = 1; column <= b.length; column += 1) rows[0][column] = column;
+    for (let row = 1; row <= a.length; row += 1) {
+      for (let column = 1; column <= b.length; column += 1) {
+        const cost = a[row - 1] === b[column - 1] ? 0 : 1;
+        rows[row][column] = Math.min(rows[row - 1][column] + 1, rows[row][column - 1] + 1, rows[row - 1][column - 1] + cost);
+      }
+    }
+    return rows[a.length][b.length];
+  }
+
+  /**
+   * Which keys of a `/prefs` body are unknown, and which look like a typo of a real one.
+   *
+   * `_fields` /`_t` style keys are ignored outright: a cache-buster is not a preference.
+   */
+  function classifyPrefsFields(body) {
+    const seen = Object.keys(body ?? {}).filter((key) => !key.startsWith("_"));
+    const unknown = seen.filter((key) => !prefsFields().includes(key));
+    const nearMiss = unknown
+      .map((key) => {
+        const suggestion = prefsFields().find(
+          (field) => field.toLowerCase() === key.toLowerCase() || editDistance(field.toLowerCase(), key.toLowerCase()) <= 2,
+        );
+        return suggestion ? { key, suggestion } : null;
+      })
+      .filter(Boolean);
+    return { unknown, nearMiss };
+  }
+
+  /**
+   * A boolean field, read leniently and refused when it is not a boolean at all.
+   *
+   * `=== true` turned `"true"` into `false`: a script posting a form value switched a feature *off* while reporting success.
+   */
+  function prefsBoolean(value, field) {
+    if (value === undefined) return undefined;
+    const parsed = asBool(value);
+    if (parsed === null) throw new Error(`${field} 只能是 true 或 false（收到：${JSON.stringify(value)}）`);
+    return parsed;
+  }
+
   async function runChatCommand({ transport, accountId, chatId, peerName, text, reply }) {
     const command = parseCommand(text);
     if (!command) return false;
@@ -2228,6 +2292,7 @@ export function apply(ctx, config = {}) {
       await reply(unknownCommandText(command.name));
       return true;
     }
+
 
 
   /**
@@ -9704,6 +9769,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // all?" answerable from /state. Without it the browser side and the host side can both look fine
           // while the write simply never happens.
           noteRoute("/prefs", { fields: Object.keys(body ?? {}).slice(0, 12) });
+          // A typo in a field name used to answer 200 and change nothing, which is indistinguishable from success. A name one
+          // case or one character away from a real one is refused with the suggestion; a genuinely extra key is echoed back in
+          // `ignored` so the caller can see it was not understood.
+          const { unknown: unknownFields, nearMiss } = classifyPrefsFields(body);
+          if (nearMiss.length) {
+            return json(res, 400, {
+              ok: false,
+              error: `不认识的字段：${nearMiss.map((hit) => `${hit.key}→${hit.suggestion}`).join("、")}`,
+              suggestions: nearMiss,
+            });
+          }
           const patch = {};
           if (asBool(body.requireAllowlist) !== null) patch.requireAllowlist = asBool(body.requireAllowlist);
           if (asBool(body.friendOnly) !== null) patch.friendOnly = asBool(body.friendOnly);
@@ -9728,8 +9804,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               return json(res, 400, { ok: false, error: `appId 不像话：${appId}（QQ 开放平台里是一串数字）` });
             }
             patch.qq = {
-              enabled: source?.enabled === true,
-              sandbox: source?.sandbox === true,
+              enabled: prefsBoolean(source?.enabled, "qq.enabled") === true,
+              sandbox: prefsBoolean(source?.sandbox, "qq.sandbox") === true,
               ...(appId ? { appId } : {}),
               ...(clientSecret ? { clientSecret } : {}),
             };
@@ -9737,7 +9813,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // Multi-agent: one switch, per-chat presets live on the peer record.
           if (body.multiAgent !== undefined) {
             const source = typeof body.multiAgent === "string" ? JSON.parse(body.multiAgent) : body.multiAgent;
-            patch.multiAgent = { enabled: source?.enabled === true };
+            // Measured: `{enabled:"true"}` used to store `false` - a caller trying to switch it on switched it off, with a 200.
+            try {
+              patch.multiAgent = { enabled: prefsBoolean(source?.enabled, "multiAgent.enabled") === true };
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
           }
           // Scrapling defaults: a proxy for the sites that need one, stealth for the ones that fight back.
           if (body.scrapling !== undefined) {
@@ -9745,8 +9826,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const proxy = String(source?.proxy ?? "").trim();
             patch.scrapling = {
               ...(proxy ? { proxy } : {}),
-              stealth: source?.stealth === true,
-              cloudflare: source?.cloudflare === true,
+              stealth: prefsBoolean(source?.stealth, "scrapling.stealth") === true,
+              cloudflare: prefsBoolean(source?.cloudflare, "scrapling.cloudflare") === true,
               ...(String(source?.exe ?? "").trim() ? { exe: String(source.exe).trim() } : {}),
             };
           }
@@ -9868,7 +9949,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const prefs = await state.savePrefs(patch);
           // Fire-and-forget: connecting must not delay the response the card is waiting for.
           restartQQ?.();
-          json(res, 200, { ok: true, prefs: publicPrefs(prefs) });
+          // The response names anything in the body that was not understood, so a typo cannot look like success.
+          json(res, 200, { ok: true, prefs: publicPrefs(prefs), ...(unknownFields.length ? { ignored: unknownFields } : {}) });
         },
       },
       {
