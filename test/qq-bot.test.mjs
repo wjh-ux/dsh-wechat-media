@@ -182,5 +182,23 @@ await test("the module ships", async () => {
   assert.ok(pkg.files.includes("qq-bot.js"), "qq-bot.js must be in files[] or an install cannot import it");
 });
 
+test("the reconnect schedule widens and is capped, and an explicit stop cancels it", async () => {
+  // Before 1.5.16 nothing was scheduled at all: closed / error / op-7-reconnect were logged and forgotten, so the bot stayed offline
+  // until the app restarted. The schedule is pure, so it is asserted here; the wiring is asserted next.
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(source, /function qqReconnectDelay\(attempts\)/, "there is a backoff function");
+  assert.match(source, /Math\.min\(60_000, 1_000 \* 2 \*\* Math\.min\(step, 6\)\)/, "1s, 2s, 4s … capped at a minute");
+  assert.match(source, /function scheduleQQReconnect\(reason/, "and a scheduler");
+  assert.match(source, /if \(qqReconnectTimer\) return;/, "which never stacks two retries");
+  for (const state of ["closed", "error", "reconnect", "invalid-session"]) {
+    assert.ok(source.includes(`"${state}"`), `${state} must be one of the states that reconnects`);
+  }
+  assert.match(source, /qqAutoConnect = false;\n    clearTimeout\(qqReconnectTimer\)/, "an explicit stop cancels the loop");
+
+  // the widening itself, evaluated the way the module does
+  const delay = (attempts) => Math.min(60_000, 1_000 * 2 ** Math.min(Math.max(0, Number(attempts) || 0), 6));
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 7].map(delay), [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

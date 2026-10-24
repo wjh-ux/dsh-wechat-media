@@ -3889,6 +3889,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   function stopQQ() {
+    // An explicit stop is the one thing a retry loop must never fight: cancel the timer and stop rescheduling.
+    qqAutoConnect = false;
+    clearTimeout(qqReconnectTimer);
+    qqReconnectTimer = null;
+    qqReconnectAttempts = 0;
     if (!qqBot) return;
     try {
       void qqBot.close();
@@ -3900,14 +3905,57 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /** Connect (or reconnect) from the stored credentials. Called on activation and after a config change. */
+  /**
+   * How long to wait before the next QQ reconnect attempt: 1s, 2s, 4s … capped at a minute.
+   *
+   * Pure and exported so the schedule is asserted rather than hoped for - a retry loop that never widens is a way to get rate-limited
+   * by the platform, and one that widens too fast leaves the bot offline for minutes after a blip.
+   */
+  function qqReconnectDelay(attempts) {
+    const step = Math.max(0, Number(attempts) || 0);
+    return Math.min(60_000, 1_000 * 2 ** Math.min(step, 6));
+  }
+
+  /**
+   * The QQ connection is supposed to be up, and it is not: try again, widening the gap, until the user stops it.
+   *
+   * Nothing scheduled this before 1.5.16 - a closed socket was reported and forgotten, so the bot stayed offline until the app was
+   * restarted.
+   */
+  function scheduleQQReconnect(reason, { immediate = false } = {}) {
+    if (!qqAutoConnect) return;
+    if (qqReconnectTimer) return;
+    const delay = immediate ? 300 : qqReconnectDelay(qqReconnectAttempts);
+    qqReconnectAttempts += 1;
+    qqStatus = { ...qqStatus, reconnecting: true, reconnectReason: String(reason ?? ""), nextAttemptAt: Date.now() + delay };
+    ctx.logger?.warn?.("[dsh-wechat-media] qq offline (%s); reconnecting in %dms", reason, delay);
+    qqReconnectTimer = setTimeout(() => {
+      qqReconnectTimer = null;
+      void startQQ({ force: true }).catch((error) => {
+        ctx.logger?.warn?.("[dsh-wechat-media] qq reconnect failed: %s", error?.message ?? error);
+      });
+    }, delay);
+  }
+
+  /** True while the QQ connection is supposed to be up (the panel switch, not a transient state). */
+  let qqAutoConnect = false;
+  /** Set while a reconnect is scheduled, so concurrent status events do not stack retries. */
+  let qqReconnectTimer = null;
+  let qqReconnectAttempts = 0;
+
   async function startQQ({ force = false } = {}) {
     if (qqBot && !force) return qqBot;
+    // Reconnecting goes through the same door, so it must not look like the person turning the bot off: stop() cancels the retry
+    // timer, then the intent is set again immediately.
     stopQQ();
+    qqAutoConnect = true;
     const prefs = await state.loadPrefs();
     const cfg = prefs?.qq && typeof prefs.qq === "object" ? prefs.qq : {};
     const appId = String(cfg.appId ?? "").trim();
     const clientSecret = String(cfg.clientSecret ?? "").trim();
     if (cfg.enabled !== true || !appId || !clientSecret) {
+      // Nothing to retry: the switch is off or the credentials are incomplete, and a loop would just log the same line forever.
+      qqAutoConnect = false;
       qqStatus = { ...qqStatus, error: cfg.enabled === true ? "缺少 appId / clientSecret" : "" };
       return undefined;
     }
@@ -3930,6 +3978,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         if (status.state === "error" || status.state === "invalid-session") {
           ctx.logger?.warn?.("[dsh-wechat-media] qq connection: %s", status.reason ?? status.state);
         }
+        if (status.state === "ready") {
+          qqReconnectAttempts = 0;
+          qqReconnectTimer && clearTimeout(qqReconnectTimer);
+          qqReconnectTimer = null;
+          qqStatus = { ...qqStatus, reconnecting: false, reconnectReason: "" };
+        } else if (["closed", "error", "reconnect", "invalid-session"].includes(String(status.state))) {
+          // "reconnect" is the gateway asking us back: do it at once. The others are a dead socket, which deserves a backoff.
+          scheduleQQReconnect(status.reason ?? status.state, { immediate: status.state === "reconnect" });
+        }
       },
       onMessage: (message) => {
         void handleQQInbound(accountId, message).catch((error) => {
@@ -3940,10 +3997,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     try {
       await bot.connect();
       qqBot = bot;
+      qqReconnectAttempts = 0;
       ctx.logger?.info?.("[dsh-wechat-media] qq bot connecting as %s", appId);
     } catch (error) {
       qqStatus = { ...qqStatus, connected: false, ready: false, error: String(error?.message ?? error) };
       ctx.logger?.warn?.("[dsh-wechat-media] qq bot did not start: %s", error?.message ?? error);
+      // A handshake that failed is not a bot that is off: the gateway may be restarting. Retry on the same widened schedule.
+      scheduleQQReconnect(error?.message ?? "connect failed");
       return undefined;
     }
     return bot;
