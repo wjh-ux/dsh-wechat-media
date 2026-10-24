@@ -316,6 +316,9 @@ half is the part that carries credentials. Pinning `deepseek-official/deepseek-c
 model name. `/agent model` prints the host's value for exactly that reason, and switching provider is warned about when it is
 set.
 
+\`/agent model list\` asks the host's own \`llm\` service for every provider and its models and marks the one in use, so a
+model name never has to be copied from the Models page or guessed; \`/agent model list <provider>\` narrows it.
+
 Three statements the commands make rather than hide:
 
 - **A preset change is not a live swap.** It applies when the session next creates an agent, and the reply says so.

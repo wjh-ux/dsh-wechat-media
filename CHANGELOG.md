@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.3
+
+- **`/agent model list`** lists every provider the host's `llm` service knows, with its models, and marks the one the host is
+  currently using. `/agent model list <provider>` narrows it to one. The point is that a model name no longer has to be copied
+  from the app's Models page, or guessed - the plugin asks the same registry the app asks.
+- It reads the shape defensively: `listProviders()` may hand back strings or objects, `listModels(provider)` may be async, a
+  provider may have no models, and a failure prints the reason instead of an empty list that looks like "none exist".
+- The output repeats the rule the earlier versions learned the hard way: **changing provider needs that provider's API key;
+  changing only the model name does not.**
+- 44 suites / 692 cases.
+
 ## 1.4.2
 
 README only, recording the two results the live runs produced:

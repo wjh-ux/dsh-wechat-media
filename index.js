@@ -2841,6 +2841,60 @@ export function apply(ctx, config = {}) {
           );
           return true;
         }
+        // /agent model list [provider] - the catalog, read from the llm service.
+        if (what === "list" || what === "models") {
+          const llm = ctx.get("llm");
+          const wantProvider = String(more[0] ?? "").trim();
+          const providersOf = () => {
+            try {
+              const rows = typeof llm?.listProviders === "function" ? llm.listProviders() : [];
+              return Array.isArray(rows) ? rows.map((row) => (typeof row === "string" ? row : String(row?.id ?? row?.provider ?? ""))).filter(Boolean) : [];
+            } catch {
+              return [];
+            }
+          };
+          const modelsOf = async (provider) => {
+            try {
+              const rows = typeof llm?.listModels === "function" ? await llm.listModels(provider) : [];
+              if (!Array.isArray(rows)) return [];
+              return rows
+                .map((row) => (typeof row === "string" ? row : String(row?.id ?? row?.model ?? row?.name ?? "")))
+                .filter(Boolean);
+            } catch (error) {
+              return [`（读取失败：${String(error?.message ?? error)}）`];
+            }
+          };
+          const providers = providersOf();
+          if (!providers.length) {
+            await reply("读不到 provider 列表（宿主的 llm 服务没有 listProviders）。就用 /agent model 里那个宿主默认值。");
+            return true;
+          }
+          const shown = wantProvider ? providers.filter((id) => id === wantProvider) : providers;
+          if (!shown.length) {
+            await reply(`没有这个 provider：${wantProvider}\n现有：${providers.slice(0, 12).join("、")}`);
+            return true;
+          }
+          const lines = ["🧠 可用模型（来自宿主 llm 服务）"];
+          if (hostModel) lines.push(`  宿主当前：${hostModel}`);
+          for (const provider of shown.slice(0, 8)) {
+            const models = await modelsOf(provider);
+            const marks = [];
+            if (hostProvider && provider === hostProvider) marks.push("宿主在用");
+            lines.push("", `${provider}${marks.length ? ` · ${marks.join(" · ")}` : ""}`);
+            if (!models.length) lines.push("  （没有模型）");
+            for (const model of models.slice(0, 8)) {
+              const current = hostModel === `${provider}/${model}` ? "  ← 宿主默认" : "";
+              lines.push(`  · ${model}${current}`);
+            }
+            if (models.length > 8) lines.push(`  …还有 ${models.length - 8} 个`);
+          }
+          lines.push("", "设：/agent model <provider>/<model> · 清：/agent model reset");
+          lines.push("换 provider 需要它自己的 API key；同一个 provider 换模型不需要。");
+          await reply(lines.join("\n"));
+          noteRoute("/command", { command: "agent", action: "model-list", provider: wantProvider });
+          return true;
+        }
+
         if (what === "reset" || what === "default") {
           await state.setPeer(accountId, chatId, { agentModel: "" });
           await reply("✅ 已清掉本会话的模型覆盖，回到宿主默认（下次新建 agent 时生效）");
