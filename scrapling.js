@@ -13,7 +13,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 
-export const SCRAPLING_TIMEOUT_MS = 120_000;
+export const SCRAPLING_TIMEOUT_MS = 180_000;
 export const SCRAPLING_TEXT_MAX = 20_000;
 export const SCRAPLING_ITEMS_MAX = 50;
 
@@ -37,20 +37,43 @@ except Exception as error:  # noqa: BLE001 - report, never crash
     print(base64.b64encode(json.dumps(answer, ensure_ascii=False).encode("utf-8")).decode())
     sys.exit(0)
 
-kwargs = {"timeout": int(request.get("timeout") or 30)}
+base = {"timeout": int(request.get("timeout") or 30)}
 if request.get("proxy"):
-    kwargs["proxy"] = request["proxy"]
+    base["proxy"] = request["proxy"]
 if request.get("headers"):
-    kwargs["headers"] = request["headers"]
-
-fetcher = Fetcher
-if request.get("stealth"):
-    fetcher = StealthyFetcher
-    if request.get("wait"):
-        kwargs["wait"] = int(request["wait"])
+    base["headers"] = request["headers"]
 
 try:
-    page = fetcher.get(request["url"], **kwargs)
+    if request.get("stealth"):
+        # StealthyFetcher is a browser session: its own parameter names, and .fetch rather than .get.
+        stealth_kwargs = {"timeout": base["timeout"] * 1000}
+        if request.get("proxy"):
+            stealth_kwargs["proxy"] = request["proxy"]
+        if request.get("headers"):
+            stealth_kwargs["extra_headers"] = request["headers"]
+        if request.get("wait"):
+            stealth_kwargs["wait"] = int(request["wait"])
+        if request.get("cloudflare"):
+            stealth_kwargs["solve_cloudflare"] = True
+        # A browser that is already installed beats a 1.25 GB download: measured, the system Chrome drives the stealth
+        # session fine. Only when none is found does the bundled one get tried.
+        exe = request.get("exe") or ""
+        if not exe:
+            import os
+            for candidate in [
+                os.path.join(os.environ.get("PROGRAMFILES", r"C:\\Program Files"), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES", r"C:\\Program Files"), "Microsoft", "Edge", "Application", "msedge.exe"),
+            ]:
+                if os.path.exists(candidate):
+                    exe = candidate
+                    break
+        if exe:
+            stealth_kwargs["executable_path"] = exe
+        page = StealthyFetcher.fetch(request["url"], **stealth_kwargs)
+    else:
+        page = Fetcher.get(request["url"], **base)
 except Exception as error:  # noqa: BLE001
     answer["error"] = f"{type(error).__name__}: {error}"
     print(base64.b64encode(json.dumps(answer, ensure_ascii=False).encode("utf-8")).decode())
@@ -144,6 +167,8 @@ export function scrape(request = {}, { exec = execFile, exists = existsSync, env
     textLimit: clampNumber(request.textLimit, 500, SCRAPLING_TEXT_MAX, 10000),
     timeout: clampNumber(request.timeout, 5, 120, 30),
     stealth: Boolean(request.stealth),
+    cloudflare: Boolean(request.cloudflare),
+    exe: String(request.exe ?? ""),
     wait: clampNumber(request.wait, 0, 60, 0),
     links: Boolean(request.links),
     proxy: String(request.proxy ?? ""),

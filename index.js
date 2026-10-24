@@ -7397,7 +7397,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           limit: { type: "number", description: `Max items/links (default 20, max ${scrapling.SCRAPLING_ITEMS_MAX}).` },
           textLimit: { type: "number", description: `Max body characters (default 10000, max ${scrapling.SCRAPLING_TEXT_MAX}).` },
           links: { type: "boolean", description: "Also return the page's anchors." },
-          stealth: { type: "boolean", description: "Use StealthyFetcher (a real browser; needs camoufox/playwright installed)." },
+          stealth: { type: "boolean", description: "Use a real browser (StealthyFetcher). It drives the Chrome already installed here, so no browser download is needed." },
+          cloudflare: { type: "boolean", description: "Stealth only: let the browser solve a Cloudflare challenge before reading (slower, measured ~11s on a protected page)." },
+          exe: { type: "string", description: "Stealth only: path to the browser binary to drive (default: the installed Chrome, then Edge)." },
           proxy: { type: "string", description: "Proxy URL, e.g. http://127.0.0.1:7897." },
           timeout: { type: "number", description: "Seconds (default 30, max 120)." },
         },
@@ -7415,6 +7417,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               textLimit: args?.textLimit,
               links: args?.links,
               stealth: args?.stealth ?? defaults.stealth === true,
+              cloudflare: args?.cloudflare ?? defaults.cloudflare === true,
+              exe: String(args?.exe ?? defaults.exe ?? ""),
               proxy: String(args?.proxy ?? defaults.proxy ?? ""),
               timeout: args?.timeout,
             });
@@ -9056,6 +9060,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             patch.scrapling = {
               ...(proxy ? { proxy } : {}),
               stealth: source?.stealth === true,
+              cloudflare: source?.cloudflare === true,
+              ...(String(source?.exe ?? "").trim() ? { exe: String(source.exe).trim() } : {}),
             };
           }
           // The serial block: one validated object, so a half-written preference cannot land in prefs. Without this

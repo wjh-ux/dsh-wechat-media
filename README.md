@@ -567,7 +567,9 @@ one tool:
 | `links` | also return the page's anchors |
 | `mode` | `text` (default) or `html` |
 | `limit` / `textLimit` | caps (items, characters) - a page can be megabytes, the transcript should not be |
-| `stealth` | run `StealthyFetcher` (a real browser; needs `camoufox`/`playwright` installed, otherwise it fails loudly) |
+| `stealth` | run a real browser; it drives the **Chrome you already have** (no 1.25 GB download) |
+| `cloudflare` | stealth only: solve a Cloudflare challenge first (~11 s on a protected page) |
+| `exe` | stealth only: which browser binary to drive |
 | `proxy` | per-call proxy, or set a default with `/scrapling proxy …` |
 
 ```text
@@ -592,9 +594,12 @@ reported rather than guessed: a selector that matches nothing still returns the 
 dependency comes back as the exception's own words (`ModuleNotFoundError: No module named 'msgspec'` was the real one
 here, fixed by installing it).
 
-Stealth needs a browser runtime besides the library. On this machine `camoufox`/`playwright` are **not** installed, so
-`stealth: true` fails loudly instead of quietly falling back to the plain fetcher - a silent downgrade would make an
-anti-bot failure look like a selector problem.
+Stealth needs a browser, and it uses the one you already have: the session is handed the machine's own Chrome (then
+Edge) through `executable_path`, because camoufox's bundled browser is a **1.25 GB** download (measured ~150 KB/s
+single-stream, ~620 KB/s with eight ranges - which stalls in practice). If no browser is found the tool says so instead of
+quietly falling back to the plain fetcher: a silent downgrade would make an anti-bot failure look like a selector problem.
+
+`cloudflare: true` lets the browser solve a challenge before reading - measured on `https://nowsecure.nl`: **200 in 11 s**.
 
 Behind it, the python side is one self-contained script embedded in `scrapling.js` - not a second file, because a plugin
 that installs and then fails on a missing helper is worse than one that does not install.

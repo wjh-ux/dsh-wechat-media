@@ -30,6 +30,17 @@ await test("the python side is one self-contained script with every section guar
   assert.match(script, /PYTHONIOENCODING|ensure_ascii=False/);
 });
 
+await test("stealth drives an installed browser and uses that fetcher's own API", () => {
+  // scrapling 0.5: StealthyFetcher has .fetch (not .get), wants timeout in milliseconds and extra_headers, and its
+  // bundled browser is a 1.25 GB download - so an installed Chrome is preferred. Measured: the system Chrome returned 200
+  // with a real Chrome UA, and solved a Cloudflare challenge on nowsecure.nl in 11 s.
+  const script = scrapling.scraplingScript();
+  assert.match(script, /StealthyFetcher\.fetch\(/, "the stealth route uses .fetch, not .get");
+  assert.match(script, /executable_path/, "an installed browser is preferred over the bundled one");
+  assert.match(script, /solve_cloudflare/);
+  assert.match(script, /chrome\.exe/, "the search includes Chrome's usual locations");
+});
+
 await test("the request is validated before a process starts", async () => {
   await assert.rejects(() => scrapling.scrape({}), /缺少 url/);
   await assert.rejects(() => scrapling.scrape({ url: "file:///etc/passwd" }), /只接受 http\(s\)/);

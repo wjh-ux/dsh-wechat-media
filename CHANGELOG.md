@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1
+
+- **1.0.0 shipped only four files.** The release script still carried an older file list, so index.js, scrapling.js and
+  README.md reached GitHub as the 0.72.1 versions while the version number said 1.0.0. 1.0.1 uploads the whole set; the
+  verification step (a per-file read-back against the blob hash) now covers every file in the list rather than the four
+  that happened to be in it.
+
 ## 1.0.0
 
 The feature set is where it should be, so this is the version that says so - not a rewrite, a statement that the surface
