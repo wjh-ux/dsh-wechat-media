@@ -127,6 +127,42 @@ if (wantsOffline) {
       if (parsed !== null && !parsed.chatId) throw new Error("parsed without a chat");
     }
   });
+  const STATE = await import(`file://${join(root, "state.js").replace(/\\/g, "/")}`);
+  const INDEX = await import(`file://${join(root, "index.js").replace(/\\/g, "/")}`);
+  // Access control and the ids that become file names: the one area where a mistake is not just a confusing message.
+  check("the allowlist decision", () => {
+    if (INDEX.allowDecision({ peer: {}, prefs: { requireAllowlist: false } }).accepted !== true) throw new Error("open mode refused a peer");
+    if (INDEX.allowDecision({ peer: { allowed: true }, prefs: { requireAllowlist: true } }).accepted !== true) throw new Error("an allowed peer was refused");
+    if (INDEX.allowDecision({ peer: { allowed: false }, prefs: { requireAllowlist: true } }).accepted !== false) throw new Error("a blocked peer was accepted");
+    // the two shapes a bad write used to leave behind must never read as allowed
+    for (const value of [null, "true", 1, "yes", {}]) {
+      if (INDEX.allowDecision({ peer: { allowed: value }, prefs: { requireAllowlist: true } }).accepted === true) {
+        throw new Error(`allowed: ${JSON.stringify(value)} counted as allowed`);
+      }
+    }
+  });
+  check("account ids are filesystem safe", () => {
+    const nasty = ["../escape", "..\\escape", "a/../../escape", "/abs/path", "C:\\absolute", "..", ".", "x".repeat(500), "长".repeat(100)];
+    for (const raw of nasty) {
+      let id;
+      try {
+        id = STATE.normalizeAccountId(raw);
+      } catch {
+        continue;
+      }
+      if (!id) throw new Error(`${JSON.stringify(raw)} normalised to nothing`);
+      if (/\.\.|[/\\]/.test(id)) throw new Error(`unsafe id for ${JSON.stringify(raw)}: ${id}`);
+    }
+  });
+  check("two spellings of one account share a file, different accounts do not", () => {
+    for (const [left, right] of [["wecom:1", "wecom-1"], ["qq:2", "qq-2"]]) {
+      if (STATE.normalizeAccountId(left) !== STATE.normalizeAccountId(right)) throw new Error(`${left} and ${right} should share a file`);
+    }
+    const distinct = ["wecom-1", "qq-1", "feishu-1", "群一", "群二"];
+    const mapped = distinct.map((id) => STATE.normalizeAccountId(id));
+    if (new Set(mapped).size !== distinct.length) throw new Error(`distinct accounts collided: ${mapped.join(", ")}`);
+  });
+
   // The scheduler fires unattended, so its arithmetic is checked rather than trusted.
   const TASKS = await import(`file://${join(root, "tasks.js").replace(/\\/g, "/")}`);
   const FIXED_NOW = Date.UTC(2026, 9, 24, 3, 30, 0);

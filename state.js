@@ -25,6 +25,7 @@
  * Writes are atomic (temp file + rename) and files holding a token are mode 0600.
  * The plugin never writes a secret into the repository or into a cordis patch.
  */
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { accumulate, due, reset, setWindow } from "./tokens.js";
@@ -62,10 +63,20 @@ const STATE_DIR_NAME = "dsh-wechat-media";
  * every character outside `[A-Za-z0-9_-]` (including the dot) collapses to `-`.
  */
 export function normalizeAccountId(raw) {
-  return String(raw ?? "")
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const source = String(raw ?? "").trim();
+  const safe = source.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  // Everything outside [A-Za-z0-9_-] collapses, so an id written entirely in another script (`长号`) collapses to nothing and
+  // its file would be `accounts/.json` - one hidden file every such id would share. Hashing the original keeps them apart, and a
+  // name that is too long for the filesystem is clamped the same way.
+  if (!safe) {
+    const digest = createHash("sha256").update(source).digest("hex").slice(0, 16);
+    return `acct-${digest}`;
+  }
+  if (safe.length > 100) {
+    const digest = createHash("sha256").update(source).digest("hex").slice(0, 16);
+    return `${safe.slice(0, 80)}-${digest}`;
+  }
+  return safe;
 }
 
 /** Read a JSON file, returning `fallback` when it is absent or unreadable. */
