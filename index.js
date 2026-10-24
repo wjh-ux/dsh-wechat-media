@@ -8725,6 +8725,20 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const body = await readArgs(req);
           const accountId = String(body.accountId ?? "");
           const chatId = String(body.chatId ?? "");
+          // Listing: no ids means "all of them". The stored shape is { accountId: { chatId: peer } }, so the rows are
+          // flattened with both ids attached - without that, a caller cannot tell which account a chat belongs to, and
+          // a QQ peer (qq-<appId>) looks exactly like a WeCom one.
+          if (!accountId && !chatId && req.method === "GET") {
+            const stored = await state.loadPeers();
+            const peers = [];
+            for (const [ownerId, bucket] of Object.entries(stored ?? {})) {
+              if (!bucket || typeof bucket !== "object") continue;
+              for (const [peerChatId, peer] of Object.entries(bucket)) {
+                peers.push({ accountId: ownerId, chatId: peerChatId, ...(peer && typeof peer === "object" ? peer : {}) });
+              }
+            }
+            return json(res, 200, { ok: true, peers });
+          }
           if (!accountId || !chatId) return json(res, 400, { error: "accountId and chatId are required" });
           // true = allowed, false = blocked, anything else = undecided (unlisted).
           const allowed = asBool(body.allowed);

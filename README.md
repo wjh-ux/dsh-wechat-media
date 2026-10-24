@@ -282,10 +282,10 @@ Three details that decide whether a QQ bot works at all, all handled here:
 - **The intent matters**: group and C2C messages are gated behind `1 << 25`; asking for more than the bot was granted is
   what makes an identify fail with 4014.
 
-**Not verified on a live bot**: this needs an appId/clientSecret from the open platform, which the author does not have.
-What *is* verified is the protocol surface - the token endpoint answers in its own words for bad credentials
-(`机器人不存在`), and every payload (identify, reply body, endpoints, event flattening, heartbeat/resume bookkeeping) is
-asserted by tests. Treat the first real connection as the acceptance test.
+**Verified against a live bot** (appId `1903374412`, display name *PawDesk*): the gateway answered `READY`, a private
+chat message produced an answer through `/v2/users/{openid}/messages`, and an @ in a real group produced one through
+`/v2/groups/{group_openid}/messages`. The allowlist blocked both the first private message and the first group message until
+the chat was allowed - which is what it is for, and it is visible in the counters (`blocked`) rather than silent.
 
 ### Receiving: the long connection / 用长连接接收（不需要公网地址）
 
@@ -1115,6 +1115,8 @@ came back. Anything not on this list is covered by tests but not by a real devic
 | Scrapling stealth | Real Chrome UA; `nowsecure.nl` (Cloudflare) -> 200 in 11 s with `cloudflare: true` |
 | Office | Word/Excel/PowerPoint written, converted to PDF, rendered to PNG |
 | Integrations | `/inbound` 401 without the token and 200 with it; webhook `turn.end` HMAC verified; dashboard screenshot |
+| QQ bot: private chat | Live bot **PawDesk** (appId 1903374412): `C2C_MESSAGE_CREATE` -> session -> reply through `/v2/users/{openid}/messages`; `received 2 / forwarded 1 / answered 1` |
+| QQ bot: group @ | `GROUP_AT_MESSAGE_CREATE` from a real group -> reply through `/v2/groups/{group_openid}/messages`; `received 4 / forwarded 2 / answered 2`, and the first two attempts were correctly blocked by the allowlist |
 
 ## Limitations / 已知限制
 

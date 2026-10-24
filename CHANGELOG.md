@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.2
+
+- **`GET /peers` without ids answered 400**, so a caller could ask about one chat but never list them. The panel always
+  passes both ids, which is why it went unnoticed until the QQ chats needed to be found. The listing flattens the stored
+  `{ accountId: { chatId: peer } }` shape and keeps **both ids on every row** - without that, a `qq-<appId>` peer is
+  indistinguishable from any other channel's.
+- **The README's verification table gained the QQ rows**, with the numbers the live bot produced: private chat
+  `received 2 / forwarded 1 / answered 1`, group @ `received 4 / forwarded 2 / answered 2`, and the allowlist blocking the
+  first attempt on each channel. The QQ section no longer says "not verified on a live bot".
+- 44 suites / 686 cases.
+
 ## 1.1.1
 
 - **The QQ callbacks were passed to the constructor and ignored.** `index.js` wires every transport the same way -
