@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.0.3** · 43 test suites / 676 cases · every capability below has been exercised against a real
+**Current release: v1.2.0** · 44 test suites / 690 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -1116,6 +1116,7 @@ came back. Anything not on this list is covered by tests but not by a real devic
 | Scrapling stealth | Real Chrome UA; `nowsecure.nl` (Cloudflare) -> 200 in 11 s with `cloudflare: true` |
 | Office | Word/Excel/PowerPoint written, converted to PDF, rendered to PNG |
 | Integrations | `/inbound` 401 without the token and 200 with it; webhook `turn.end` HMAC verified; dashboard screenshot |
+| Secrets at rest | A 32-character QQ secret became a 358-character `dpapi:…` value on disk, `/state` returned `***`, and the bot stayed `ready` - so the seal neither breaks the connection nor leaks the value |
 | QQ bot: private chat | Live bot **PawDesk** (appId 1903374412): `C2C_MESSAGE_CREATE` -> session -> reply through `/v2/users/{openid}/messages`; `received 2 / forwarded 1 / answered 1` |
 | QQ bot: group @ | `GROUP_AT_MESSAGE_CREATE` from a real group -> reply through `/v2/groups/{group_openid}/messages`; `received 4 / forwarded 2 / answered 2`, and the first two attempts were correctly blocked by the allowlist |
 
@@ -1205,6 +1206,11 @@ page, so the tools will not build a link from it. Set `tenantHost` (panel or `/p
 - No secret is stored in this repository, and none is written into a cordis patch. The bot token lives in
   `$DSH_HOME/dsh-wechat-media/accounts/` (mode `0600` where the OS supports it).
 - The plugin never puts the token in a URL. Traffic goes to the two WeChat hosts above and nowhere else.
+- **Secrets are sealed at rest.** Everything sensitive in `prefs.json` - the Feishu app secret, the Tavily key, the WeCom
+  bot secret, the QQ client secret and the outbound webhook secret - is stored as `dpapi:…`, DPAPI ciphertext bound to the
+  Windows account that wrote it. A copy of the file is worthless on another machine or account, and `/state` returns `***`
+  for all of them rather than the value. A path added after a file was written is sealed on the next activation
+  (`sealExistingSecrets`), and a value that cannot be opened says so instead of pretending the credential is gone.
 - The card's HTTP routes refuse anything that does not arrive over loopback.
 - **Use a spare WeChat account if you can.** Personal-account automation is at your own risk.
 

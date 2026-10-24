@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.1
+
+README only, and it was overdue in two places:
+
+- **The version line said v1.0.3** while 1.2.0 was current - three releases stale. It now says v1.2.0 with the real test count
+  (44 suites / 690 cases).
+- **The Security section never mentioned sealing.** It explained the token file, the loopback-only routes and the spare-account
+  advice, but not the fact that every other credential is `dpapi:` ciphertext bound to the Windows account. It does now,
+  including what happens to a path added later (`sealExistingSecrets`) and to a value that cannot be opened (reported, not
+  silently absent).
+- The verification table gained a **Secrets at rest** row with the numbers from the live check: 32 characters of secret became
+  a 358-character `dpapi:` value, `/state` returned `***`, and the QQ bot stayed `ready`.
+
 ## 1.2.0
 
 - **Every secret is now sealed at rest, including the two that arrived late.** `secrets.js` has had a DPAPI-sealed
