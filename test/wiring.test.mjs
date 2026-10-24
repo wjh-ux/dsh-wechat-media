@@ -1157,5 +1157,15 @@ await test("the help detail page gets its chat identity from the caller", () => 
   assert.match(host, /liveHelpLines\(resolveCommandName\(wanted\), \{ accountId, chatId \}\)/, "the call site supplies both");
 });
 
+await test("a garbage allowed value must be refused, and a manual name must survive", () => {
+  // Found by hitting the live routes with hostile input: {allowed: "maybe"} was stored as null, which is not true, so the chat
+  // was silently un-allowed; and /name was overwritten by the next inbound message, because inbound always wrote
+  // `name: peerName`.
+  assert.match(host, /allowed === null/, "a non-boolean allowed must be a 400, not a null in the record");
+  assert.match(host, /nameSource: "manual"/, "a name somebody chose is marked");
+  assert.match(host, /existingPeer\?\.nameSource === "manual" \? \{\} : \{ name: peerName \}/, "inbound must not overwrite it");
+  assert.match(host, /knownIds\.has\(String\(accountId\)\)/, "peers are only created for accounts that exist");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

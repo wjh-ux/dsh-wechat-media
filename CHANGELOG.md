@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.5
+
+A deliberate bug hunt on the live plugin (hostile HTTP input plus a fuzz of every pure function) found four real defects. All
+four are fixed, each with a test.
+
+- **`POST /peers {"allowed":"maybe"}` stored `allowed: null`** and silently **un-allowed** a chat that had been allowed: `null` is
+  not `true`, so the next message was blocked. The 1.1.4 guard covered "the field was absent", not "the field was unreadable";
+  a non-boolean is now a 400.
+- **`POST /peers` created a peer for an account that does not exist** (`no-such-account/x` then appeared in every list). Known
+  ids are now derived from pairing, the WeCom bot id, the QQ appId, the Feishu app id and existing buckets; anything else is a
+  400 - an allowlist entry for a non-existent account is a typo, not a decision.
+- **A manual chat name was overwritten by the next inbound message**: `/name` and `POST /peers {name}` wrote a readable name,
+  then every inbound message wrote `name: peerName` over it. Measured: the QQ chat renamed to "PawDesk 私聊" was showing its
+  openid again. Names set by hand are marked `nameSource: "manual"` and inbound traffic only fills blanks.
+- **`normalizePort("COM0")` was accepted.** Windows starts at COM1, so `COM0` (and `COM03`) are typos - and accepting them made
+  the failure surface later as "no such port", which teaches nothing. They are refused with the expected shape.
+- What the hunt also confirmed, so it stays confirmed: 113 offline assertions over the parser, the help renderers, the three
+  pref normalisers, the QQ payload builders and the scrapling validator; and 23 hostile HTTP calls that all answer 4xx with a
+  readable reason and never a 500.
+- 44 suites / 695 cases.
+
 ## 1.5.4
 
 - **`/help <命令>` answers "what is the default?" and "when does it take effect?"** - two lines per command from a single

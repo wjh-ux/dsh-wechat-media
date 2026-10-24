@@ -237,7 +237,9 @@ export function assertFile(file, { exists = existsSync } = {}) {
 export function normalizePort(value) {
   const text = String(value ?? "").trim().toUpperCase();
   if (!text) return "";
-  if (!/^COM\d{1,3}$/.test(text)) throw new Error(`端口名不像话：${JSON.stringify(value)}（Windows 形如 COM3）`);
+  // COM1 is the first port Windows numbers; COM0 and COM03 are typos that would otherwise fail much later, as an absent
+  // port rather than an invalid one.
+  if (!/^COM[1-9]\d{0,2}$/.test(text)) throw new Error(`端口名不像话：${JSON.stringify(value)}（Windows 形如 COM3，从 COM1 起）`);
   return text;
 }
 

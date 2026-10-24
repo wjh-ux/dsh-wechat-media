@@ -3074,7 +3074,7 @@ export function apply(ctx, config = {}) {
         await reply(`当前名字：${current?.name ?? "（未命名）"}\n改名：/name 新名字`);
         return true;
       }
-      const saved = await state.setPeer(accountId, chatId, { name: wanted.slice(0, 80) });
+      const saved = await state.setPeer(accountId, chatId, { name: wanted.slice(0, 80), nameSource: "manual" });
       await reply(`✅ 已改名：${saved?.name ?? wanted}`);
       noteRoute("/command", { command: "name", transport, name: saved?.name ?? wanted });
       return true;
@@ -3826,7 +3826,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const peerName = isGroup ? `QQ群 ${chatId}` : `QQ ${message.peerName || chatId}`;
     counters.received += 1;
     lastInbound.set(accountId, { accountId, chatId, peerName, isGroup, at: Date.now() });
-    await state.setPeer(accountId, chatId, { name: peerName, kind: isGroup ? "group" : "direct", seenAt: new Date().toISOString() });
+    // A name somebody chose stays: an inbound message fills a blank one, never overwrites a manual one.
+    const existingPeer = await state.getPeer(accountId, chatId);
+    await state.setPeer(accountId, chatId, {
+      ...(existingPeer?.nameSource === "manual" ? {} : { name: peerName }),
+      kind: isGroup ? "group" : "direct",
+      seenAt: new Date().toISOString(),
+    });
 
     const verdict = await classifyWecomInbound({
       accountId,
@@ -9139,13 +9145,34 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // true = allowed, false = blocked, absent = leave it alone. "Leave it alone" is its own case: a rename used to
           // store `allowed: null`, because every call went through asBool() and a missing field read as null - which is not
           // `true`, so renaming a chat silently dropped it back to "unlisted".
+          // Three cases, not two: absent (leave it alone), a real boolean, and "sent something that is not a boolean" -
+          // which must be refused rather than stored as null: null is not true, so it would silently un-allow the chat. That is
+          // the 1.1.4 failure again, reached from a different direction (the old guard covered "absent", not "unreadable").
           const hasAllowed = Object.prototype.hasOwnProperty.call(body, "allowed");
           const allowed = hasAllowed ? asBool(body.allowed) : undefined;
+          if (hasAllowed && allowed === null) {
+            return json(res, 400, { ok: false, error: `allowed 只能是 true 或 false（收到：${JSON.stringify(body.allowed)}）` });
+          }
+          // An allowlist entry for an account that cannot exist is a typo, not a decision. Known ids come from pairing, the
+          // channel credentials, or a bucket that already exists.
+          const knownIds = new Set();
+          for (const account of await state.loadAccounts()) if (account?.accountId) knownIds.add(String(account.accountId));
+          for (const owner of Object.keys((await state.loadPeers()) ?? {})) knownIds.add(String(owner));
+          const prefsNow = await state.loadPrefs();
+          const wecomBotId = String(wecomConfig()?.botId ?? "");
+          if (wecomBotId) knownIds.add(String(wecomAccountId(wecomBotId)));
+          const qqAppId = String(prefsNow?.qq?.appId ?? "");
+          if (qqAppId) knownIds.add(qqAccountId(qqAppId));
+          const feishuAppId = String(prefsNow?.feishu?.appId ?? "");
+          if (feishuAppId) knownIds.add(feishuAccountId(feishuAppId));
+          if (!knownIds.has(String(accountId))) {
+            return json(res, 400, { ok: false, error: `未知账号：${accountId}（先让它收一条消息，或检查配置）` });
+          }
           // A readable name is what every list shows - a QQ chat's identity is an openid, which is not a name.
           const name = String(body.name ?? "").trim();
           const peer = await state.setPeer(accountId, chatId, {
             ...(hasAllowed && allowed !== undefined ? { allowed } : {}),
-            ...(name ? { name: name.slice(0, 80) } : {}),
+            ...(name ? { name: name.slice(0, 80), nameSource: "manual" } : {}),
           });
           json(res, 200, { ok: true, peer, peers: await state.loadPeers() });
         },
