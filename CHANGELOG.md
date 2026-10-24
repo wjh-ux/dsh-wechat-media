@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.2
+
+- **`/help agent` threw `accountId is not defined`.** The live-state helper was moved above `runChatCommand` in 1.5.1 (a nested
+  declaration truncates the dispatcher slice another test scans), and moving it out of the dispatcher removed its access to
+  `accountId`/`chatId` - which the per-chat lookups need. They are passed in a context object now.
+- A test pins the shape: the helper takes `(name, context)`, unpacks both ids, and the call site supplies them. The general
+  lesson, written down because it has now cost two releases: **a helper moved out of a function is a helper whose free
+  variables need re-checking**, not just re-indenting.
+- 44 suites / 693 cases.
+
 ## 1.5.1
 
 - **多 agent has its own group in `/help`.** It was filed under 运维 next to `/doctor` and `/tokens`, which is the one place a

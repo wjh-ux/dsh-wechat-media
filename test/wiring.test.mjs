@@ -1149,5 +1149,13 @@ await test("the per-chat model is opt-in, not a default", () => {
   assert.match(host, /agentModel: ""/, "and it must be clearable");
 });
 
+await test("the help detail page gets its chat identity from the caller", () => {
+  // The helper sits above runChatCommand (a nested declaration truncates the slice another test scans), so accountId/chatId are
+  // not in scope: they must be passed. Measured failure when they were not: "accountId is not defined" on /help agent.
+  assert.match(host, /function liveHelpLines\(name, context = \{\}\)/, "the helper takes a context object");
+  assert.match(host, /const \{ accountId = "", chatId = "" \} = context;/, "and unpacks it");
+  assert.match(host, /liveHelpLines\(resolveCommandName\(wanted\), \{ accountId, chatId \}\)/, "the call site supplies both");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

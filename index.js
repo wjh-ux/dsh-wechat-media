@@ -2129,7 +2129,10 @@ export function apply(ctx, config = {}) {
     return hit?.name ?? cleaned;
   }
 
-  async function liveHelpLines(name) {
+  async function liveHelpLines(name, context = {}) {
+    // `accountId`/`chatId` are the dispatcher's parameters, so they arrive in `context` - this helper sits above
+    // `runChatCommand` and does not close over them.
+    const { accountId = "", chatId = "" } = context;
     const prefs = await state.loadPrefs();
     const lines = [];
     switch (name) {
@@ -2216,7 +2219,11 @@ export function apply(ctx, config = {}) {
     if (command.name === "help") {
       // `/help agent` is the detail page; `/help` alone is the grouped list.
       const wanted = String(command.args ?? "").trim();
-      await reply(wanted ? commandHelpText(wanted, { live: await liveHelpLines(resolveCommandName(wanted)) }) : helpText());
+      await reply(
+        wanted
+          ? commandHelpText(wanted, { live: await liveHelpLines(resolveCommandName(wanted), { accountId, chatId }) })
+          : helpText(),
+      );
       return true;
     }
 
