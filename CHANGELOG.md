@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.5
+
+README only, recording what the last two live runs established:
+
+- **The model catalog this host actually has** is now in the multi-agent section: two providers (`deepseek-official`,
+  `deepseek-account`) offering `deepseek-flash` and `deepseek-v4-pro`, with the default marked. That answers "what may I
+  put there?" without asking anyone to open the Models page.
+- **The verified swap** went in the table: `/agent model deepseek-account/deepseek-v4-pro` then `/new`, and `GET /state`
+  reported `conversations[].agentModel = "deepseek-account/deepseek-v4-pro"` - not the default - with the turn answering.
+  So the override does not merely get stored; a different model runs.
+- The rule stays where it was learned: a model name inside the host's provider needs nothing extra, a different provider route
+  needs its own API key.
+- 44 suites / 692 cases.
+
 ## 1.4.4
 
 - **`/agent model list` threw `Cannot access 'hostProvider' before initialization`.** The listing block referenced a variable that
