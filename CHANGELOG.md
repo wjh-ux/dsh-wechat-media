@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.7
+
+- **The acceptance scripts now ship**, as `scripts/bug-hunt.mjs` and `scripts/verify-release.mjs`, with a short
+  `scripts/README.md`. They are the checks that found five defects no suite caught in the 1.5.x line.
+- `bug-hunt.mjs` runs the offline fuzz (parser, every help page by name and alias, three pref normalisers, QQ payloads,
+  scrapling validator) and, with `--live`, hostile HTTP against the running plugin. Every live check is a read or an expected 4xx,
+  so it cannot damage an installation. Exit code 1 gates a release.
+- `verify-release.mjs` compares the work tree, GitHub `main` and the installed copy - the last one restricted to `files[]`, with
+  a note about why tests are not expected there (that miscount was the first version's false alarm).
+- 44 suites / 696 cases.
+
 ## 1.5.6
 
 - **Every `POST /peers` answered 400 with an empty body.** The known-account check added in 1.5.5 called `wecomConfig()` - a helper
