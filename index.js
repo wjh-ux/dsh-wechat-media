@@ -273,17 +273,39 @@ async function importHarnessPlugin(ctx, specifier) {
   return import(specifier);
 }
 
-/** Split a reply into platform-sized chunks, preferring paragraph boundaries. */export function chunkText(text, limit = MAX_TEXT_CHARS) {
+/** Split a reply into platform-sized chunks, preferring paragraph boundaries. *//** The markdown fence marker, as a value rather than as template text. */
+const FENCE = String.fromCharCode(96, 96, 96);
+
+export function chunkText(text, limit = MAX_TEXT_CHARS) {
   const source = String(text ?? "").trim();
   if (source.length <= limit) return source ? [source] : [];
   const chunks = [];
   let rest = source;
+  let insideFence = false;
   while (rest.length > limit) {
     const window = rest.slice(0, limit);
     const cut = Math.max(window.lastIndexOf("\n\n"), window.lastIndexOf("\n"), window.lastIndexOf("。"));
-    const at = cut > limit * 0.5 ? cut + 1 : limit;
-    chunks.push(rest.slice(0, at).trim());
+    let at = cut > limit * 0.5 ? cut + 1 : limit;
+    // never split a surrogate pair: half of an emoji is an invalid character on the wire, and platforms reject those
+    if (at > 0 && at < rest.length) {
+      const previous = rest.charCodeAt(at - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) at -= 1;
+    }
+    if (at <= 0) at = Math.min(limit, rest.length);
+    let piece = rest.slice(0, at).trim();
     rest = rest.slice(at).trim();
+    // a cut inside a fence closes it here and reopens it in the next chunk, so no chunk shows half a code block
+    const fences = (piece.match(/```/g) ?? []).length;
+    const nowInside = insideFence !== (fences % 2 === 1);
+    if (nowInside && rest) {
+      // FENCE is the three-backtick marker; written once so no template literal has to contain it.
+      piece = `${piece}\n${FENCE}`;
+      rest = `${FENCE}\n${rest}`;
+      insideFence = false;
+    } else {
+      insideFence = nowInside;
+    }
+    if (piece) chunks.push(piece);
   }
   if (rest) chunks.push(rest);
   return chunks.filter(Boolean);
@@ -404,7 +426,7 @@ export function shouldRetryTurn({ error = "", attempt = 1, enabled = true } = {}
   if (!enabled) return false;
   if (attempt >= 2) return false;
   const text = String(error ?? "");
-  return /TRANSPORT|transport|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|fetch failed|timed ?out|429|rate.?limit|50[234]|overloaded/i.test(text);
+  return /TRANSPORT|transport|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|fetch failed|tim(?:ed|e)[\s-]*out|429|rate.?limit|50[234]|overloaded/i.test(text);
 }
 
 export function interjectDecision({ enabled = false, turnInFlight = false, agentAvailable = false } = {}) {

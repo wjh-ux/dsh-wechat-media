@@ -77,5 +77,18 @@ await test("the defaults are the safe ones", () => {
   assert.equal(shouldRetryTurn({ error: "TRANSPORT" }), true);
 });
 
+test("a one-word timeout is retried, because that is what the provider actually returns", () => {
+  // The pattern used to require "timed out" / "time out" - two words - while the messages that arrive are "timeout after 60000ms"
+  // and "The operation was aborted due to timeout". The most common transient failure was therefore never retried.
+  for (const error of ["timeout after 60000ms", "The operation was aborted due to timeout", "TimeoutError: request timed out", "request time-out"]) {
+    assert.equal(shouldRetryTurn({ error, attempt: 1 }), true, `${error} must be retried`);
+    assert.equal(shouldRetryTurn({ error, attempt: 2 }), false, "but only once");
+  }
+  // and a deterministic failure still is not
+  for (const error of ["401 Unauthorized", "invalid api key", "context length exceeded"]) {
+    assert.equal(shouldRetryTurn({ error, attempt: 1 }), false, `${error} must not be retried`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

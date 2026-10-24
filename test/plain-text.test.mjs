@@ -175,5 +175,32 @@ await test("a realistic answer comes out as a chat message", () => {
   assert.ok(!/\n{3,}/.test(plain), "no run of blank lines");
 });
 
+test("chunking never splits a surrogate pair or a code fence", async () => {
+  // Measured: "aaaaaaaaa\ud83d" - a chunk ending in half an emoji - and a chunk holding an opening fence with no closing one.
+  const { chunkText } = await import("../index.js");
+  const lone = (value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) return index;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        const previous = value.charCodeAt(index - 1);
+        if (!(previous >= 0xd800 && previous <= 0xdbff)) return index;
+      }
+    }
+    return -1;
+  };
+  for (const limit of [4, 8, 10, 16]) {
+    for (const chunk of chunkText("😀".repeat(limit) + "a".repeat(limit), limit)) {
+      assert.equal(lone(chunk), -1, `a chunk contains half a surrogate: ${JSON.stringify(chunk)}`);
+    }
+  }
+  const fenced = "说明文字。\n\n".repeat(3) + "```js\nconst a = 1;\n```\n\n" + "说明文字。\n\n".repeat(3);
+  for (const chunk of chunkText(fenced, 40)) {
+    assert.equal((chunk.match(/```/g) ?? []).length % 2, 0, `a chunk shows an unclosed fence: ${JSON.stringify(chunk)}`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
