@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-import { COMMANDS, STOP_REASON, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
+import { COMMANDS, STOP_REASON, commandHelpText, findCommand, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "../commands.js";
 
 let passed = 0;
 let failed = 0;
@@ -249,6 +249,27 @@ test("every command the dispatcher handles is in the catalogue", () => {
   assert.ok(handled.length > 10, "sanity: the dispatcher was found");
   for (const name of new Set(handled)) {
     assert.ok(catalogue.includes(name), `/${name} is handled but missing from the command catalogue`);
+  }
+});
+
+test("help can be asked about one command, and says so when it cannot", () => {
+  const detail = commandHelpText("agent");
+  assert.match(detail, /^\/agent/, "the page leads with the command");
+  assert.match(detail, /用法：/, "and shows its usage");
+  assert.match(detail, /\/agent model deepseek-account/, "the forms that are easy to get wrong are examples");
+  // An alias resolves to the same page, which is what makes the alias worth printing in the list.
+  assert.equal(commandHelpText("预设"), detail);
+
+  const missing = commandHelpText("deploy");
+  assert.match(missing, /没有这个命令：\/deploy/);
+  assert.match(missing, /dsh-wechat-media 命令/, "and it falls back to the list, not to silence");
+
+  // The grouped list still has to mention every command exactly once.
+  const text = helpText();
+  // A row per command, not a substring count: `/help` also appears in the footer hint that points at `/help <name>`.
+  const rows = text.split("\n").map((line) => line.trim());
+  for (const command of COMMANDS) {
+    assert.ok(rows.some((row) => row.startsWith(command.usage)), `${command.name} must have its own row`);
   }
 });
 
