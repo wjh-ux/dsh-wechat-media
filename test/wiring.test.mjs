@@ -1167,5 +1167,12 @@ await test("a garbage allowed value must be refused, and a manual name must surv
   assert.match(host, /knownIds\.has\(String\(accountId\)\)/, "peers are only created for accounts that exist");
 });
 
+await test("the peers route only calls helpers that exist", () => {
+  // Measured failure: the known-account check called wecomConfig(), which this file never defines - every POST /peers then
+  // answered 400 with an empty body, because the ReferenceError was caught by the dispatcher.
+  assert.doesNotMatch(host, /\bwecomConfig\(/, "wecomConfig() is not defined in this file - the WeCom store is read directly");
+  assert.match(host, /state\.loadWecom\(\)\)\?\.botId/, "state.loadWecom() is where the bot id comes from");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

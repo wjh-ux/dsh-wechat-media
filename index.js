@@ -6203,7 +6203,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const chatId = String(to ?? "").trim();
     if (!chatId) throw new Error("指定 transport 时必须同时给 to（会话 id）");
     if (name === "wecom") {
-      const botId = String(wecomConfig().botId ?? "").trim();
+      const botId = String((await state.loadWecom())?.botId ?? "").trim();
       if (!botId) throw new Error("企业微信还没配置（botId 为空）");
       return { transport: "wecom", accountId: normalizeAccountId(`wecom:${botId}`), chatId, peerName: "" };
     }
@@ -9159,7 +9159,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           for (const account of await state.loadAccounts()) if (account?.accountId) knownIds.add(String(account.accountId));
           for (const owner of Object.keys((await state.loadPeers()) ?? {})) knownIds.add(String(owner));
           const prefsNow = await state.loadPrefs();
-          const wecomBotId = String(wecomConfig()?.botId ?? "");
+          // The WeCom bot id lives in its own store rather than in prefs.
+          const wecomBotId = String((await state.loadWecom())?.botId ?? "");
           if (wecomBotId) knownIds.add(String(wecomAccountId(wecomBotId)));
           const qqAppId = String(prefsNow?.qq?.appId ?? "");
           if (qqAppId) knownIds.add(qqAccountId(qqAppId));
