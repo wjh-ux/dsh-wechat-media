@@ -1875,6 +1875,18 @@ export function apply(ctx, config = {}) {
     const multiAgentOn = (await state.loadPrefs())?.multiAgent?.enabled === true;
     const peerPreset = multiAgentOn ? String((await state.getPeer(accountId, chatId))?.agentPreset ?? "").trim() : "";
     const mountId = (peerPreset || config.agentPreset || presets?.defaultId) ?? undefined;
+    // An explicit per-chat model. Absent is the normal case: the host's own selection stays in charge, so a chat never
+    // silently runs - or pays for - a model nobody chose.
+    const peerModelRaw = multiAgentOn ? String((await state.getPeer(accountId, chatId))?.agentModel ?? "").trim() : "";
+    const peerModel = (() => {
+      if (!peerModelRaw) return null;
+      const cut = peerModelRaw.indexOf("/");
+      if (cut <= 0 || cut === peerModelRaw.length - 1) return null;
+      return { provider: peerModelRaw.slice(0, cut), model: peerModelRaw.slice(cut + 1) };
+    })();
+    if (peerModelRaw && !peerModel) {
+      ctx.logger?.warn?.("[dsh-wechat-media] chat %s has an unreadable agentModel %o; using the host selection", chatId, peerModelRaw);
+    }
     if (peerPreset) {
       ctx.logger?.info?.("[dsh-wechat-media] chat %s mounts its own agent preset %s", chatId, peerPreset);
     }
@@ -1893,9 +1905,14 @@ export function apply(ctx, config = {}) {
         selection.model,
       );
     }
-    const agentOptions = selection
-      ? { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) }
+    // The per-chat model wins when it parses; otherwise the host selection is used exactly as before.
+    const effective = peerModel ?? selection;
+    const agentOptions = effective
+      ? { provider: effective.provider, model: effective.model, ...(effective.reasoningEffort ? { reasoningEffort: effective.reasoningEffort } : {}) }
       : undefined;
+    if (peerModel) {
+      ctx.logger?.info?.("[dsh-wechat-media] chat %s uses its own model %s/%s", chatId, peerModel.provider, peerModel.model);
+    }
     const workspaceRoot = await resolvedInbox();
     // The editor names its project; a chat has no project, so it keeps the inbox as before.
     const projectCwd = String(options.cwd ?? "").trim();
@@ -1936,7 +1953,7 @@ export function apply(ctx, config = {}) {
     }
     ctx.effect(() => handle.dispose, `dsh-wechat-media: agent ${resolvedId}`);
     conversationHandles.set(resolvedId, handle);
-    conversations.set(resolvedId, { accountId, chatId, peerName, generation, agentPreset: mountId ?? "" });
+    conversations.set(resolvedId, { accountId, chatId, peerName, generation, agentPreset: mountId ?? "", agentModel: peerModelRaw });
     if (options.cwd) await enforceProjectMode(handle.agent?.session, Boolean(options.write));
     // Keep the generation: `/new` must not be undone by this write.
     await state.setRoute(accountId, chatId, {
@@ -2800,6 +2817,45 @@ export function apply(ctx, config = {}) {
       const list = found.presets;
       const idOf = (entry) => String(entry?.id ?? "").trim();
       const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+
+      // /agent model ... - the per-chat model override. Opt-in only: an unset chat keeps the host's own selection.
+      if (action === "model") {
+        const [what = "", ...more] = rest;
+        const current = String((await state.getPeer(accountId, chatId))?.agentModel ?? "").trim();
+        if (!what) {
+          await reply(
+            [
+              "🧠 本会话的模型",
+              `  覆盖值：${current || "（未设置，跟随宿主默认）"}`,
+              "",
+              "用法：/agent model <provider>/<model> · /agent model reset",
+              "没设置时不覆盖任何东西 —— 这条会话用的是宿主默认模型。",
+            ].join("\n"),
+          );
+          return true;
+        }
+        if (what === "reset" || what === "default") {
+          await state.setPeer(accountId, chatId, { agentModel: "" });
+          await reply("✅ 已清掉本会话的模型覆盖，回到宿主默认（下次新建 agent 时生效）");
+          noteRoute("/command", { command: "agent", action: "model-reset" });
+          return true;
+        }
+        if (!enabled) {
+          await reply("多 agent 还没开 —— 先发 /multiagent on，再给会话指定模型。");
+          return true;
+        }
+        const wanted = [what, ...more].join("/").trim();
+        const cut = wanted.indexOf("/");
+        if (cut <= 0 || cut === wanted.length - 1) {
+          await reply(`模型要写成 provider/model，例如 deepseek-official/deepseek-chat —— 收到的是：${wanted}`);
+          return true;
+        }
+        await state.setPeer(accountId, chatId, { agentModel: wanted });
+        await reply(`✅ 本会话模型 → **${wanted}**（下次新建 agent 时生效）\n没设置就一直是宿主默认，这个覆盖只影响这条会话。`);
+        noteRoute("/command", { command: "agent", action: "model", model: wanted });
+        return true;
+      }
+
       if (action === "reset") {
         await state.setPeer(accountId, chatId, { agentPreset: "" });
         await reply("✅ 本会话已恢复跟随默认预设（下次新建 agent 时生效）");
@@ -2827,6 +2883,7 @@ export function apply(ctx, config = {}) {
         "🤖 本会话的 agent",
         `  多 agent 开关：${enabled ? "**开**" : "**关**"}`,
         `  当前预设：${peer?.agentPreset || "（跟随默认）"}`,
+        `  当前模型：${String(peer?.agentModel ?? "").trim() || "（跟随宿主默认）"}`,
         enabled ? "" : "  （开关关着时，指定预设不会生效）",
       ];
       // The host's default, by name: "跟随默认" without a name is a shrug.
@@ -2842,7 +2899,7 @@ export function apply(ctx, config = {}) {
       } else {
         lines.push("", found.error ? `读不到预设列表：${found.error}` : "宿主没有声明任何 agent 预设，所以只能跟随默认。");
       }
-      lines.push("", "用法：/agent <预设 id> · /agent reset");
+      lines.push("", "用法：/agent <预设 id> · /agent model <provider>/<model> · /agent reset");
       await reply(lines.join("\n"));
       noteRoute("/command", { command: "agent", action: "status" });
       return true;
@@ -8551,6 +8608,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               accountId: entry.accountId,
               chatId: entry.chatId,
               agentPreset: entry.agentPreset ?? "",
+              agentModel: entry.agentModel ?? "",
             })),
             counters: { ...counters },
             interjections: interjections.slice(-10),

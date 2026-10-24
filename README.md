@@ -302,6 +302,11 @@ record. With it off (the default) every chat mounts the host default, exactly as
 /agent reset               # back to the default
 ```
 
+`/agent model <provider>/<model>` pins the model for that one conversation, and `/agent model reset` clears it.
+**With nothing set, the chat uses the host's own selection** - there is no built-in default override, because one would move
+every conversation onto a model nobody chose and show up as a billing surprise rather than a setting. The override obeys the
+same switch as the presets, and `/state`'s `conversations[].agentModel` proves which model a chat actually asked for.
+
 Three statements the commands make rather than hide:
 
 - **A preset change is not a live swap.** It applies when the session next creates an agent, and the reply says so.

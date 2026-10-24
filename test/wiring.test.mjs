@@ -1139,5 +1139,15 @@ await test("every stored secret is redacted in what /state returns", () => {
   }
 });
 
+// ── multi-agent ───────────────────────────────────────────────────────────
+await test("the per-chat model is opt-in, not a default", () => {
+  // The rule the user asked for: a model override only applies when somebody set one. A default here would silently move
+  // every chat onto a model nobody chose, and the failure would look like a billing surprise rather than a setting.
+  assert.match(host, /multiAgentOn \? String\(\(await state\.getPeer\(accountId, chatId\)\)\?\.agentModel/, "the model is only read when the switch is on");
+  assert.match(host, /const effective = peerModel \?\? selection;/, "with no override the host selection is used unchanged");
+  assert.match(host, /if \(action === "model"\)/, "/agent model must exist");
+  assert.match(host, /agentModel: ""/, "and it must be clearable");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

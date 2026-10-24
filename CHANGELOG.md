@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.0
+
+- **A model per conversation, and only when you ask for one.** `/agent model <provider>/<model>` pins that chat's model;
+  `/agent model reset` clears it. With nothing set, the chat keeps using the host's own selection - **no implicit override**,
+  because a default here would move every conversation onto a model nobody chose and surface as a billing surprise rather
+  than a setting.
+- Same gate as the presets: the override only applies with `/multiagent on`, and with the switch off `/agent model …` says so
+  instead of storing a value that will never be read.
+- A malformed value is refused with the shape it wanted (`provider/model`), and an unreadable value found later is logged and
+  ignored rather than breaking the turn - the host's selection stays in charge.
+- `/agent` now shows both lines (预设 / 模型) and `/state`'s `conversations[]` carries `agentModel` next to `agentPreset`, so an
+  override is verifiable from outside the chat the same way the preset is.
+- A wiring test pins the opt-in rule: the model is read only when the switch is on, and `const effective = peerModel ?? selection`
+  is what keeps the default behaviour intact.
+- 44 suites / 691 cases.
+
 ## 1.3.3
 
 README only, recording what the live test showed:
