@@ -4099,7 +4099,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   /** Message ids already handled, so a re-fetch cannot start a turn twice. */
   let emailSeen = new Set();
   let emailPoller = null;
-  let emailStatus = { lastPollAt: 0, lastError: "", handled: 0, skipped: 0, ready: false };
+  let emailStatus = { lastPollAt: 0, lastError: "", handled: 0, skipped: 0, failed: 0, ready: false };
 
   /**
    * Poll the mailbox and hand every allowed message to the agent.
@@ -4156,6 +4156,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         handled.push(message.uid);
         emailStatus = { ...emailStatus, handled: emailStatus.handled + 1 };
       } catch (error) {
+        // Visible, not just logged: with only a log line the card says "handled: 0" and gives no reason, which is the least useful
+        // answer available.
+        emailStatus = { ...emailStatus, failed: (emailStatus.failed ?? 0) + 1, lastError: `${parsed.from}: ${error?.message ?? error}` };
         ctx.logger?.warn?.("[dsh-wechat-media] email turn failed for %s: %s", parsed.from, error?.message ?? error);
       }
     }
@@ -9184,6 +9187,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             pluginRoot: build.pluginRoot,
             qq: qqStatus,
             // The QQ long connection: ready / session / last error, so the card does not have to guess.
+            // The email channel: whether it can work right now, and what it has done so far.
+            email: { ...emailStatus },
             inboxRoot: await resolvedInbox(),
             inboxRootDefault: inboxRoot(dshHome),
             inboxRootConfig: typeof config.inboxDir === "string" ? config.inboxDir : null,
