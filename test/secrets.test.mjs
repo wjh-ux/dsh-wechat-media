@@ -145,5 +145,15 @@ test("every secret path is masked by publicPrefs", async () => {
   }
 });
 
+test("a block with two secrets masks both, not just the last one", async () => {
+  // The loop copied { ...source } each time, so the second email field restored the first to plaintext. One secret per block had hidden it.
+  const { maskSecretPrefs } = await import("../secrets.js");
+  const safe = maskSecretPrefs({ email: { smtpPass: "smtp-secret", imapPass: "imap-secret", user: "a@b.c" } });
+  assert.equal(safe.email.smtpPass, "***", "smtpPass must stay masked");
+  assert.equal(safe.email.imapPass, "***", "imapPass must be masked");
+  assert.equal(safe.email.user, "a@b.c", "and nothing else is touched");
+  assert.ok(!JSON.stringify(safe).includes("smtp-secret"), "no plaintext anywhere in the payload");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

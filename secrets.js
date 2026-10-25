@@ -61,7 +61,9 @@ export function maskSecretPrefs(prefs, paths = SECRET_PATHS) {
   for (const [group, field] of paths) {
     const source = prefs?.[group];
     if (!source || typeof source !== "object") continue;
-    const copy = { ...source };
+    // Copy from the accumulating result, not from `source`: a block with two secrets would otherwise have its first field restored to
+    // plaintext by the second iteration. Email is the first such block.
+    const copy = safe[group] && typeof safe[group] === "object" ? { ...safe[group] } : { ...source };
     if (field in copy) copy[field] = copy[field] ? "***" : "";
     safe[group] = copy;
   }

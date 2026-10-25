@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.6
+
+- **The mask helper un-masked what the previous line had just masked.** `maskSecretPrefs` copied `{ ...source }` from the *original*
+  prefs on every iteration, so a block holding two secrets had its first field restored to plaintext by the second: email's `smtpPass`
+  came back in the clear from `/state` while `imapPass` was `***`. One secret per block had hidden this since the first release.
+- Each iteration copies from the accumulating result now, and a test pins the two-secrets case explicitly (both masked, nothing else
+  touched, no plaintext anywhere in the payload).
+- 46 suites / 730 cases.
+
 ## 1.6.5
 
 - **`GET /state` echoed both email passwords in the clear.** `publicPrefs` masked secrets with a **hand-written list per channel**
