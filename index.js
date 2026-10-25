@@ -105,6 +105,8 @@ import * as tasks from "./tasks.js";
 import * as office from "./office.js";
 import { openSessionAgent } from "./session.js";
 import { COMMANDS, STOP_REASON, commandHelpText, helpText, parseCommand, parseSwitch, parseWindowDays, statusText, unknownCommandText } from "./commands.js";
+import { emailAccountId, emailReadiness, normalizeEmailPrefs, describeForModel as describeEmailForModel, messageKey, parseMail, replySubject, senderAllowed, threadHeaders } from "./email.js";
+import { buildMail, imapFetch, imapMarkSeen, smtpSend } from "./email-wire.js";
 import { clampWindowDays, summarize, summaryLine, tokensReport, usageDisagreement } from "./tokens.js";
 import * as wecom from "./wecom.js";
 import { FeishuLongConnection } from "./feishu-ws.js";
@@ -1571,6 +1573,7 @@ export function apply(ctx, config = {}) {
     const id = String(accountId ?? "");
     if (id.startsWith("wecom")) return "wecom";
     if (id.startsWith("feishu")) return "feishu";
+    if (id.startsWith("email:")) return "email";
     if (id) return "wechat";
     return "unknown";
   }
@@ -2369,6 +2372,7 @@ export function apply(ctx, config = {}) {
         // command is for, and the bot's state is one of the few visible failure signals.
         bot: wecomBotStatus,
         qq: qqStatus,
+      email: { ...emailStatus },
         pendingApprovals: approvals.list().filter((waiting) => waiting.accountId === accountId && waiting.chatId === chatId).length,
         friendOnly: (await state.loadPrefs()).friendOnly === true,
         interject: (await state.loadPrefs()).interject === true,
@@ -3214,6 +3218,89 @@ export function apply(ctx, config = {}) {
       noteRoute("/command", { command: "name", transport, name: saved?.name ?? wanted });
       return true;
     }
+    if (command.name === "email") {
+      const arg = String(command.args ?? "").trim();
+      const prefs = await state.loadPrefs();
+      const email = prefs?.email ?? {};
+      const reason = emailReadiness(prefs);
+      const lines = [
+        `邮件通道：${email.enabled === true ? "开" : "关"}`,
+        `  邮箱：${email.user || "（未填）"}`,
+        `  SMTP：${email.smtpHost || "（未填）"}:${email.smtpPort ?? "?"} · IMAP：${email.imapHost || "（未填）"}:${email.imapPort ?? "?"}`,
+        `  轮询：${email.pollSeconds ?? 60}s · 已处理 ${emailStatus.handled ?? 0} · 已跳过 ${emailStatus.skipped ?? 0}`,
+        `  允许发件人：${(email.allowSenders ?? []).join("、") || "（空 = 谁都不回）"}`,
+        reason ? `  ⚠️ ${reason}` : "  ✅ 可以收邮件",
+      ].join("\n");
+
+      if (!arg || arg === "status" || arg === "状态") {
+        await reply(lines);
+        return true;
+      }
+      if (arg === "list" || arg === "列表") {
+        await reply((email.allowSenders ?? []).length ? (email.allowSenders ?? []).map((address) => `  · ${address}`).join("\n") : "允许发件人为空 —— 谁都不回");
+        return true;
+      }
+      if (arg === "on" || arg === "off") {
+        const enabled = arg === "on";
+        if (enabled && reason && reason !== "邮件通道未开启") {
+          await reply(`还不能开：${reason}`);
+          return true;
+        }
+        await state.savePrefs({ email: { ...email, enabled } });
+        startEmail();
+        await reply(enabled ? `邮件通道已开启（每 ${email.pollSeconds ?? 60}s 收一次）` : "邮件通道已关闭");
+        return true;
+      }
+      if (arg === "check" || arg === "收") {
+        const result = await pollEmailOnce();
+        await reply(result.ok ? `已收一次：新邮件 ${result.messages ?? 0} 封，处理 ${result.handled ?? 0} 封` : `收信失败：${result.error}`);
+        return true;
+      }
+      if (arg.startsWith("test") || arg.startsWith("测试")) {
+        if (reason) {
+          await reply(`还不能发：${reason}`);
+          return true;
+        }
+        const to = arg.replace(/^test|^测试/, "").trim() || (email.allowSenders ?? [])[0] || email.user;
+        try {
+          await smtpSend({
+            host: email.smtpHost,
+            port: Number(email.smtpPort),
+            secure: email.smtpSecure !== false,
+            user: email.user,
+            pass: email.smtpPass,
+            mail: {
+              from: email.user,
+              to,
+              payload: buildMail({ from: email.user, to, subject: "dsh-wechat-media 邮件通道自测", text: `来自聊天命令的自测邮件（${new Date().toISOString()}）` }),
+            },
+          });
+          await reply(`✅ 自测邮件已发出：${to}`);
+        } catch (error) {
+          await reply(`❌ 自测失败：${error?.message ?? error}`);
+        }
+        return true;
+      }
+      if (arg.startsWith("allow ") || arg.startsWith("remove ")) {
+        const [verb, ...rest] = arg.split(/\s+/);
+        const address = rest.join(" ").trim().toLowerCase();
+        const normalized = normalizeEmailPrefs({ ...email, allowSenders: [address] });
+        if (normalized.error) {
+          await reply(normalized.error);
+          return true;
+        }
+        const target = normalized.value.allowSenders[0] ?? address;
+        const current = new Set(email.allowSenders ?? []);
+        if (verb === "allow") current.add(target);
+        else current.delete(target);
+        await state.savePrefs({ email: { ...email, allowSenders: [...current] } });
+        await reply(`${verb === "allow" ? "已允许" : "已移除"}：${target}\n现在允许 ${current.size} 个发件人`);
+        return true;
+      }
+      await reply(`不认识的用法：${arg}\n\n${lines}`);
+      return true;
+    }
+
     if (command.name === "qq") {
       // The credentials live in the card (or /prefs); this command is the switch and the honest status.
       const prefs = await state.loadPrefs();
@@ -4009,6 +4096,156 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return bot;
   }
 
+  /** Message ids already handled, so a re-fetch cannot start a turn twice. */
+  let emailSeen = new Set();
+  let emailPoller = null;
+  let emailStatus = { lastPollAt: 0, lastError: "", handled: 0, skipped: 0, ready: false };
+
+  /**
+   * Poll the mailbox and hand every allowed message to the agent.
+   *
+   * The order matters and is deliberate: fetch with PEEK, decide, run the turn, then mark seen. Marking first would lose a message if
+   * the turn crashed; deciding first means a stranger's mail is never marked read either, so the person still sees it in their client.
+   */
+  async function pollEmailOnce() {
+    const prefs = await state.loadPrefs();
+    const email = prefs?.email ?? {};
+    const reason = emailReadiness(prefs);
+    emailStatus = { ...emailStatus, ready: !reason, reason };
+    if (reason) return { ok: false, error: reason };
+
+    let fetched;
+    try {
+      fetched = await imapFetch({
+        host: email.imapHost,
+        port: Number(email.imapPort),
+        secure: email.imapSecure !== false,
+        user: email.user,
+        pass: email.imapPass,
+        folder: email.folder || "INBOX",
+        limit: 5,
+      });
+    } catch (error) {
+      emailStatus = { ...emailStatus, lastError: String(error?.message ?? error), lastPollAt: Date.now() };
+      ctx.logger?.warn?.("[dsh-wechat-media] email fetch failed: %s", error?.message ?? error);
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+
+    emailStatus = { ...emailStatus, lastPollAt: Date.now(), lastError: "" };
+    const handled = [];
+    for (const message of fetched.messages) {
+      const parsed = parseMail(message.raw);
+      const key = messageKey(parsed);
+      if (emailSeen.has(key)) continue;
+      emailSeen.add(key);
+      if (emailSeen.size > 500) emailSeen = new Set([...emailSeen].slice(-250));
+
+      // Our own outgoing mail comes back through the same mailbox when the person replies to themselves.
+      if (parsed.from && parsed.from === String(email.user ?? "").toLowerCase()) continue;
+
+      const verdict = senderAllowed(prefs, parsed.from);
+      if (!verdict.allowed) {
+        emailStatus = { ...emailStatus, skipped: emailStatus.skipped + 1 };
+        ctx.logger?.info?.("[dsh-wechat-media] email from %s ignored (%s)", parsed.from, verdict.reason);
+        continue;
+      }
+
+      const accountId = emailAccountId(email.user);
+      try {
+        await handleEmailInbound(accountId, parsed, message.uid, email);
+        handled.push(message.uid);
+        emailStatus = { ...emailStatus, handled: emailStatus.handled + 1 };
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] email turn failed for %s: %s", parsed.from, error?.message ?? error);
+      }
+    }
+
+    // Only now are they marked read: a crash above leaves them unread and they come back next poll.
+    if (handled.length) {
+      try {
+        await imapMarkSeen({
+          host: email.imapHost,
+          port: Number(email.imapPort),
+          secure: email.imapSecure !== false,
+          user: email.user,
+          pass: email.imapPass,
+          ids: handled,
+        });
+      } catch (error) {
+        ctx.logger?.warn?.("[dsh-wechat-media] email mark-seen failed: %s", error?.message ?? error);
+      }
+    }
+    return { ok: true, messages: fetched.messages.length, handled: handled.length };
+  }
+
+  /** One mail -> one turn -> one reply, threaded to the question. */
+  async function handleEmailInbound(accountId, parsed, uid, email) {
+    const sender = parsed.from;
+    const peerName = parsed.fromName || sender;
+    const { agent, sessionId } = await ensureAgent(accountId, sender, peerName);
+    const prompt = describeEmailForModel(parsed);
+    const message = await userMessage(prompt);
+    const waiting = collectors.wait(sessionId, message?.id);
+    await agent.followup(message);
+    const outcome = await waiting;
+    if (outcome?.error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] email turn for %s ended with %s", sender, outcome.error);
+    }
+    const plain = (await state.loadPrefs()).format !== "raw";
+    const bodyText = outcome?.text ? (plain ? chatBody(outcome.text) : outcome.text) : "";
+    const prefsNow = await state.loadPrefs();
+    if (!bodyText || prefsNow?.email?.autoReply === false) return;
+    const chunks = chunkText(bodyText);
+    const headers = threadHeaders(parsed);
+    for (const [index, chunk] of chunks.entries()) {
+      await smtpSend({
+        host: email.smtpHost,
+        port: Number(email.smtpPort),
+        secure: email.smtpSecure !== false,
+        user: email.user,
+        pass: email.smtpPass,
+        mail: {
+          from: email.user,
+          to: sender,
+          payload: buildMail({
+            from: email.user,
+            to: sender,
+            subject: replySubject(parsed.subject) + (chunks.length > 1 ? ` (${index + 1}/${chunks.length})` : ""),
+            text: chunk,
+            headers,
+          }),
+        },
+      });
+    }
+    void uid;
+  }
+
+  /** Start or restart the poller according to the saved prefs. */
+  function startEmail() {
+    if (emailPoller) {
+      clearInterval(emailPoller);
+      emailPoller = null;
+    }
+    void (async () => {
+      const prefs = await state.loadPrefs();
+      if (prefs?.email?.enabled !== true) {
+        emailStatus = { ...emailStatus, ready: false, reason: "邮件通道未开启" };
+        return;
+      }
+      const seconds = Math.min(600, Math.max(15, Number(prefs.email.pollSeconds) || 60));
+      emailPoller = setInterval(() => {
+        void pollEmailOnce();
+      }, seconds * 1000);
+      // One immediate pass, so enabling the channel shows a result without waiting for the first interval.
+      void pollEmailOnce();
+    })();
+  }
+
+  function stopEmail() {
+    if (emailPoller) clearInterval(emailPoller);
+    emailPoller = null;
+  }
+
   /** One inbound QQ message -> one turn -> one reply, quoted to the message that caused it. */
   async function handleQQInbound(accountId, message) {
     if (!message?.messageId) return;
@@ -4352,9 +4589,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       void startQQ();
       return () => stopQQ();
     }, "dsh-wechat-media: qq bot");
+    // Email is a poll, not a socket: the interval starts here and is rebuilt whenever the block is saved.
+    ctx.effect(() => {
+      startEmail();
+      return () => stopEmail();
+    }, "dsh-wechat-media: email poller");
   } else {
     void startWecomBot();
     void startQQ();
+    startEmail();
   }
 
   // ── Feishu (飞书 / Lark) ─────────────────────────────────────────────────────
@@ -9924,6 +10167,24 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               ...(clientSecret ? { clientSecret } : {}),
             };
           }
+          // Email: one validated block. The passwords are sealed like every other credential, and a masked value means
+          // "keep the stored one" (the card never receives the real one back).
+          let restartEmail = null;
+          if (body.email !== undefined) {
+            const source = typeof body.email === "string" ? JSON.parse(body.email) : body.email;
+            const normalized = normalizeEmailPrefs(source);
+            if (normalized.error) return json(res, 400, { ok: false, error: normalized.error });
+            const previous = (await state.loadPrefs())?.email ?? {};
+            patch.email = {
+              ...previous,
+              ...normalized.value,
+              // A block that does not carry a password keeps the sealed one.
+              ...(normalized.value.smtpPass ? { smtpPass: normalized.value.smtpPass } : {}),
+              ...(normalized.value.imapPass ? { imapPass: normalized.value.imapPass } : {}),
+            };
+            restartEmail = true;
+          }
+
           // Multi-agent: one switch, per-chat presets live on the peer record.
           if (body.multiAgent !== undefined) {
             const source = typeof body.multiAgent === "string" ? JSON.parse(body.multiAgent) : body.multiAgent;
@@ -10063,6 +10324,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const prefs = await state.savePrefs(patch);
           // Fire-and-forget: connecting must not delay the response the card is waiting for.
           restartQQ?.();
+          if (restartEmail) startEmail();
           // The response names anything in the body that was not understood, so a typo cannot look like success.
           json(res, 200, { ok: true, prefs: publicPrefs(prefs), ...(unknownFields.length ? { ignored: unknownFields } : {}) });
         },
@@ -10470,6 +10732,71 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
             ms: Date.now() - started,
             inboundError: wecomInboundError,
           });
+        },
+      },
+      {
+        /**
+         * The email channel: state, a test send, and a manual poll.
+         *
+         * The test send is the important half: a mail bridge fails at the two things a form cannot prove - whether the provider accepts
+         * the credentials, and whether the message actually leaves. `check` exists because waiting up to ten minutes for the next poll
+         * makes "did I configure it right?" unanswerable.
+         */
+        kind: "exact",
+        path: "/dsh-wechat-media/email",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST" && req.method !== "GET") return json(res, 405, { error: "GET or POST only" });
+          const prefs = await state.loadPrefs();
+          const email = prefs?.email ?? {};
+          const reason = emailReadiness(prefs);
+          if (req.method === "GET") {
+            return json(res, 200, {
+              ok: true,
+              email,
+              ready: !reason,
+              reason,
+              status: emailStatus,
+            });
+          }
+          const body = await readArgs(req);
+          const action = String(body.action ?? "status");
+          if (action === "status") return json(res, 200, { ok: true, email, ready: !reason, reason, status: emailStatus });
+
+          if (action === "test") {
+            if (reason) return json(res, 400, { ok: false, error: reason });
+            const to = String(body.to ?? "").trim() || email.allowSenders?.[0] || email.user;
+            try {
+              await smtpSend({
+                host: email.smtpHost,
+                port: Number(email.smtpPort),
+                secure: email.smtpSecure !== false,
+                user: email.user,
+                pass: email.smtpPass,
+                mail: {
+                  from: email.user,
+                  to,
+                  payload: buildMail({
+                    from: email.user,
+                    to,
+                    subject: "dsh-wechat-media 邮件通道自测",
+                    text: `这是一条来自 dsh-wechat-media 的自测邮件。\n\n发件通道：smtp（${email.smtpHost}:${email.smtpPort}）\n收件通道：imap（${email.imapHost}:${email.imapPort}）\n时间：${new Date().toISOString()}`,
+                  }),
+                },
+              });
+              noteRoute("/email", { action, to });
+              return json(res, 200, { ok: true, sent: true, to });
+            } catch (error) {
+              return json(res, 502, { ok: false, error: String(error?.message ?? error) });
+            }
+          }
+
+          if (action === "check") {
+            const result = await pollEmailOnce();
+            noteRoute("/email", { action });
+            return json(res, result.ok ? 200 : 502, { ...result, status: emailStatus });
+          }
+          return json(res, 400, { ok: false, error: `未知 action：${action}（status / test / check）` });
         },
       },
       {

@@ -176,6 +176,12 @@ window.__ModuleLoader__.load({
           qqSave: "Save and connect",
           qqStatus: "connection",
           qqReconnect: "Reconnect now",
+          emailTitle: "Email channel",
+          emailEnable: "Receive mail and answer it",
+          emailUser: "mailbox address",
+          emailSend: "Send a test mail",
+          emailCheck: "Fetch now",
+          emailAllow: "allowed senders (comma separated; empty = nobody)",
           qqReconnecting: "reconnecting",
           qqRetryIn: "retry in",
           qqAttempts: "attempts",
@@ -351,6 +357,12 @@ window.__ModuleLoader__.load({
           qqSave: "保存并连接",
           qqStatus: "连接状态",
           qqReconnect: "重新连接",
+          emailTitle: "邮件通道",
+          emailEnable: "接收邮件并回复",
+          emailUser: "邮箱地址",
+          emailSend: "发一封自测邮件",
+          emailCheck: "立即收一次",
+          emailAllow: "允许的发件人（逗号分隔；空 = 谁都不回）",
           qqReconnecting: "重连中",
           qqRetryIn: "后重试",
           qqAttempts: "次",
@@ -503,6 +515,15 @@ window.__ModuleLoader__.load({
         const [qqAppId, setQqAppId] = react.useState(undefined);
         const [qqSecret, setQqSecret] = react.useState("");
         const [qqSandbox, setQqSandbox] = react.useState(undefined);
+        // Email fields as typed; undefined = follow /state until edited. The passwords never come back from the host.
+        const [emailUser, setEmailUser] = react.useState(undefined);
+        const [emailSmtpHost, setEmailSmtpHost] = react.useState(undefined);
+        const [emailSmtpPort, setEmailSmtpPort] = react.useState(undefined);
+        const [emailImapHost, setEmailImapHost] = react.useState(undefined);
+        const [emailImapPort, setEmailImapPort] = react.useState(undefined);
+        const [emailSmtpPass, setEmailSmtpPass] = react.useState("");
+        const [emailImapPass, setEmailImapPass] = react.useState("");
+        const [emailAllow, setEmailAllow] = react.useState(undefined);
         // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
         const [wizardStep, setWizardStep] = react.useState(0);
         // The result of the wizard's test message: undefined = not tried yet.
@@ -824,6 +845,47 @@ window.__ModuleLoader__.load({
           setBusy(true);
           try {
             await api("/prefs", { method: "POST", body: { multiAgent: { enabled } } });
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function saveEmail(patch) {
+          setBusy(true);
+          try {
+            const current = snapshot?.prefs?.email ?? {};
+            const next = {
+              enabled: current.enabled === true,
+              user: emailUser ?? current.user ?? "",
+              smtpHost: emailSmtpHost ?? current.smtpHost ?? "",
+              smtpPort: Number(emailSmtpPort ?? current.smtpPort ?? 465),
+              imapHost: emailImapHost ?? current.imapHost ?? "",
+              imapPort: Number(emailImapPort ?? current.imapPort ?? 993),
+              folder: current.folder ?? "INBOX",
+              pollSeconds: Number(current.pollSeconds ?? 60),
+              allowSenders: String(emailAllow ?? (current.allowSenders ?? []).join(",")).split(/[\s,;]+/).filter(Boolean),
+              ...(emailSmtpPass ? { smtpPass: emailSmtpPass } : {}),
+              ...(emailImapPass ? { imapPass: emailImapPass } : {}),
+              ...patch,
+            };
+            await api("/prefs", { method: "POST", body: { email: next } });
+            setEmailSmtpPass("");
+            setEmailImapPass("");
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        async function emailAction(action) {
+          setBusy(true);
+          try {
+            await api("/email", { method: "POST", body: { action } });
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -1762,6 +1824,71 @@ window.__ModuleLoader__.load({
                 style: { marginLeft: "8px" },
               }, t("qqReconnect", "Reconnect now")),
             ]),
+            h("div", { key: "email-title", className: "dswxRow" }, [h("b", { key: "t" }, t("emailTitle", "Email channel"))]),
+            h("div", { key: "email-row1", className: "dswxRow" }, [
+              h("input", {
+                key: "u", className: "dswxInput", placeholder: t("emailUser", "mailbox address"),
+                value: emailUser ?? snapshot?.prefs?.email?.user ?? "", disabled: busy,
+                onChange: (event) => setEmailUser(event.target.value),
+              }),
+            ]),
+            h("div", { key: "email-row2", className: "dswxRow" }, [
+              h("input", {
+                key: "s", className: "dswxInput", placeholder: "SMTP host",
+                value: emailSmtpHost ?? snapshot?.prefs?.email?.smtpHost ?? "", disabled: busy,
+                onChange: (event) => setEmailSmtpHost(event.target.value),
+              }),
+              h("input", {
+                key: "sp", className: "dswxInput", style: { maxWidth: "88px" },
+                value: String(emailSmtpPort ?? snapshot?.prefs?.email?.smtpPort ?? 465), disabled: busy,
+                onChange: (event) => setEmailSmtpPort(event.target.value),
+              }),
+              h("input", {
+                key: "i", className: "dswxInput", placeholder: "IMAP host",
+                value: emailImapHost ?? snapshot?.prefs?.email?.imapHost ?? "", disabled: busy,
+                onChange: (event) => setEmailImapHost(event.target.value),
+              }),
+              h("input", {
+                key: "ip", className: "dswxInput", style: { maxWidth: "88px" },
+                value: String(emailImapPort ?? snapshot?.prefs?.email?.imapPort ?? 993), disabled: busy,
+                onChange: (event) => setEmailImapPort(event.target.value),
+              }),
+            ]),
+            h("div", { key: "email-row3", className: "dswxRow" }, [
+              h("input", {
+                key: "sp", className: "dswxInput", type: "password", placeholder: "SMTP password",
+                value: emailSmtpPass, disabled: busy, onChange: (event) => setEmailSmtpPass(event.target.value),
+              }),
+              h("input", {
+                key: "ip", className: "dswxInput", type: "password", placeholder: "IMAP password",
+                value: emailImapPass, disabled: busy, onChange: (event) => setEmailImapPass(event.target.value),
+              }),
+            ]),
+            h("div", { key: "email-row4", className: "dswxRow" }, [
+              h("input", {
+                key: "a", className: "dswxInput", placeholder: t("emailAllow", "allowed senders (comma separated; empty = nobody)"),
+                value: emailAllow ?? (snapshot?.prefs?.email?.allowSenders ?? []).join(", "), disabled: busy,
+                onChange: (event) => setEmailAllow(event.target.value),
+              }),
+            ]),
+            h("div", { key: "email-actions", className: "dswxRow" }, [
+              h("label", { key: "l", className: "dswxMeta" }, [
+                h("input", {
+                  key: "c", type: "checkbox", checked: snapshot?.prefs?.email?.enabled === true, disabled: busy,
+                  onChange: (event) => saveEmail({ enabled: event.target.checked }),
+                }),
+                " " + t("emailEnable", "Receive mail and answer it"),
+              ]),
+              h("button", { key: "s", type: "button", className: "dswxBtn", disabled: busy, onClick: () => saveEmail({}) }, t("save", "Save")),
+              h("button", { key: "t", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("test") }, t("emailSend", "Send a test mail")),
+              h("button", { key: "k", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("check") }, t("emailCheck", "Fetch now")),
+            ]),
+            h("div", { key: "email-status", className: "dswxMeta" }, (() => {
+              const status = snapshot?.email;
+              if (!status) return "";
+              const on = snapshot?.prefs?.email?.enabled === true ? "✅ 开" : "⏸ 关";
+              return `${on}${status.reason ? ` · ⚠️ ${status.reason}` : ""}${status.handled ? ` · 已处理 ${status.handled}` : ""}${status.skipped ? ` · 已跳过 ${status.skipped}` : ""}${status.lastError ? ` · ${status.lastError}` : ""}`;
+            })()),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
             // latter - personal WeChat has no way to edit a message that was already sent - and the
             // hint says so rather than letting the option look broken.

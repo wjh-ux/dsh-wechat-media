@@ -1214,5 +1214,15 @@ await test("the QQ route answers status and reconnect, and nothing else", () => 
   assert.match(body, /未知 action/, "and an unknown action is refused rather than ignored");
 });
 
+await test("every route object has kind immediately followed by path", () => {
+  // Twice now a route was inserted before a `path:` line that sits *after* its own `kind:`, which splits the object and is only
+  // caught by the syntax check - not by any test that reads the file as text. This asserts the shape instead: every `kind: "exact",`
+  // must be followed immediately by its own `path:`.
+  const kinds = [...host.matchAll(/kind:\s*"exact",/g)].length;
+  const paired = [...host.matchAll(/kind:\s*"exact",\s*\n\s*path:/g)].length;
+  assert.ok(kinds >= 20, `only ${kinds} routes found - the scan may have missed them`);
+  assert.equal(paired, kinds, `${kinds - paired} route object(s) have a kind with no path right after it (an object was split)`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

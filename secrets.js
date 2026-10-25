@@ -29,6 +29,8 @@ export const SECRET_PATHS = Object.freeze([
   ["feishu", "webhookUrl"],
   // QQ arrived after the sealing mechanism did, so its secret was the one credential written in the clear.
   ["qq", "clientSecret"],
+  ["email", "smtpPass"],
+  ["email", "imapPass"],
 ]);
 
 /**

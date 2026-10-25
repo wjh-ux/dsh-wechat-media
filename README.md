@@ -900,6 +900,24 @@ through (a blocked chat cannot run commands either).
 | `/multiagent` | `/多agent` | The switch for one agent per conversation: `/multiagent on|off`, or no argument for the switch and this chat's preset. **Off by default.** |
 | `/agent` | `/预设` | Lists the agent presets the host exposes, shows which one this chat mounts, `/agent <id>` sets it and `/agent reset` returns to the default. Only takes effect with `/multiagent on`. |
 | `/name` | `/命名` | Renames the chat you are talking in: `/name 老板的群`. A QQ chat's identity is an openid (`A32A7C20…`), so this is the only way a list of chats reads like something a person recognises. `POST /peers` takes the same `name` for any chat. |
+
+### Email
+
+Two directions, two protocols, both written out in `email-wire.js` - the plugin still has **no runtime dependencies**, because adding
+a mail sender and an IMAP client to a process that already holds chat credentials is a large trade for one channel. The clients are
+tested against fake SMTP and IMAP servers in the suite.
+
+- **Receive**: every `pollSeconds` (15–600, default 60) an `IMAP UID SEARCH UNSEEN` plus `BODY.PEEK[]`; the decision is made first and
+  the message is marked read **after** the turn, so a crash leaves it unread and it comes back next round instead of vanishing.
+- **Send**: `SMTP` with `AUTH LOGIN`; a server that does not offer `STARTTLS` is refused rather than handed a password in the clear.
+  Replies carry `In-Reply-To`/`References`, so they land in the same thread.
+- **Who may write**: `allowSenders` empty means **nobody**, not everybody. `*@example.com` domain wildcards work.
+- **Attachments**: named, never downloaded - writing a stranger's file to disk is not this module's decision.
+- **Decoding**: multipart / base64 / quoted-printable / UTF-8 and GB charsets, each with a fallback, so a malformed mail cannot take a
+  turn down.
+
+Passwords are sealed like every other credential (DPAPI on Windows) and never travel back to the card.
+| `/email` | `/邮件`, `/mail` | SMTP sends, IMAP receives. `/email` prints the state, `on`/`off` toggles it, `check` fetches once, `test [address]` sends a self-test mail, `allow <address>` / `remove <address>` maintain the allowed senders. **An empty list means nobody is answered** (email addresses are spoofable, so the default is closed). The card holds SMTP/IMAP hosts, both passwords and the list. |
 | `/qq` | `/QQ` | The QQ bot's switch and status: `/qq on|off`, or no argument for credentials presence, connection state and the last error. Credentials live in the card. |
 | `/scrapling` | `/抓取`, `/scrape` | Scrapling's defaults: `/scrapling proxy <url>`, `/scrapling stealth on|off`, or no argument for the interpreter, proxy and stealth status. The fetching itself is the `scrapling_fetch` tool. |
 | `/serial` | `/串口`, `/flash` | Arms or disarms the serial tools and sets their defaults: `/serial on|off`, `/serial baud 460800`, `/serial port COM3`, and with no argument it reports the switch, the toolchain it found and the ports that are plugged in. **Off by default** - flashing writes a board's flash. |
