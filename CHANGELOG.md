@@ -1,5 +1,124 @@
 # Changelog
 
+## 1.6.2
+
+- **`handled` counted the wrong thing.** A diagnostic run reported `failed: 1` with an OpenSSL `WRONG_VERSION_NUMBER`, which was the
+  **reply delivery** failing against a plaintext fake server (correctly refused: no TLS) *after* the turn had run. Because `handled` only
+  incremented once the whole function finished, a delivery problem read as "the turn did not run". Split now: `handled` = a turn ran,
+  `replies` = a reply was delivered, `lastReplyError` = why delivery failed.
+- A delivery failure names the host and port (`发信失败（SMTP host:port）：…`); the bare OpenSSL line named neither.
+- 46 suites / 727 cases.
+
+## 1.6.1
+
+- **`/state` did not expose the email status.** The patch landed on the wrong `qq: qqStatus` (there are two in the file), so the card's
+  status line had nothing to read even though `/email` returned it.
+- **A failed email turn was invisible**: log only, so the card said "handled: 0" with no reason. Failures are counted and the reason is kept
+  in `emailStatus.lastError`, which `/email` and `/state` both return.
+- 46 suites / 727 cases.
+
+## 1.6.0
+
+- **A new channel: email.** SMTP out, IMAP in, open source. One session per sender, the same collector and commands; `/email` shows the
+  state, toggles it, fetches once, sends a self-test and maintains the allowlist, and the card carries the same controls.
+- **No new dependencies**: both protocols are written against `node:tls` / `node:net` in `email-wire.js` and tested against fake SMTP and
+  IMAP servers. That is how two real defects were caught before release: `smtpSend` wrote nothing but `QUIT` (its helper only read
+  replies), and a non-ASCII subject stayed RFC 2047 encoded so the model saw base64 instead of 备份说明.
+- **Inbound is closed by default**: an empty `allowSenders` means nobody (addresses are spoofable), `*@example.com` wildcards work,
+  fetching uses `BODY.PEEK[]` and marking read happens only after the turn.
+- **STARTTLS or nothing**: a server without it is refused rather than sent a password in the clear.
+- Attachments are named, never downloaded; multipart / base64 / quoted-printable / UTF-8 / GB decode with fallbacks.
+- 46 suites / 727 cases.
+
+## 1.5.17
+
+- **The QQ reconnect state is on the card**, with a button that retries on demand: `重连中 · 8s 后重试 · 次 3 · socket closed`, read from
+  `nextAttemptAt`, `attempts` and `reconnectReason`.
+- New route `POST /dsh-wechat-media/qq` (`status` | `reconnect`); the credentials are already in prefs, so the button rebuilds the
+  gateway connection without them round-tripping through the browser. An unknown action is a 400.
+- 44 suites / 702 cases.
+
+## 1.5.16
+
+- **The QQ bot never came back after a disconnect.** `closed`, `error` and op 7 `reconnect` were logged and forgotten, so a network blip or
+  gateway restart left the bot silent until the app restarted. Now: server-initiated op 7 returns in 300 ms, a dead socket backs off
+  1s → 2s → 4s … capped at 60s, `ready` resets the count, an explicit stop cancels the timer, and a failed handshake retries too.
+- The approval bridge was fuzzed and is sound: a second question in one chat is refused instead of overwriting the first (which would leave
+  a tool call waiting for its full timeout), a timeout clears the map, `onTimeout: "decline"` resolves `rejected`, cancel releases once.
+- 44 suites / 700 cases.
+
+## 1.5.15
+
+- **`/new` during a running turn killed that turn**: it disposes the old conversation handle, so the answer came back empty and the phone
+  showed a reply cut off mid-sentence. It now refuses while a turn is answering and says what to do instead.
+- **A chat that is not on the allowlist got complete silence**, not even `/help` - which is how a whole test run was lost. A blocked direct
+  chat now gets one explanation, remembered per chat for 24 hours.
+- **Interjection verified**: with interject on and a turn streaming, an injected message was steered into that turn (`interjected +1`,
+  decision `steer`), the turn returned its full answer, and nothing failed over.
+- 44 suites / 700 cases.
+
+## 1.5.14
+
+- **A security pass over the access-control surface**, clean: account ids collapse to `[A-Za-z0-9_-]`, so `../escape`, `..\\escape`,
+  `/abs/path` and `C:\\absolute` cannot produce a separator or a traversal; `allowed: null` reads as *not listed*; `allowed: "true"` does
+  not count as allowed.
+- One hardening: an id written entirely in another script (`长号`) normalised to the empty string, so its file would be `accounts/.json`,
+  shared by every such id. Empty and over-long ids get a stable digest suffix.
+- 44 suites / 699 cases.
+
+## 1.5.13
+
+- **`chunkText` could cut a surrogate pair in half**, leaving an invalid character on the wire; the cut now steps back one unit.
+- **A cut could land inside a code fence**, so a chunk showed an opening ``` with no closing one; the seam closes and reopens it.
+- **A one-word timeout was never retried** although `/retry` promises it: the pattern required `timed out`, while the messages that arrive
+  are `timeout after 60000ms` and `request time-out`.
+- 44 suites / 699 cases.
+
+## 1.5.12
+
+- **`{multiAgent:{enabled:"true"}}` returned 200 and stored `false`** - a caller turning the feature on switched it off, because the route
+  compared `=== true`. Booleans now read through `asBool`, and a value that is neither a boolean nor a boolean word is a 400.
+- **An unknown field name returned 200 and was dropped**, so `{"multiagent":…}` looked like success. A near-miss is a 400 naming the
+  suggestion, and a genuinely extra key comes back in `ignored`.
+- 44 suites / 699 cases.
+
+## 1.5.11
+
+- **A failed `POST /inbound` became permanently "duplicate"**, so a retry was dropped: the id was recorded before the turn ran, and a throw
+  left it marked. Recorded after the turn now, and released on failure.
+- **`describeTask` threw on a record without `payload`**, which would take out `/task list`, the panel and the `/tasks` route; the row
+  degrades instead.
+- The past-`once` behaviour was checked and is correct: a late one-off fires once, immediately, and is not fired twice.
+- 44 suites / 698 cases.
+
+## 1.5.10
+
+- The scheduler fuzz found `describeTask` throwing on a half-built record (fixed in the same area as 1.5.11) and confirmed the rest of the
+  arithmetic: `daily` is exactly 24h, `every 30m` exactly 30 minutes, `weekly mon` lands on Monday, invalid times are refused with a reason.
+- 44 suites / 697 cases.
+
+## 1.5.9
+
+- **Concurrent `/prefs` writes lost each other.** `savePrefs` is a read-modify-write over one JSON file, so two calls in flight both read
+  the old file and the later write discarded the earlier field - measured with ten parallel requests: **seven of ten fields ended up at
+  their previous values**. Saves are chained through a queue now, and a temp-root test proves ten concurrent patches all survive.
+- The same round checked and cleared: 500-character names truncated to 80, emoji paths accepted, 1 MB and 200 KB payloads refused, `/tokens`
+  clamping, and nonsense schedules and task actions refused.
+- 44 suites / 697 cases.
+
+## 1.5.8
+
+- **`scripts/` now ships with the package.** 1.5.7 put the acceptance scripts in the repository but not in `files[]`, so an installed copy
+  had no `scripts/bug-hunt.mjs` - and the release verifier did not notice, because it only checks what `files[]` claims.
+- 44 suites / 696 cases.
+
+## 1.5.7
+
+- **The acceptance scripts now ship**: `scripts/bug-hunt.mjs` (offline fuzz plus, with `--live`, hostile HTTP against the running plugin;
+  every live check is a read or an expected 4xx) and `scripts/verify-release.mjs` (work tree vs GitHub `main` vs the installed copy,
+  restricted to `files[]`). Exit code 1 gates a release.
+- 44 suites / 696 cases.
+
 ## 1.5.9
 
 - **Concurrent `/prefs` writes lost each other.** `savePrefs` is a read-modify-write over one JSON file, so two calls in flight
