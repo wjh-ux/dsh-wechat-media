@@ -145,6 +145,7 @@ import {
 import { WecomBot, describeBotMessage, generateReqId, markdownBody, splitForStream, streamBody } from "./wecom-bot.js";
 import { QQLongConnection, QQTokenCache, destinationFor, sendQQMessage } from "./qq-bot.js";
 import { normalizeAccountId, WechatState, defaultStateRoot } from "./state.js";
+import { SECRET_PATHS, maskSecretPrefs } from "./secrets.js";
 
 /** Long-poll budget the platform advertises; used until it tells us otherwise. */
 const DEFAULT_POLL_MS = 35_000;
@@ -4770,7 +4771,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
    * deleted, so a reader can still see that something is saved.
    */
   function publicPrefs(prefs = {}) {
-    const safe = { ...prefs };
+    // Every sealed path is masked by the store's own list; the per-channel blocks below cover keys that are not sealed.
+    const safe = maskSecretPrefs(prefs);
+    // One source of truth for "where the secrets are": the same list the store uses to seal them. A per-channel hand-written list is how
+    // the email passwords came back in the clear for a day.
     const feishu = prefs?.feishu && typeof prefs.feishu === "object" ? { ...prefs.feishu } : undefined;
     if (feishu) {
       for (const key of ["appSecret", "secret", "verificationToken", "encryptKey"]) {

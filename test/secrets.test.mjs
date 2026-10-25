@@ -130,5 +130,20 @@ await test("the secret table covers the QQ client secret and the top-level webho
   assert.equal(encryptSecrets(sealed, (value) => `dpapi:${value}`).webhookSecret, "dpapi:s");
 });
 
+test("every secret path is masked by publicPrefs", async () => {
+  // 1.6.5: the email passwords came back in the clear from /state, because publicPrefs kept a hand-written list per channel and the email
+  // block was added without one. The masking loop now reads the store's own SECRET_PATHS; this test walks that list.
+  const { maskSecretPrefs, SECRET_PATHS } = await import("../secrets.js");
+  const prefs = {};
+  for (const [group, field] of SECRET_PATHS) {
+    prefs[group] = { ...(prefs[group] ?? {}), [field]: "super-secret-value" };
+  }
+  const safe = maskSecretPrefs(prefs);
+  for (const [group, field] of SECRET_PATHS) {
+    assert.equal(safe[group][field], "***", `${group}.${field} must be masked`);
+    assert.ok(!JSON.stringify(safe).includes("super-secret-value"), `${group}.${field} leaked somewhere in the payload`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

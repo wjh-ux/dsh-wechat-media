@@ -2,6 +2,9 @@
 // (wjh-ux/dsh-mcp-tavily, index.js), so these assertions pin the contract this bridge must keep.
 import assert from "node:assert/strict";
 
+// publicPrefs masks through the store's own list; this test evaluates its source, so the helper must be in scope.
+import { maskSecretPrefs } from "../secrets.js";
+
 const { tavilyHeaders, tavilyErrorText, tavilySearch, formatTavilyResults, TAVILY_HOST, TAVILY_SEARCH_DEPTHS } = await import("../tavily.js");
 
 const passed = [];
@@ -104,6 +107,7 @@ await test("the Tavily key is redacted by every reader, including when no Feishu
   const start = host.indexOf("function publicPrefs");
   assert.ok(start > 0, "publicPrefs exists");
   const body = host.slice(start, host.indexOf("\n  }", start) + 4);
+  // publicPrefs masks through the store's own list now; the helper comes from the top-of-file import.
   const publicPrefs = eval(`(${body})`);
   const withFeishu = publicPrefs({ tavily: { apiKey: "tvly-secret" }, feishu: { appSecret: "x" } });
   assert.equal(withFeishu.tavily.apiKey, "***", "the Tavily key is masked");

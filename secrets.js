@@ -50,6 +50,27 @@ export function isEncrypted(value) {
  * Pure, and only ever replaces values that exist: adding a `feishu.appSecret` key to a prefs object that
  * has no Feishu block would make the host think Feishu is half-configured.
  */
+/**
+ * A copy of `prefs` with every sealed path replaced by `***`.
+ *
+ * This is the readable projection every route returns. It lives here, next to `SECRET_PATHS`, because a second hand-written list in the
+ * route layer is how the email passwords came back in the clear for a day: the store knew about them, the redaction did not.
+ */
+export function maskSecretPrefs(prefs, paths = SECRET_PATHS) {
+  const safe = { ...(prefs && typeof prefs === "object" ? prefs : {}) };
+  for (const [group, field] of paths) {
+    const source = prefs?.[group];
+    if (!source || typeof source !== "object") continue;
+    const copy = { ...source };
+    if (field in copy) copy[field] = copy[field] ? "***" : "";
+    safe[group] = copy;
+  }
+  for (const field of TOP_LEVEL_SECRETS) {
+    if (field in safe) safe[field] = safe[field] ? "***" : "";
+  }
+  return safe;
+}
+
 export function mapSecrets(prefs, transform, paths = SECRET_PATHS) {
   const copy = { ...(prefs ?? {}) };
   for (const [section, field] of paths) {
