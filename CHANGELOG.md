@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.4
+
+- **The email fields could not be typed into.** They were controlled inputs (alue from useState) inside the card, and the card
+  re-renders whenever /state refreshes - so every keystroke was overwritten by the next render and the boxes looked locked. They are
+  uncontrolled now, writing into a draft held on globalThis (which also survives a re-mount), and saveEmail reads that draft. The
+  passwords are cleared from it once a save succeeds.
+- 46 suites / 728 cases.
+
 ## 1.6.3
 
 - **The email channel is in the Web UI dashboard too.** /dashboard (the script-free page the card links to) listed every channel

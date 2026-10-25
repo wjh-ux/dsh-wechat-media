@@ -115,6 +115,19 @@ window.__ModuleLoader__.load({
      */
     const inject = ["slots", "locale"];
 
+/**
+ * The typed email values, held outside React so a re-render cannot wipe the box.
+ *
+ * On globalThis on purpose: the host can re-mount the card, and an object there survives that while a closure would not.
+ */
+function emailDraftRef() {
+  const key = "__dshWechatEmailDraft";
+  const scope = typeof globalThis === "object" ? globalThis : {};
+  if (!scope[key]) {
+    scope[key] = { user: "", smtpHost: "", smtpPort: "", imapHost: "", imapPort: "", smtpPass: "", imapPass: "", allow: "" };
+  }
+  return scope[key];
+}
     function apply(ctx) {
       ctx.effect(() => injectCss(), "dsh-wechat-media css");
       ctx.effect(() => ctx.locale.register(LOCALE_NS, {
@@ -515,6 +528,12 @@ window.__ModuleLoader__.load({
         const [qqAppId, setQqAppId] = react.useState(undefined);
         const [qqSecret, setQqSecret] = react.useState("");
         const [qqSandbox, setQqSandbox] = react.useState(undefined);
+        /**
+         * Email fields as typed, kept outside React state on purpose: a re-render (the card refreshes with /state) must not wipe what is
+         * in the box, and a re-mount re-creates the input with this as its default. Controlled inputs here looked "locked" - every
+         * keystroke was overwritten by the next refresh.
+         */
+        const emailDraft = emailDraftRef();
         // Email fields as typed; undefined = follow /state until edited. The passwords never come back from the host.
         const [emailUser, setEmailUser] = react.useState(undefined);
         const [emailSmtpHost, setEmailSmtpHost] = react.useState(undefined);
@@ -859,21 +878,22 @@ window.__ModuleLoader__.load({
             const current = snapshot?.prefs?.email ?? {};
             const next = {
               enabled: current.enabled === true,
-              user: emailUser ?? current.user ?? "",
-              smtpHost: emailSmtpHost ?? current.smtpHost ?? "",
-              smtpPort: Number(emailSmtpPort ?? current.smtpPort ?? 465),
-              imapHost: emailImapHost ?? current.imapHost ?? "",
-              imapPort: Number(emailImapPort ?? current.imapPort ?? 993),
+              user: (emailDraft.user || current.user || "").trim(),
+              smtpHost: (emailDraft.smtpHost || current.smtpHost || "").trim(),
+              smtpPort: Number(emailDraft.smtpPort || current.smtpPort || 465),
+              imapHost: (emailDraft.imapHost || current.imapHost || "").trim(),
+              imapPort: Number(emailDraft.imapPort || current.imapPort || 993),
               folder: current.folder ?? "INBOX",
               pollSeconds: Number(current.pollSeconds ?? 60),
-              allowSenders: String(emailAllow ?? (current.allowSenders ?? []).join(",")).split(/[\s,;]+/).filter(Boolean),
-              ...(emailSmtpPass ? { smtpPass: emailSmtpPass } : {}),
-              ...(emailImapPass ? { imapPass: emailImapPass } : {}),
+              allowSenders: String(emailDraft.allow || (current.allowSenders ?? []).join(",")).split(/[\s,;]+/).filter(Boolean),
+              ...(emailDraft.smtpPass ? { smtpPass: emailDraft.smtpPass } : {}),
+              ...(emailDraft.imapPass ? { imapPass: emailDraft.imapPass } : {}),
               ...patch,
             };
             await api("/prefs", { method: "POST", body: { email: next } });
-            setEmailSmtpPass("");
-            setEmailImapPass("");
+            // The passwords must not linger in the page after a successful save.
+            emailDraft.smtpPass = "";
+            emailDraft.imapPass = "";
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
@@ -1828,47 +1848,47 @@ window.__ModuleLoader__.load({
             h("div", { key: "email-row1", className: "dswxRow" }, [
               h("input", {
                 key: "u", className: "dswxInput", placeholder: t("emailUser", "mailbox address"),
-                value: emailUser ?? snapshot?.prefs?.email?.user ?? "", disabled: busy,
-                onChange: (event) => setEmailUser(event.target.value),
+                defaultValue: emailDraft.user || snapshot?.prefs?.email?.user || "", disabled: busy,
+                onChange: (event) => { emailDraft.user = event.target.value; },
               }),
             ]),
             h("div", { key: "email-row2", className: "dswxRow" }, [
               h("input", {
                 key: "s", className: "dswxInput", placeholder: "SMTP host",
-                value: emailSmtpHost ?? snapshot?.prefs?.email?.smtpHost ?? "", disabled: busy,
-                onChange: (event) => setEmailSmtpHost(event.target.value),
+                defaultValue: emailDraft.smtpHost || snapshot?.prefs?.email?.smtpHost || "", disabled: busy,
+                onChange: (event) => { emailDraft.smtpHost = event.target.value; },
               }),
               h("input", {
                 key: "sp", className: "dswxInput", style: { maxWidth: "88px" },
-                value: String(emailSmtpPort ?? snapshot?.prefs?.email?.smtpPort ?? 465), disabled: busy,
-                onChange: (event) => setEmailSmtpPort(event.target.value),
+                defaultValue: emailDraft.smtpPort || String(snapshot?.prefs?.email?.smtpPort ?? 465), disabled: busy,
+                onChange: (event) => { emailDraft.smtpPort = event.target.value; },
               }),
               h("input", {
                 key: "i", className: "dswxInput", placeholder: "IMAP host",
-                value: emailImapHost ?? snapshot?.prefs?.email?.imapHost ?? "", disabled: busy,
-                onChange: (event) => setEmailImapHost(event.target.value),
+                defaultValue: emailDraft.imapHost || snapshot?.prefs?.email?.imapHost || "", disabled: busy,
+                onChange: (event) => { emailDraft.imapHost = event.target.value; },
               }),
               h("input", {
                 key: "ip", className: "dswxInput", style: { maxWidth: "88px" },
-                value: String(emailImapPort ?? snapshot?.prefs?.email?.imapPort ?? 993), disabled: busy,
-                onChange: (event) => setEmailImapPort(event.target.value),
+                defaultValue: emailDraft.imapPort || String(snapshot?.prefs?.email?.imapPort ?? 993), disabled: busy,
+                onChange: (event) => { emailDraft.imapPort = event.target.value; },
               }),
             ]),
             h("div", { key: "email-row3", className: "dswxRow" }, [
               h("input", {
                 key: "sp", className: "dswxInput", type: "password", placeholder: "SMTP password",
-                value: emailSmtpPass, disabled: busy, onChange: (event) => setEmailSmtpPass(event.target.value),
+                defaultValue: emailDraft.smtpPass, disabled: busy, onChange: (event) => { emailDraft.smtpPass = event.target.value; },
               }),
               h("input", {
                 key: "ip", className: "dswxInput", type: "password", placeholder: "IMAP password",
-                value: emailImapPass, disabled: busy, onChange: (event) => setEmailImapPass(event.target.value),
+                defaultValue: emailDraft.imapPass, disabled: busy, onChange: (event) => { emailDraft.imapPass = event.target.value; },
               }),
             ]),
             h("div", { key: "email-row4", className: "dswxRow" }, [
               h("input", {
                 key: "a", className: "dswxInput", placeholder: t("emailAllow", "allowed senders (comma separated; empty = nobody)"),
-                value: emailAllow ?? (snapshot?.prefs?.email?.allowSenders ?? []).join(", "), disabled: busy,
-                onChange: (event) => setEmailAllow(event.target.value),
+                defaultValue: emailDraft.allow || (snapshot?.prefs?.email?.allowSenders ?? []).join(", "), disabled: busy,
+                onChange: (event) => { emailDraft.allow = event.target.value; },
               }),
             ]),
             h("div", { key: "email-actions", className: "dswxRow" }, [
