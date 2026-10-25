@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.5
+
+- **`GET /state` echoed both email passwords in the clear.** `publicPrefs` masked secrets with a **hand-written list per channel**
+  (feishu, tavily, qq, the webhook); the email block was added without one, so the two passwords came back verbatim - the 1.1.7 mistake,
+  for a new field. On disk they *were* sealed (`secrets.js` already listed them), which is exactly why the leak was easy to miss: the
+  store knew, the redaction did not.
+- The masking now reads the store's own `SECRET_PATHS` through `maskSecretPrefs` in `secrets.js`, so a new field is masked by being listed
+  once. A test walks that list and asserts every entry comes back as `***` and appears nowhere in the payload.
+- 46 suites / 729 cases.
+
 ## 1.6.4
 
 - **The email fields could not be typed into.** They were controlled inputs (alue from useState) inside the card, and the card
