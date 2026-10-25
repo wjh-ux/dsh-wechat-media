@@ -4099,7 +4099,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   /** Message ids already handled, so a re-fetch cannot start a turn twice. */
   let emailSeen = new Set();
   let emailPoller = null;
-  let emailStatus = { lastPollAt: 0, lastError: "", handled: 0, skipped: 0, failed: 0, ready: false };
+  let emailStatus = { lastPollAt: 0, lastError: "", handled: 0, replies: 0, skipped: 0, failed: 0, lastReplyError: "", ready: false };
 
   /**
    * Poll the mailbox and hand every allowed message to the agent.
@@ -4152,9 +4152,16 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
       const accountId = emailAccountId(email.user);
       try {
-        await handleEmailInbound(accountId, parsed, message.uid, email);
+        const outcome = await handleEmailInbound(accountId, parsed, message.uid, email);
         handled.push(message.uid);
-        emailStatus = { ...emailStatus, handled: emailStatus.handled + 1 };
+        // "handled" means the turn ran. Delivery is a separate question - a refused reply must not look like a turn that never started,
+        // which is exactly how the first diagnostic run read.
+        emailStatus = {
+          ...emailStatus,
+          handled: emailStatus.handled + 1,
+          ...(outcome?.delivered ? { replies: (emailStatus.replies ?? 0) + 1 } : {}),
+          ...(outcome?.replyError ? { lastReplyError: outcome.replyError } : {}),
+        };
       } catch (error) {
         // Visible, not just logged: with only a log line the card says "handled: 0" and gives no reason, which is the least useful
         // answer available.
@@ -4197,11 +4204,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     const plain = (await state.loadPrefs()).format !== "raw";
     const bodyText = outcome?.text ? (plain ? chatBody(outcome.text) : outcome.text) : "";
     const prefsNow = await state.loadPrefs();
-    if (!bodyText || prefsNow?.email?.autoReply === false) return;
+    if (!bodyText || prefsNow?.email?.autoReply === false) return { delivered: false, replyError: "" };
     const chunks = chunkText(bodyText);
     const headers = threadHeaders(parsed);
+    let delivered = 0;
+    let replyError = "";
     for (const [index, chunk] of chunks.entries()) {
-      await smtpSend({
+      try {
+        await smtpSend({
         host: email.smtpHost,
         port: Number(email.smtpPort),
         secure: email.smtpSecure !== false,
@@ -4210,17 +4220,26 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         mail: {
           from: email.user,
           to: sender,
-          payload: buildMail({
-            from: email.user,
-            to: sender,
-            subject: replySubject(parsed.subject) + (chunks.length > 1 ? ` (${index + 1}/${chunks.length})` : ""),
-            text: chunk,
-            headers,
-          }),
-        },
-      });
+            payload: buildMail({
+              from: email.user,
+              to: sender,
+              subject: replySubject(parsed.subject) + (chunks.length > 1 ? ` (${index + 1}/${chunks.length})` : ""),
+              text: chunk,
+              headers,
+            }),
+          },
+        });
+        delivered += 1;
+      } catch (error) {
+        // The host and port belong in the message: the bare OpenSSL line named neither, which made a TLS refusal look like a mail-server
+        // problem with no location.
+        replyError = `发信失败（SMTP ${email.smtpHost}:${email.smtpPort}）：${error?.message ?? error}`;
+        ctx.logger?.warn?.("[dsh-wechat-media] email reply failed: %s", replyError);
+        break;
+      }
     }
     void uid;
+    return { delivered: delivered === chunks.length, replyError };
   }
 
   /** Start or restart the poller according to the saved prefs. */
