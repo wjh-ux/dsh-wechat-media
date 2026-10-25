@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.3
+
+- **The email channel is in the Web UI dashboard too.** /dashboard (the script-free page the card links to) listed every channel
+except email: it now has a 邮件通道 row - state (关闭 / 已开启 / 已开启但不可用 + reason), mailbox, SMTP and IMAP hosts, how many senders are
+allowed, handled / replies / skipped, and the last error - plus a 邮件处理失败 line in the failure table.
+- The card remains the place to edit hosts and passwords (the secrets never travel back to the browser); the dashboard is read-only by
+design, and /email plus POST /dsh-wechat-media/email are the actions.
+- 46 suites / 728 cases.
+
 ## 1.6.2
 
 - **`handled` counted the wrong thing.** A diagnostic run reported `failed: 1` with an OpenSSL `WRONG_VERSION_NUMBER`, which was the

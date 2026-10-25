@@ -1161,7 +1161,7 @@ export function dashboardHtml(data = {}) {
   const {
     version = "", builtAt = "", loadedAt = "", now = Date.now(),
     counters = {}, tokens = {}, peers = {}, tasks = {}, prefs = {},
-    webhook = {}, inbound = {}, accounts = [], lastInbound = {}, stream = {},
+    webhook = {}, inbound = {}, accounts = [], lastInbound = {}, stream = {}, email = {},
     tokenAccountingError = null, routes = [],
   } = data;
 
@@ -1226,6 +1226,19 @@ ${row("会话", number(peerCount), "已被桥接的会话：微信 / 企微 / �
 ${row("定时任务", `${number(tasks?.count ?? 0)}（启用 ${groupDigits(tasks?.enabled ?? 0)}）`)}
 ${row("入站接口", prefs?.inboundToken ? `<span class="good">已开启</span>` : `<span class="bad">未生成 token</span>`,
   "POST /dsh-wechat-media/inbound，token 见下方配置")}
+${row("邮件通道", (() => {
+  const e = prefs?.email ?? {};
+  if (e.enabled !== true) return '<span class="m">关闭</span>';
+  if (email?.ready === true) return '<span class="good">已开启</span>';
+  return `<span class="bad">已开启但不可用</span><div class="m">${escapeHtml(email?.reason ?? "")}</div>`;
+})(), [
+  prefs?.email?.user ? `邮箱 ${escapeHtml(prefs.email.user)}` : "",
+  prefs?.email?.smtpHost ? `SMTP ${escapeHtml(prefs.email.smtpHost)}:${escapeHtml(String(prefs.email.smtpPort ?? ""))}` : "",
+  prefs?.email?.imapHost ? `IMAP ${escapeHtml(prefs.email.imapHost)}:${escapeHtml(String(prefs.email.imapPort ?? ""))}` : "",
+  `允许发件人 ${(prefs?.email?.allowSenders ?? []).length} 个${(prefs?.email?.allowSenders ?? []).length ? "" : "（空 = 谁都不回）"}`,
+  `已处理 ${groupDigits(email?.handled ?? 0)} · 回复 ${groupDigits(email?.replies ?? 0)} · 跳过 ${groupDigits(email?.skipped ?? 0)}`,
+  email?.lastError ? `最近错误：${escapeHtml(email.lastError)}` : "",
+].filter(Boolean).join(" · "))}
 </table>
 
 <h2>失败与丢弃</h2>
@@ -1237,7 +1250,7 @@ ${row("媒体失败", number(counters.mediaFailed ?? 0))}
 ${row("被拦截", number(counters.blocked ?? 0), "白名单 / 只处理好友 / 群被跳过")}
 ${row("飞书错误", number(counters.feishuErrors ?? 0))}
 ${row("入站失败", number(counters.inboundFailed ?? 0), "POST /inbound 触发的轮次里出错")}
-${row("Webhook 失败", number(counters.webhookFailed ?? 0))}
+${row("Webhook 失败", number(counters.webhookFailed ?? 0))} ${row("邮件处理失败", number(email?.failed ?? 0), email?.lastReplyError ? `最近：${escapeHtml(email.lastReplyError)}` : "")}
 ${row("Token 记账失败", tokenAccountingError
     ? `<span class="bad">${escapeHtml(tokenAccountingError.message ?? tokenAccountingError)}</span>`
     : `<span class="good">无</span>`)}
@@ -9456,6 +9469,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const routes = await state.loadRoutes();
           const build = await buildInfo();
           const html = dashboardHtml({
+      email: { ...emailStatus, ready: emailReadiness(prefs) === "" },
             version: build.version,
             builtAt: build.builtAt,
             loadedAt: build.loadedAt,
