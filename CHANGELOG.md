@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.7
+
+- **The email channel can trust a specific CA (`email.caFile`), because this machine's TLS is being decrypted.** The diagnosis:
+  `imap.qq.com:993` presents a certificate issued by **"AO Kaspersky Lab"** while `smtp.qq.com:465` presents DigiCert - Kaspersky's
+  encrypted-connection scanning intercepts IMAP. Browsers accept it from the Windows store; Node does not read that store, so verification
+  failed and the channel could not receive at all.
+- Proven before building it: passing that root as `ca` makes the same connection report `authorized: true`.
+- A certificate refusal now says what it means - "本机可能有杀毒软件/代理在解密 TLS，把根证书导出为 PEM 填到 email.caFile" - instead of leaving
+  the OpenSSL line as the whole story.
+- Verification stays **on**: disabling it would hand the mailbox password to whatever is in the middle, which is a worse deal than a CA file.
+- 46 suites / 730 cases.
+
 ## 1.6.6
 
 - **The mask helper un-masked what the previous line had just masked.** `maskSecretPrefs` copied `{ ...source }` from the *original*

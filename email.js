@@ -78,6 +78,11 @@ export function normalizeEmailPrefs(source) {
     if (!senders.includes(address)) senders.push(address);
   }
 
+  const caFile = String(input.caFile ?? "").trim();
+  if (caFile && !/^[A-Za-z]:[\\/]|^\//.test(caFile)) {
+    return { error: `caFile 必须是绝对路径（收到 ${JSON.stringify(caFile)}）` };
+  }
+
   const value = {
     enabled,
     user,
@@ -91,6 +96,7 @@ export function normalizeEmailPrefs(source) {
     pollSeconds,
     autoReply: input.autoReply !== false,
     allowSenders: senders,
+    ...(caFile ? { caFile } : {}),
   };
   // Passwords only travel when they are actually new: the card shows `***` for a stored one, and posting that back must not
   // replace it with three asterisks.

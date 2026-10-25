@@ -24,7 +24,7 @@
 import { homedir } from "node:os";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3283,6 +3283,7 @@ export function apply(ctx, config = {}) {
             secure: email.smtpSecure !== false,
             user: email.user,
             pass: email.smtpPass,
+            ca: emailCaPem(email),
             mail: {
               from: email.user,
               to,
@@ -4110,6 +4111,29 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
     return bot;
   }
 
+  /**
+   * The extra CA the email channel should trust, read once and cached by path+mtime.
+   *
+   * It exists because a TLS-intercepting scanner (Kaspersky, in the case that prompted this) re-signs IMAP traffic with its own root. Trusting
+   * that root explicitly keeps verification on, which is the whole point: turning verification off would hand the mailbox password to whatever
+   * is in the middle.
+   */
+  let emailCaCache = { path: "", mtimeMs: 0, pem: "" };
+  function emailCaPem(email) {
+    const path = String(email?.caFile ?? "").trim();
+    if (!path) return undefined;
+    try {
+      const info = statSync(path);
+      if (emailCaCache.path === path && emailCaCache.mtimeMs === info.mtimeMs) return emailCaCache.pem;
+      const pem = readFileSync(path, "utf8");
+      emailCaCache = { path, mtimeMs: info.mtimeMs, pem };
+      return pem;
+    } catch (error) {
+      ctx.logger?.warn?.("[dsh-wechat-media] email caFile unreadable: %s", error?.message ?? error);
+      return undefined;
+    }
+  }
+
   /** Message ids already handled, so a re-fetch cannot start a turn twice. */
   let emailSeen = new Set();
   let emailPoller = null;
@@ -4136,6 +4160,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         secure: email.imapSecure !== false,
         user: email.user,
         pass: email.imapPass,
+        ca: emailCaPem(email),
         folder: email.folder || "INBOX",
         limit: 5,
       });
@@ -4193,6 +4218,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           secure: email.imapSecure !== false,
           user: email.user,
           pass: email.imapPass,
+          ca: emailCaPem(email),
           ids: handled,
         });
       } catch (error) {
@@ -4231,6 +4257,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         secure: email.smtpSecure !== false,
         user: email.user,
         pass: email.smtpPass,
+        ca: emailCaPem(email),
         mail: {
           from: email.user,
           to: sender,
@@ -10815,6 +10842,7 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
                 secure: email.smtpSecure !== false,
                 user: email.user,
                 pass: email.smtpPass,
+                ca: emailCaPem(email),
                 mail: {
                   from: email.user,
                   to,

@@ -109,10 +109,10 @@ class LineSocket {
   }
 }
 
-function openSocket({ host, port, secure, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+function openSocket({ host, port, secure, timeoutMs = DEFAULT_TIMEOUT_MS, ca }) {
   return new Promise((resolve, reject) => {
     const socket = secure
-      ? tlsConnect({ host, port, servername: host, rejectUnauthorized: true })
+      ? tlsConnect({ host, port, servername: host, rejectUnauthorized: true, ...(ca ? { ca } : {}) })
       : netConnect({ host, port });
     const timer = setTimeout(() => {
       socket.destroy();
@@ -166,8 +166,9 @@ export async function smtpSend({
   mail,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   socketFactory = openSocket,
+  ca,
 }) {
-  let socket = await socketFactory({ host, port, secure, timeoutMs });
+  let socket = await socketFactory({ host, port, secure, timeoutMs, ca });
   let client = new LineSocket(socket);
   const transcript = [];
   /** Read one reply, following `250-` continuation lines, and hand back the final line. */
@@ -198,7 +199,7 @@ export async function smtpSend({
 
     if (!secure && /STARTTLS/i.test(ehloLine)) {
       await talk("STARTTLS", (code) => code === 220, "STARTTLS");
-      socket = await socketFactory({ host, port, secure: true, timeoutMs, replace: socket });
+      socket = await socketFactory({ host, port, secure: true, timeoutMs, replace: socket, ca });
       client = new LineSocket(socket);
       await talk("EHLO (tls)", (code) => code === 250, `EHLO ${host}`);
     }
@@ -246,8 +247,9 @@ export async function imapFetch({
   limit = 10,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   socketFactory = openSocket,
+  ca,
 }) {
-  const socket = await socketFactory({ host, port, secure, timeoutMs });
+  const socket = await socketFactory({ host, port, secure, timeoutMs, ca });
   const client = new LineSocket(socket);
   let tag = 0;
   const command = async (label, expected = "OK") => {
@@ -330,9 +332,10 @@ export async function imapMarkSeen({
   ids = [],
   timeoutMs = DEFAULT_TIMEOUT_MS,
   socketFactory = openSocket,
+  ca,
 }) {
   if (!ids.length) return { ok: true, marked: 0 };
-  const socket = await socketFactory({ host, port, secure, timeoutMs });
+  const socket = await socketFactory({ host, port, secure, timeoutMs, ca });
   const client = new LineSocket(socket);
   try {
     const greeting = await client.readLine();
