@@ -1,0 +1,11 @@
+# Keep the working tree LF on every platform.
+#
+# The suites read the source as text and match with `\n` (route registration, the /state body, the inbound dispatch).
+# Without this file a Windows checkout converts every file to CRLF and four wiring assertions fail on line endings
+# alone - which is exactly what the Windows CI runner did. Nothing here is a binary that needs its own handling; the
+# vendored wasm is marked binary so git never touches it.
+* text=auto eol=lf
+
+*.wasm binary
+*.png binary
+*.vsix binary
