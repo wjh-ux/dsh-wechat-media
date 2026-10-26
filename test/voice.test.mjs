@@ -99,6 +99,7 @@ await test("an empty text is refused before anything is spawned", async () => {
 await test("speaking produces a file a chat can send", async () => {
   const support = await voiceSupport();
   if (!support.speech) throw skip("no System.Speech on this machine");
+  if (!support.voices) throw skip("System.Speech is present but no voice is installed on this machine");
   const wanted = support.ffmpeg ? "mp3" : "wav";
   const voice = await synthesizeVoice({ text: "这是一条语音测试。", format: wanted });
   try {

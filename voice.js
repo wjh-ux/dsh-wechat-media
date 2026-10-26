@@ -140,10 +140,15 @@ export async function voiceSupport({ ffmpeg = DEFAULT_FFMPEG, powershell = DEFAU
     hasFfmpeg = false;
   }
   let hasSpeech = false;
+  // The count matters as much as the assembly: a machine with System.Speech and no voices writes a WAV header and no
+  // samples (measured on a CI runner: 46 bytes), which a chat would receive as a broken voice message.
+  let voices = 0;
   try {
-    const probe = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Dispose(); 'ok'";
+    const probe = "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $n = $s.GetInstalledVoices().Count; $s.Dispose(); \"ok:$n\"";
     const { stdout } = await run(powershell, ["-NoProfile", "-NonInteractive", "-Command", probe], { timeout: 30_000, windowsHide: true });
-    hasSpeech = String(stdout).includes("ok");
+    const hit = /ok:(\d+)/.exec(String(stdout));
+    hasSpeech = hit !== null;
+    voices = hit ? Number(hit[1]) : 0;
   } catch {
     hasSpeech = false;
   }
@@ -166,6 +171,7 @@ export async function voiceSupport({ ffmpeg = DEFAULT_FFMPEG, powershell = DEFAU
     missing,
     ffmpeg: hasFfmpeg,
     speech: hasSpeech,
+    voices,
     silk: hasSilk,
     // Without ffmpeg, SAPI's own WAV is still a usable voice file - so the capability is not all-or-nothing.
     formats: [...formats],
@@ -205,9 +211,10 @@ export async function synthesizeVoice({
     throw failure("text-to-speech", error);
   }
   const wavBytes = (await stat(wavPath).catch(() => ({ size: 0 }))).size;
-  if (!wavBytes) {
+  if (!wavBytes || wavBytes <= 128) {
     await cleanup();
-    throw new Error("text-to-speech produced no audio (the text may be unspeakable)");
+    // A voice-less SAPI writes exactly the RIFF header and nothing else; sending those bytes is worse than an error.
+    throw new Error("text-to-speech produced no audio (the text may be unspeakable, or this machine has no SAPI voice installed)");
   }
   if (wanted === "wav") {
     return { path: wavPath, format: "wav", bytes: wavBytes, wavBytes, cleanup: keepWav ? async () => {} : cleanup, dir };
