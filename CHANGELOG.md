@@ -34,6 +34,10 @@
   One guard wraps the whole route table: `Sec-Fetch-Site: cross-site` or a foreign `Origin` gets 403 (same-origin 200, no header 200).
 - The `save` label was defined twice in each dictionary (the second silently won), and "saved from this panel: longConnection" printed the
   internal field name; field names map to labels now.
+- **A machine with System.Speech but no voice produced a 44-byte "voice message".** SAPI wrote the RIFF header and
+  nothing else; the guard only refused a zero-length file, so a chat would have received an unplayable voice message.
+  `voiceSupport()` reports the installed voice count now, `synthesizeVoice()` refuses a header-only WAV with a sentence
+  that names the cause, and the real-synthesis test skips where there is no voice to synthesise with.
 - 46 suites / 737 cases (7 new, covering the poll cadence, the undefined setters, the QR placement, the input width, the sections, the
   cross-site guard, the cancel race and the blocked-chat notice).
 
