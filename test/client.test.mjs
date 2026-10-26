@@ -349,6 +349,22 @@ test("long values fit: the card's inputs are not a fixed 110px", () => {
   assert.match(code, /\.dswxInput\{[^}]*flex:1 1 15em/, "and grow with the row");
 });
 
+test("the contacts card holds the allowlist and its peers, not eleven unrelated switches", () => {
+  // The allowlist switches, the peer list and the capability switches (desktop, clipboard, SSH, serial, multi-agent,
+  // retry, interjection) shared one flex row: a wall where only two checkboxes were about contacts. The capabilities
+  // have their own titled section now, and the peers sit with the switches that decide what to do with them.
+  const contactsAt = code.indexOf('key: "contacts", className: "dswxCard dswxSection"');
+  const capsAt = code.indexOf('key: "caps", className: "dswxSection"');
+  const channelsAt = code.indexOf('key: "channels", className: "dswxSection"');
+  const peersAt = code.indexOf("...peerRows.map");
+  const tokensAt = code.indexOf('key: "tokens"');
+  assert.ok(contactsAt > 0 && capsAt > contactsAt, "the capability section is nested in the contacts card");
+  assert.ok(channelsAt > capsAt, "and the transport sections follow it, as siblings");
+  assert.ok(peersAt > 0 && peersAt < tokensAt, "the peer list renders with the contacts block, before the token ledger");
+  assert.match(code, /t\("capsTitle"/, "the capability section is titled");
+  assert.match(code, /onClick: \(\) => decide\(peer\.accountId, peer\.chatId, true\)/, "each peer still has its allow action");
+});
+
 test("the panel is divided into titled, framed sections", () => {
   assert.match(code, /\.dswxSection\{[^}]*border:1px solid/, "sections have a frame");
   assert.match(code, /\.dswxSectionTitle\{/, "and a title style");

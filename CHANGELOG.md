@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.9
+
+- **The contacts card was still one mixed bag.** 1.6.8 gave every block a frame, but this one kept its contents: the
+  allowlist switches (which decide who may talk to the bot) shared a single flex row with seven capability switches
+  that have nothing to do with contacts - desktop control, the clipboard, SSH, serial, multi-agent, retry, interjection -
+  and with the SSH "add host" form, which wrapped onto its own line. Eleven checkboxes and a text box where only two
+  controls were about contacts.
+- The capability switches now live in a titled **能力开关 / Capabilities** section inside the same card, one per line,
+  and the SSH host form takes the full width with its button beside it.
+- The chats the bridge has actually seen sit directly under the switches that decide what to do with them; they used to
+  render after the token ledger, three blocks further down. The transport sections (channels, token usage) are siblings
+  of the contacts card again instead of nesting inside it.
+- A test pins the shape: the capability section is nested in contacts, peers come before the token ledger, and each peer
+  keeps its allow action.
+- 46 suites / 738 cases.
+
 ## 1.6.8
 
 - **The pairing QR rendered at the bottom of the card.** The `.dswxQr` block sat after the token ledger and the peer list, at the end of a
