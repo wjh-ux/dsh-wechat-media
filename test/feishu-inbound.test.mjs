@@ -534,8 +534,8 @@ await test("a message type that was not converted is reported, not swallowed", a
   const app = await boot();
   try {
     app.socket().deliver(messageEvent({ messageType: "hongbao", content: { text: "恭喜发财" } }));
-    await settle();
-    assert.equal(app.queued.length, 1, "an unreadable type still produces something to answer");
+    // Wait for the turn itself: a fixed settle() is the 0 !== 1 flake this suite already grew `until()` for.
+    assert.ok(await until(() => app.queued.length === 1), "an unreadable type still produces something to answer");
     assert.match(app.queued[0].content[0].text, /暂不支持/, "and says so in the prompt");
   } finally {
     await app.close();

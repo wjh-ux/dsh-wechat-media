@@ -22,11 +22,17 @@ jobs:
           node-version: ${{ matrix.node }}
       # The package has no dependencies and no build step: the suites are plain
       # node scripts, each printing "N passed, M failed" and exiting non-zero.
+      #
+      # Every suite runs even after one fails, and the job fails at the end: `set -e` used to stop at the first red
+      # suite, so a single environment-sensitive case hid the state of the other forty and each fix needed another
+      # full run to find the next one.
       - name: Run every suite
         shell: bash
         run: |
-          set -e
+          failed=0
           for suite in test/*.test.mjs; do
             echo "== $suite"
-            node "$suite"
+            node "$suite" || failed=$((failed + 1))
           done
+          echo "failing suites: $failed"
+          test "$failed" -eq 0
