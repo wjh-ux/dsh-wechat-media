@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.6.8
+
+- **The pairing QR rendered at the bottom of the card.** The `.dswxQr` block sat after the token ledger and the peer list, at the end of a
+  card ~3,000px tall, while the button that starts it sits at the top: "Add an account (QR code)" looked dead unless the person scrolled
+  three screens looking for the code. It renders directly under the button now (measured `qrTop=509`, first screen).
+- **Cancel did not stick.** `cancel()` wrote `cancelled`, but a poll that was already in flight wrote the platform's `wait` back over it -
+  and `#issue()` reset the record to `pending` while re-fetching a code - so the attempt came back to life, kept issuing QR codes and
+  reported `pending` again. Both write paths now check `TERMINAL` first; a test drives a cancel through an in-flight poll.
+- **A blocked chat never got the one notice it is meant to get.** `handleInbound()` called `explainBlockedOnce({ ..., reply, verdict })`,
+  and `reply` is not in that scope: the argument object threw `ReferenceError` before the helper ran, so the allowlist silently dropped
+  messages while the explanation - the only visible evidence of the drop - was never sent. It passes the account's own sender now
+  (`sendText(account, chatId, ...)`). Verified in WeChat: the 🔒 notice arrives, `blocked` increments, `forwarded` does not.
+- **The card reported the wrong GUI port.** `noteGuiPort()` preferred `$DSH_WEB_URL` and persisted it at boot, but that variable is
+  inherited by every shell the GUI spawns: a server on 19503 advertised (and wrote to `gui-port.json`) 19387, which the card, `/doctor`
+  and the VS Code bridge then repeated. The request's own `Host` wins now, the environment is only a fallback, and boot no longer persists
+  it.
+- **The card polled `/state` once a second, forever, hidden or not.** One slow loop now runs at 10s; a second tick at 1s exists only while
+  a QR is on screen, released the moment the attempt ends; a hidden tab does not ask, coming back refreshes immediately, and the two paths
+  share an in-flight guard. Measured: 25s idle -> 2 requests (was 25); with a live QR -> 10 in 10s.
+- **Every input was a fixed 110px**, so a save directory, a webhook URL, an App ID or a token showed its first few characters and nothing
+  else, and the selects cut their own options ("整段（写完…"). Inputs have a minimum and grow with the row, selects size to content, the
+  textarea takes the full width.
+- **The card was one undivided wall of controls.** Added `.dswxSection` / `.dswxSectionTitle` and framed the blocks that are their own
+  subject: message channels (QQ / mail / delivery / approvals), inbound directory, integrations (Feishu / Tavily / browser), office,
+  scheduled tasks, contacts, token usage.
+- **`runApprovalSelfTest()` called `setFailed()` and `setMessage()`, which this component never declared** - dead code left behind when
+  the self-test became a link to `/send-test-approval`, waiting to throw `ReferenceError` at whoever re-wired it. Removed.
+- **QQ "Reconnect now" failed silently**: `reconnectQQ()` had no `catch`, so a failed POST became an unhandled rejection and the button
+  looked inert. The reason is shown on the card now.
+- **Any web page could drive the loopback routes.** Every mutation is a plain GET (that is what keeps the card usable where POSTs never
+  arrive), so `<img src="http://127.0.0.1:<port>/dsh-wechat-media/logout">` on any site could unpair an account or flip a preference.
+  One guard wraps the whole route table: `Sec-Fetch-Site: cross-site` or a foreign `Origin` gets 403 (same-origin 200, no header 200).
+- The `save` label was defined twice in each dictionary (the second silently won), and "saved from this panel: longConnection" printed the
+  internal field name; field names map to labels now.
+- 46 suites / 737 cases (7 new, covering the poll cadence, the undefined setters, the QR placement, the input width, the sections, the
+  cross-site guard, the cancel race and the blocked-chat notice).
+
 ## 1.6.7
 
 - **The email channel can trust a specific CA (`email.caFile`), because this machine's TLS is being decrypted.** The diagnosis:

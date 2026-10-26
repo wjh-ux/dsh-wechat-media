@@ -579,9 +579,10 @@ await test("office tools are registered, honest about a missing toolchain, and r
   assert.match(commandsSource, /name: "office"/, "the /office command exists");
   assert.match(host, /command\.name === "office"/, "and the host handles it");
   // The card half: it shows what /state reports and writes through the same pref the command sets, or the
-  // panel and the chat would drift into two sources of truth.
+  // panel and the chat would drift into two sources of truth. The class list is matched by prefix: the block
+  // also carries `dswxSection`, the frame that makes it read as its own section in the panel.
   const clientSource = readFileSync(join(root, "client.js"), "utf8");
-  assert.match(clientSource, /key: "office", className: "dswxCard"/, "the card has an Office section");
+  assert.match(clientSource, /key: "office", className: "dswxCard/, "the card has an Office section");
   assert.match(clientSource, /snapshot\?\.office\?\.canRead/, "it shows whether reading works");
   assert.match(clientSource, /snapshot\?\.office\?\.canConvert/, "and whether conversion works");
   assert.match(clientSource, /async function setOfficeDir\(/, "it can set the directory");
@@ -1222,6 +1223,28 @@ await test("every route object has kind immediately followed by path", () => {
   const paired = [...host.matchAll(/kind:\s*"exact",\s*\n\s*path:/g)].length;
   assert.ok(kinds >= 20, `only ${kinds} routes found - the scan may have missed them`);
   assert.equal(paired, kinds, `${kinds - paired} route object(s) have a kind with no path right after it (an object was split)`);
+});
+
+await test("a blocked chat is told once, through a sender that actually exists", () => {
+  // explainBlockedOnce() was called from handleInbound() with the bare identifier `reply`, which is not in that
+  // scope: the drop was recorded, the explaining call threw `ReferenceError` before it could send anything, and the
+  // single notice a blocked direct chat ever gets never went out. Passing the account's own sender fixes it.
+  assert.doesNotMatch(host, /\breply, verdict \}\);/, "no call passes a bare `reply` that the scope does not have");
+  assert.match(host, /reply: \(answer\) => sendText\(account, chatId, answer, \{ typing: false \}\)/, "the notice goes out through the account's own sender");
+  assert.match(host, /async function explainBlockedOnce\(\{ accountId, chatId, isGroup, reply, verdict \}\)/, "and that is the shape that helper expects");
+});
+
+await test("a page on another site cannot drive the loopback routes", () => {
+  // Every mutation is a plain GET, so a hostile page needs nothing but `<img src="http://127.0.0.1:…/logout">`:
+  // loopback-only does not stop a request that a local browser makes. The guard wraps the whole route table, so a
+  // route added later cannot forget it.
+  assert.match(host, /const isCrossSiteRequest = \(req\) => \{/, "there is one definition");
+  assert.match(host, /req\?\.headers\?\.\["sec-fetch-site"\]/, "it reads the browser's own label");
+  assert.match(host, /if \(site === "cross-site"\) return true;/, "a cross-site request is refused");
+  assert.match(host, /const guarded = \{/, "the guard builds a wrapped route");
+  assert.match(host, /handler: \(req, res\) => \(isCrossSiteRequest\(req\)/, "applied to every handler");
+  assert.match(host, /cross-site request refused/, "with a 403 body");
+  assert.match(host, /webCtx\.webServer\.register\(guarded\)/, "and the wrapped one is what gets registered");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

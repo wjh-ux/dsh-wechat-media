@@ -256,5 +256,34 @@ await test("records two accounts side by side", async ({ state }) => {
   assert.deepEqual((await state.loadAccounts()).map((a) => a.accountId), ["main-acct"]);
 });
 
+await test("cancelling during an in-flight poll keeps the attempt cancelled", async ({ state }) => {
+  // Cancel is a verdict, not a hint. The poll that was already in flight wrote the platform's "wait" back over it,
+  // so the attempt came back to life, kept issuing QR codes and reported "pending" again - the Cancel button
+  // looked like it did nothing.
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const ilink = {
+    async requestQrCode() {
+      return { qrcode: "QR-1", raw: { qrcode_img_content: "https://qr.example/1.png" } };
+    },
+    async pollQrStatus() {
+      await gate;
+      return { status: "wait" };
+    },
+  };
+  const logins = new WechatLoginManager({ state, ilink, sleep: async () => {} });
+  const session = await logins.start();
+  const inFlight = logins.tick(session);
+  await Promise.resolve();
+  logins.cancel(session);
+  open();
+  await inFlight;
+  assert.equal(session.status, "cancelled");
+  assert.equal(session.phase, "cancelled");
+  // A later tick must not restart it either.
+  await logins.tick(session);
+  assert.equal(session.status, "cancelled");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

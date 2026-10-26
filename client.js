@@ -49,16 +49,40 @@ window.__ModuleLoader__.load({
     }
 
     const BASE = "/dsh-wechat-media";
+    /**
+     * A saved Feishu block's field name, as a person reads it.
+     *
+     * `/state` reports field *names* on purpose (a value never leaves the host), and the card used to print them
+     * verbatim - "saved from this panel: longConnection" - which reads like a leaked variable.
+     */
+    const FEISHU_FIELD_LABELS = {
+      appId: "App ID",
+      appSecret: "App Secret",
+      webhookUrl: "Webhook 地址",
+      secret: "签名密钥",
+      verificationToken: "验证 Token",
+      encryptKey: "加密 Key",
+      domain: "域名",
+      to: "接收人",
+      tenantHost: "租户域名",
+      longConnection: "长连接",
+    };
+    function feishuFieldLabel(field) {
+      return FEISHU_FIELD_LABELS[field] ?? field;
+    }
+
     const SLOT_BUNDLE_CONFIG = "plugins.bundle.config";
     const SLOT_ROW_CONFIG = "plugins.row.config";
     const BUNDLE_KEY = "dsh-wechat-media";
     const ROW_ID = "wechat-media";
     const LOCALE_NS = "dsh-wechat-media";
     const POLL_MS = 1000;
+    /** How often a card with no live pairing refreshes; one second only buys a QR something. */
+    const IDLE_POLL_MS = 10000;
 
     const CSS = `
-.dswxCard{display:flex;flex-direction:column;gap:10px;padding:12px 0}
-.dswxRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.dswxCard{display:flex;flex-direction:column;gap:10px;padding:12px 0;min-width:0}
+.dswxRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0}
 .dswxAccount{border:1px solid rgba(127,127,127,.25);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
 .dswxName{font-weight:600}
 .dswxMeta{font-size:12px;opacity:.7}
@@ -68,12 +92,16 @@ window.__ModuleLoader__.load({
 .dswxBtn{padding:5px 10px;border-radius:6px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;font:inherit;cursor:pointer}
 .dswxBtn:disabled{opacity:.5;cursor:default}
 .dswxPrimary{border-color:transparent;background:rgba(46,160,67,.18)}
-.dswxQr{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.dswxQr{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:12px;background:rgba(127,127,127,.04)}
 .dswxQrImg{width:190px;height:190px;image-rendering:pixelated;border-radius:8px;background:#fff;padding:6px}
-.dswxInput{padding:6px 8px;border-radius:6px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;font:inherit;width:110px}
+.dswxInput{padding:6px 8px;border-radius:6px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;font:inherit;min-width:9em;flex:1 1 15em;max-width:100%;box-sizing:border-box}
+select.dswxInput{flex:0 1 auto;min-width:11em}
+textarea.dswxInput{flex:1 1 100%;min-height:4.5em;resize:vertical}
 .dswxMsg{margin:0;font-size:12px}
 .dswxErr{color:#d1242f}
 .dswxHint{margin:0;font-size:12px;opacity:.7}
+.dswxSection{border:1px solid rgba(127,127,127,.2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.dswxSectionTitle{margin:0;font-size:13px;font-weight:600;letter-spacing:.01em;opacity:.85}
 `;
 
     function injectCss() {
@@ -293,7 +321,6 @@ function emailDraftRef() {
           notConfigured: "not configured",
           configure: "Configure",
           inboxPlaceholder: "absolute path, e.g. D:\\wechat-files",
-          save: "Save",
           browse: "Browse…",
           inboxFormHint: "Saving opens the control panel; use the back button there to return.",
           blockedCount: "blocked",
@@ -474,7 +501,6 @@ function emailDraftRef() {
           notConfigured: "未配置",
           configure: "配置",
           inboxPlaceholder: "绝对路径，例如 D:\\wechat-files",
-          save: "保存",
           browse: "浏览…",
           inboxFormHint: "保存会打开控制面板页面，保存完用那里的「返回 DSH」按钮回来。",
           blockedCount: "已拦截",
@@ -534,15 +560,6 @@ function emailDraftRef() {
          * keystroke was overwritten by the next refresh.
          */
         const emailDraft = emailDraftRef();
-        // Email fields as typed; undefined = follow /state until edited. The passwords never come back from the host.
-        const [emailUser, setEmailUser] = react.useState(undefined);
-        const [emailSmtpHost, setEmailSmtpHost] = react.useState(undefined);
-        const [emailSmtpPort, setEmailSmtpPort] = react.useState(undefined);
-        const [emailImapHost, setEmailImapHost] = react.useState(undefined);
-        const [emailImapPort, setEmailImapPort] = react.useState(undefined);
-        const [emailSmtpPass, setEmailSmtpPass] = react.useState("");
-        const [emailImapPass, setEmailImapPass] = react.useState("");
-        const [emailAllow, setEmailAllow] = react.useState(undefined);
         // The wizard is a client-side step counter; whether it exists at all is the host's `wizardDone`.
         const [wizardStep, setWizardStep] = react.useState(0);
         // The result of the wizard's test message: undefined = not tried yet.
@@ -577,21 +594,69 @@ function emailDraftRef() {
           }
         };
 
+        /**
+         * The next live pairing attempt, if any.
+         *
+         * Computed before the poll effects because both of them key off it: the slow loop runs all the time, the
+         * one-second tick only while one of these exists.
+         */
+        const pending = snapshot?.logins?.find((login) => login.phase === "pending" || login.phase === "redirect" || login.phase === "replace");
+        const pairingId = pending?.id;
+
+        /** One request at a time: the two poll paths must not stack copies of the same /state call. */
+        const inFlight = react.useRef(false);
         const refresh = react.useCallback(async () => {
+          if (inFlight.current) return;
+          inFlight.current = true;
           try {
             const next = await api("/state");
             setSnapshot(next);
             setError(undefined);
           } catch (problem) {
             setError(String(problem?.message ?? problem));
+          } finally {
+            inFlight.current = false;
           }
         }, []);
 
+        /**
+         * The card's poll.
+         *
+         * One slow loop for the whole card, plus a one-second tick only while a QR is on screen. The slow loop
+         * alone was not enough: the next delay is chosen when the tick is scheduled, so a pairing that started
+         * during a ten-second sleep sat behind that sleep - the QR appeared, then the status froze for up to ten
+         * seconds. The guarded `refresh` is what keeps the two from overlapping.
+         */
         react.useEffect(() => {
-          refresh();
-          const timer = setInterval(refresh, POLL_MS);
-          return () => clearInterval(timer);
+          let stopped = false;
+          let timer;
+          const tick = async () => {
+            if (stopped) return;
+            const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+            if (!hidden) await refresh();
+            if (stopped) return;
+            timer = setTimeout(tick, IDLE_POLL_MS);
+          };
+          const onVisibility = () => {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") void refresh();
+          };
+          void tick();
+          if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
+          return () => {
+            stopped = true;
+            clearTimeout(timer);
+            if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
+          };
         }, [refresh]);
+
+        // While a pairing is live the QR and its status change every second or so; poll at that pace and stop the
+        // moment the attempt ends. `pairingId` is the dependency, not the record: a fresh object arrives on every
+        // refresh and would restart the interval each time.
+        react.useEffect(() => {
+          if (!pairingId) return undefined;
+          const fast = setInterval(refresh, POLL_MS);
+          return () => clearInterval(fast);
+        }, [pairingId, refresh]);
 
         // Safety net: every button is disabled while `busy` is true, so one stuck
         // request would make the whole card look dead. Release it automatically.
@@ -600,8 +665,6 @@ function emailDraftRef() {
           const timer = setTimeout(() => setBusy(false), 30000);
           return () => clearTimeout(timer);
         }, [busy]);
-
-        const pending = snapshot?.logins?.find((login) => login.phase === "pending" || login.phase === "redirect" || login.phase === "replace");
 
         async function startPairing() {
           setBusy(true);
@@ -663,33 +726,6 @@ function emailDraftRef() {
             await refresh();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
-          } finally {
-            setBusy(false);
-          }
-        }
-
-        /**
-         * Send the approval prompt through the GET route and report what happened.
-         * POST never reaches the plugin in the reporter's browser, so the card does
-         * not rely on it.
-         */
-        async function runApprovalSelfTest() {
-          setBusy(true);
-          setFailed(false);
-          setMessage(t("testApprovalSending", "Sending the approval prompt…"));
-          try {
-            const result = await api("/test-approval");
-            if (result.sent) {
-              setMessage(t("testApprovalSent", "Approval prompt sent to WeChat - reply 1 to allow, 2 to reject (or cancel it here)."));
-            } else if (result.reason === "pending") {
-              setMessage(t("testApprovalPending", "An approval is already waiting in this chat - answer it in WeChat, or cancel it here."));
-            } else {
-              setFailed(true);
-              setMessage(`${t("testApprovalFailed", "The prompt could not be sent")}: ${result.error ?? "?"}`);
-            }
-          } catch (problem) {
-            setFailed(true);
-            setMessage(String(problem?.message ?? problem));
           } finally {
             setBusy(false);
           }
@@ -923,6 +959,9 @@ function emailDraftRef() {
           try {
             await api("/qq", { method: "POST", body: { action: "reconnect" } });
             await refresh();
+          } catch (problem) {
+            // A reconnect that fails silently reads as "the button does nothing"; say what happened.
+            setError(String(problem?.message ?? problem));
           } finally {
             setBusy(false);
           }
@@ -1457,6 +1496,38 @@ function emailDraftRef() {
             h("button", { key: "r", type: "button", className: "dswxBtn", disabled: busy, onClick: refresh }, t("refresh", "Refresh")),
           ]),
 
+          // The QR sits directly under the button that starts it. It used to render at the very bottom of a
+          // card several screens tall, so "Add an account" appeared to do nothing unless the person scrolled
+          // to the end looking for it.
+          pending ? h("div", { key: "qr", className: "dswxQr" }, [
+            pending.hasQr
+              ? h("img", { key: "img", className: "dswxQrImg", alt: "WeChat login QR", src: `${BASE}/qr/${pending.id}` })
+              : h("div", { key: "noimg", className: "dswxMeta" }, t("scanning", "Waiting for the scan…")),
+            h("div", { key: "side", className: "dswxCard" }, [
+              h("p", { key: "state", className: "dswxMsg" }, loginText(pending)),
+              h("div", { key: "actions", className: "dswxRow" }, [
+                h("button", { key: "cancel", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelPairing(pending.id) },
+                  t("cancel", "Cancel")),
+              ]),
+              pending.verifyCodeNeeded
+                ? h("div", { key: "code", className: "dswxRow" }, [
+                    h("input", {
+                      key: "i",
+                      className: "dswxInput",
+                      value: code,
+                      inputMode: "numeric",
+                      placeholder: t("needCode", "digits"),
+                      onChange: (event) => setCode(event.target.value),
+                      onKeyDown: (event) => { if (event.key === "Enter") submitCode(); },
+                    }),
+                    h("button", { key: "b", type: "button", className: "dswxBtn dswxPrimary", disabled: busy || code.trim().length === 0, onClick: submitCode },
+                      t("submitCode", "Submit")),
+                  ])
+                : null,
+              h("p", { key: "hint", className: "dswxHint" }, t("scanHint", "Scan with WeChat on your phone.")),
+            ]),
+          ]) : null,
+
           ...accounts.map((account) => h("div", { key: account.accountId, className: "dswxAccount" }, [
             h("div", { className: "dswxRow" }, [
               h("span", {
@@ -1477,7 +1548,7 @@ function emailDraftRef() {
           // Scheduled tasks. Creation stays in the chat (a schedule is a sentence, not a form); this is the
           // Office: whether the two programs are there, and where relative paths land. The card is the
           // management half of `/office`; the tools themselves are used from a chat.
-          h("div", { key: "office", className: "dswxCard" }, [
+          h("div", { key: "office", className: "dswxCard dswxSection" }, [
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("office", "Office documents")),
               h("span", { key: "m", className: "dswxMeta" },
@@ -1521,17 +1592,18 @@ function emailDraftRef() {
               (snapshot?.office?.dirConfigured ? `✔ ${t("officeDirSet", "using the folder above")}` : `(${t("officeDirDefault", "default: the bridge's own directory")})`) +
               ` · ${t("officeHint", "relative paths from the four office tools land here")}`),
           // The GUI port changes on every restart; showing it here (and where it is written) ends the guessing.
+          // The "pin it" hint carries the port actually in use instead of a number baked into the bundle.
           snapshot?.gui?.port
             ? h("div", { key: "gui", className: "dswxMeta" },
                 `${t("guiPort", "当前界面端口")}: ${snapshot.gui.port}` +
                 (snapshot.gui.previousPort && snapshot.gui.previousPort !== snapshot.gui.port ? ` · ${t("guiPortMoved", "上次")} ${snapshot.gui.previousPort}` : "") +
                 ` · ${snapshot.gui.url} · gui-port.json` +
-                ` · ${t("guiPortPin", "固定端口：dsh web --port 19387")}`)
+                ` · ${t("guiPortPin", "固定端口：")}dsh web --port ${snapshot.gui.port}`)
             : null,
           ]),
 
           // list, the pause/resume/delete buttons and the one switch that lets a task run a local command.
-          h("div", { key: "tasks", className: "dswxCard" }, [
+          h("div", { key: "tasks", className: "dswxCard dswxSection" }, [
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("tasks", "Scheduled tasks")),
               h("span", { key: "m", className: "dswxMeta" },
@@ -1640,7 +1712,7 @@ function emailDraftRef() {
               ]))),
           ]),
 
-          h("div", { key: "contacts", className: "dswxCard" }, [
+          h("div", { key: "contacts", className: "dswxCard dswxSection" }, [
             h("div", { key: "head", className: "dswxRow" }, [
               h("strong", { key: "t" }, t("contacts", "Contacts & groups")),
               // Fetched as GET on purpose: in the reporter's browser every POST from
@@ -1780,213 +1852,218 @@ function emailDraftRef() {
               h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addSshHost }, t("sshAdd", "Add host")),
             ]),
             ]),
-            // QQ bot: the credentials the gateway needs, and what the connection is doing right now. The status comes
-            // from /state's qq field, so a failure shows the platform's own words instead of "not connected".
-            h("div", { key: "qq", className: "dswxRow" }, [
-              h("span", { key: "k", className: "dswxName" }, t("qqTitle", "QQ bot (QQ 开放平台)")),
-            ]),
-            h("div", { key: "qq-id", className: "dswxRow" }, [
-              h("input", {
-                key: "i",
-                className: "dswxInput",
-                placeholder: t("qqAppId", "appId"),
-                value: qqAppId ?? snapshot?.prefs?.qq?.appId ?? "",
-                disabled: busy,
-                onChange: (event) => setQqAppId(event.target.value),
-              }),
-              h("input", {
-                key: "s",
-                className: "dswxInput",
-                type: "password",
-                placeholder: snapshot?.prefs?.qq?.clientSecret === "***" ? t("qqSecretSet", "clientSecret（已保存，留空不改）") : t("qqSecret", "clientSecret"),
-                value: qqSecret,
-                disabled: busy,
-                onChange: (event) => setQqSecret(event.target.value),
-              }),
-              h("label", { key: "sb", className: "dswxMeta" }, [
+            // QQ, email and the delivery switches are transport concerns, not contact decisions; they used to
+            // sit flat inside the contacts card, one long list with the allowlist checkboxes.
+            h("div", { key: "channels", className: "dswxSection" }, [
+              h("p", { key: "title", className: "dswxSectionTitle" }, t("channelsTitle", "消息通道 / Channels")),
+              // QQ bot: the credentials the gateway needs, and what the connection is doing right now. The status comes
+              // from /state's qq field, so a failure shows the platform's own words instead of "not connected".
+              h("div", { key: "qq", className: "dswxRow" }, [
+                h("span", { key: "k", className: "dswxName" }, t("qqTitle", "QQ bot (QQ 开放平台)")),
+              ]),
+              h("div", { key: "qq-id", className: "dswxRow" }, [
                 h("input", {
-                  key: "c",
-                  type: "checkbox",
-                  checked: qqSandbox ?? snapshot?.prefs?.qq?.sandbox === true,
+                  key: "i",
+                  className: "dswxInput",
+                  placeholder: t("qqAppId", "appId"),
+                  value: qqAppId ?? snapshot?.prefs?.qq?.appId ?? "",
                   disabled: busy,
-                  onChange: (event) => setQqSandbox(event.target.checked),
+                  onChange: (event) => setQqAppId(event.target.value),
                 }),
-                " " + t("qqSandbox", "sandbox bot"),
-              ]),
-              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: saveQQ }, t("qqSave", "Save and connect")),
-            ]),
-            h("div", { key: "qq-status", className: "dswxMeta" }, [
-              (() => {
-                const qq = snapshot?.qq;
-                if (!qq) return `${t("qqStatus", "connection")}: —`;
-                const state = qq.ready
-                  ? `✅ 已就绪`
-                  : qq.reconnecting
-                    ? `⏳ ${t("qqReconnecting", "reconnecting")}`
-                    : qq.connected
-                      ? "⏳ 握手中"
-                      : "❌ 未连接";
-                // A half-dead connection is only diagnosable if it says *why* and *when it tries again*: "未连接" on its own sends
-                // people looking for a bug in their credentials.
-                const when = qq.reconnecting && qq.nextAttemptAt
-                  ? ` · ${Math.max(0, Math.round((Number(qq.nextAttemptAt) - Date.now()) / 1000))}s ${t("qqRetryIn", "retry in")}`
-                  : "";
-                const attempts = qq.reconnecting && Number(qq.attempts ?? 0) > 0 ? ` · ${t("qqAttempts", "attempts")} ${qq.attempts}` : "";
-                const why = qq.reconnectReason || qq.error;
-                return `${t("qqStatus", "connection")}: ${state}${when}${attempts}${qq.user ? ` · ${qq.user}` : ""}${why ? ` · ${why}` : ""}`;
-              })(),
-              h("button", {
-                key: "r",
-                type: "button",
-                className: "dswxBtn",
-                disabled: busy,
-                onClick: reconnectQQ,
-                style: { marginLeft: "8px" },
-              }, t("qqReconnect", "Reconnect now")),
-            ]),
-            h("div", { key: "email-title", className: "dswxRow" }, [h("b", { key: "t" }, t("emailTitle", "Email channel"))]),
-            h("div", { key: "email-row1", className: "dswxRow" }, [
-              h("input", {
-                key: "u", className: "dswxInput", placeholder: t("emailUser", "mailbox address"),
-                defaultValue: emailDraft.user || snapshot?.prefs?.email?.user || "", disabled: busy,
-                onChange: (event) => { emailDraft.user = event.target.value; },
-              }),
-            ]),
-            h("div", { key: "email-row2", className: "dswxRow" }, [
-              h("input", {
-                key: "s", className: "dswxInput", placeholder: "SMTP host",
-                defaultValue: emailDraft.smtpHost || snapshot?.prefs?.email?.smtpHost || "", disabled: busy,
-                onChange: (event) => { emailDraft.smtpHost = event.target.value; },
-              }),
-              h("input", {
-                key: "sp", className: "dswxInput", style: { maxWidth: "88px" },
-                defaultValue: emailDraft.smtpPort || String(snapshot?.prefs?.email?.smtpPort ?? 465), disabled: busy,
-                onChange: (event) => { emailDraft.smtpPort = event.target.value; },
-              }),
-              h("input", {
-                key: "i", className: "dswxInput", placeholder: "IMAP host",
-                defaultValue: emailDraft.imapHost || snapshot?.prefs?.email?.imapHost || "", disabled: busy,
-                onChange: (event) => { emailDraft.imapHost = event.target.value; },
-              }),
-              h("input", {
-                key: "ip", className: "dswxInput", style: { maxWidth: "88px" },
-                defaultValue: emailDraft.imapPort || String(snapshot?.prefs?.email?.imapPort ?? 993), disabled: busy,
-                onChange: (event) => { emailDraft.imapPort = event.target.value; },
-              }),
-            ]),
-            h("div", { key: "email-row3", className: "dswxRow" }, [
-              h("input", {
-                key: "sp", className: "dswxInput", type: "password", placeholder: "SMTP password",
-                defaultValue: emailDraft.smtpPass, disabled: busy, onChange: (event) => { emailDraft.smtpPass = event.target.value; },
-              }),
-              h("input", {
-                key: "ip", className: "dswxInput", type: "password", placeholder: "IMAP password",
-                defaultValue: emailDraft.imapPass, disabled: busy, onChange: (event) => { emailDraft.imapPass = event.target.value; },
-              }),
-            ]),
-            h("div", { key: "email-row4", className: "dswxRow" }, [
-              h("input", {
-                key: "a", className: "dswxInput", placeholder: t("emailAllow", "allowed senders (comma separated; empty = nobody)"),
-                defaultValue: emailDraft.allow || (snapshot?.prefs?.email?.allowSenders ?? []).join(", "), disabled: busy,
-                onChange: (event) => { emailDraft.allow = event.target.value; },
-              }),
-            ]),
-            h("div", { key: "email-actions", className: "dswxRow" }, [
-              h("label", { key: "l", className: "dswxMeta" }, [
                 h("input", {
-                  key: "c", type: "checkbox", checked: snapshot?.prefs?.email?.enabled === true, disabled: busy,
-                  onChange: (event) => saveEmail({ enabled: event.target.checked }),
+                  key: "s",
+                  className: "dswxInput",
+                  type: "password",
+                  placeholder: snapshot?.prefs?.qq?.clientSecret === "***" ? t("qqSecretSet", "clientSecret（已保存，留空不改）") : t("qqSecret", "clientSecret"),
+                  value: qqSecret,
+                  disabled: busy,
+                  onChange: (event) => setQqSecret(event.target.value),
                 }),
-                " " + t("emailEnable", "Receive mail and answer it"),
-              ]),
-              h("button", { key: "s", type: "button", className: "dswxBtn", disabled: busy, onClick: () => saveEmail({}) }, t("save", "Save")),
-              h("button", { key: "t", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("test") }, t("emailSend", "Send a test mail")),
-              h("button", { key: "k", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("check") }, t("emailCheck", "Fetch now")),
-            ]),
-            h("div", { key: "email-status", className: "dswxMeta" }, (() => {
-              const status = snapshot?.email;
-              if (!status) return "";
-              const on = snapshot?.prefs?.email?.enabled === true ? "✅ 开" : "⏸ 关";
-              return `${on}${status.reason ? ` · ⚠️ ${status.reason}` : ""}${status.handled ? ` · 已处理 ${status.handled}` : ""}${status.skipped ? ` · 已跳过 ${status.skipped}` : ""}${status.lastError ? ` · ${status.lastError}` : ""}`;
-            })()),
-            // Delivery: whole answers, or shown while they are written. Only WeCom can do the
-            // latter - personal WeChat has no way to edit a message that was already sent - and the
-            // hint says so rather than letting the option look broken.
-            h("div", { key: "delivery", className: "dswxRow" }, [
-              h("label", { key: "l", className: "dswxMeta" }, [
-                `${t("deliveryLabel", "Sending")} `,
-                h("select", {
-                  key: "s",
-                  className: "dswxInput",
-                  value: String(snapshot?.prefs?.delivery ?? "whole"),
-                  disabled: busy,
-                  onChange: (event) => setDelivery(event.target.value),
-                }, [
-                  h("option", { key: "whole", value: "whole" }, t("deliveryWhole", "Whole answer, sent once")),
-                  h("option", { key: "stream", value: "stream" }, t("deliveryStream", "Word by word (WeCom only)")),
+                h("label", { key: "sb", className: "dswxMeta" }, [
+                  h("input", {
+                    key: "c",
+                    type: "checkbox",
+                    checked: qqSandbox ?? snapshot?.prefs?.qq?.sandbox === true,
+                    disabled: busy,
+                    onChange: (event) => setQqSandbox(event.target.checked),
+                  }),
+                  " " + t("qqSandbox", "sandbox bot"),
                 ]),
+                h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: saveQQ }, t("qqSave", "Save and connect")),
               ]),
-              h("span", { key: "h", className: "dswxMeta" }, t("deliveryHint", "Word by word streams the answer while it is written; personal WeChat always receives whole answers.")),
-            ]),
-            // Text handling: WeChat and WeCom render no markdown, so the default strips it.
-            h("div", { key: "format", className: "dswxRow" }, [
-              h("label", { key: "l", className: "dswxMeta" }, [
-                `${t("formatLabel", "Text")} `,
-                h("select", {
-                  key: "s",
-                  className: "dswxInput",
-                  value: String(snapshot?.prefs?.format ?? "plain"),
+              h("div", { key: "qq-status", className: "dswxMeta" }, [
+                (() => {
+                  const qq = snapshot?.qq;
+                  if (!qq) return `${t("qqStatus", "connection")}: —`;
+                  const state = qq.ready
+                    ? `✅ 已就绪`
+                    : qq.reconnecting
+                      ? `⏳ ${t("qqReconnecting", "reconnecting")}`
+                      : qq.connected
+                        ? "⏳ 握手中"
+                        : "❌ 未连接";
+                  // A half-dead connection is only diagnosable if it says *why* and *when it tries again*: "未连接" on its own sends
+                  // people looking for a bug in their credentials.
+                  const when = qq.reconnecting && qq.nextAttemptAt
+                    ? ` · ${Math.max(0, Math.round((Number(qq.nextAttemptAt) - Date.now()) / 1000))}s ${t("qqRetryIn", "retry in")}`
+                    : "";
+                  const attempts = qq.reconnecting && Number(qq.attempts ?? 0) > 0 ? ` · ${t("qqAttempts", "attempts")} ${qq.attempts}` : "";
+                  const why = qq.reconnectReason || qq.error;
+                  return `${t("qqStatus", "connection")}: ${state}${when}${attempts}${qq.user ? ` · ${qq.user}` : ""}${why ? ` · ${why}` : ""}`;
+                })(),
+                h("button", {
+                  key: "r",
+                  type: "button",
+                  className: "dswxBtn",
                   disabled: busy,
-                  onChange: (event) => setFormat(event.target.value),
-                }, [
-                  h("option", { key: "plain", value: "plain" }, t("formatPlain", "Cleaned (drop markdown WeChat cannot render)")),
-                  h("option", { key: "raw", value: "raw" }, t("formatRaw", "Raw (send the model's markdown as-is)")),
-                ]),
+                  onClick: reconnectQQ,
+                  style: { marginLeft: "8px" },
+                }, t("qqReconnect", "Reconnect now")),
               ]),
-              h("span", { key: "h", className: "dswxMeta" }, t("formatHint", "Bold markers, headings, code fences, table rules and math delimiters are stripped; ordinary sentences are untouched.")),
-            ]),
-            // The switch drops group messages without a word (that is the point), so the
-            // count is the only place the silence can be seen.
-            snapshot?.prefs?.friendOnly
-              ? h("p", { key: "friendNote", className: "dswxMeta" },
-                  `${t("friendOnlyOn", "Friends only is on: group messages are ignored silently")} · ${t("groupsSkipped", "skipped")} ${snapshot?.counters?.groupsSkipped ?? 0}`)
-              : null,
-            snapshot?.prefs?.interject
-              ? h("p", { key: "interjectNote", className: "dswxMeta" },
-                  `${t("interjectOn", "Interjection is on: a message sent while the agent is working joins that turn")} · ${t("interjected", "interjected")} ${snapshot?.counters?.interjected ?? 0}`)
-              : null,
-            // Authorization: what this plugin does with an approval request it receives. DSH's own
-            // session policy (the file sandbox, whether approvals are asked at all) is a client
-            // setting, not a plugin's - the hint says so rather than pretending otherwise.
-            h("div", { key: "auth", className: "dswxRow" }, [
-              h("label", { key: "l", className: "dswxMeta" }, [
-                `${t("authLabel", "Approvals")} `,
-                h("select", {
-                  key: "s",
-                  className: "dswxInput",
-                  value: String(snapshot?.prefs?.authorization ?? "moderate"),
-                  disabled: busy,
-                  onChange: (event) => setAuthorization(event.target.value),
-                }, [
-                  h("option", { key: "strict", value: "strict" }, t("authStrict", "Strict - always ask, silence means no")),
-                  h("option", { key: "moderate", value: "moderate" }, t("authModerate", "Moderate - ask, fall back to the GUI")),
-                  h("option", { key: "full", value: "full" }, t("authFull", "Full - never ask here")),
-                  h("option", { key: "readonly", value: "readonly" }, t("authReadonly", "View only - refuse anything that asks")),
-                ]),
+              h("div", { key: "email-title", className: "dswxRow" }, [h("b", { key: "t" }, t("emailTitle", "Email channel"))]),
+              h("div", { key: "email-row1", className: "dswxRow" }, [
+                h("input", {
+                  key: "u", className: "dswxInput", placeholder: t("emailUser", "mailbox address"),
+                  defaultValue: emailDraft.user || snapshot?.prefs?.email?.user || "", disabled: busy,
+                  onChange: (event) => { emailDraft.user = event.target.value; },
+                }),
               ]),
-              h("span", { key: "h", className: "dswxMeta" }, t("authHint", "Decides only how this plugin handles an approval request; DSH's own session policy is set in DSH.")),
+              h("div", { key: "email-row2", className: "dswxRow" }, [
+                h("input", {
+                  key: "s", className: "dswxInput", placeholder: "SMTP host",
+                  defaultValue: emailDraft.smtpHost || snapshot?.prefs?.email?.smtpHost || "", disabled: busy,
+                  onChange: (event) => { emailDraft.smtpHost = event.target.value; },
+                }),
+                h("input", {
+                  key: "sp", className: "dswxInput", style: { maxWidth: "88px" },
+                  defaultValue: emailDraft.smtpPort || String(snapshot?.prefs?.email?.smtpPort ?? 465), disabled: busy,
+                  onChange: (event) => { emailDraft.smtpPort = event.target.value; },
+                }),
+                h("input", {
+                  key: "i", className: "dswxInput", placeholder: "IMAP host",
+                  defaultValue: emailDraft.imapHost || snapshot?.prefs?.email?.imapHost || "", disabled: busy,
+                  onChange: (event) => { emailDraft.imapHost = event.target.value; },
+                }),
+                h("input", {
+                  key: "ip", className: "dswxInput", style: { maxWidth: "88px" },
+                  defaultValue: emailDraft.imapPort || String(snapshot?.prefs?.email?.imapPort ?? 993), disabled: busy,
+                  onChange: (event) => { emailDraft.imapPort = event.target.value; },
+                }),
+              ]),
+              h("div", { key: "email-row3", className: "dswxRow" }, [
+                h("input", {
+                  key: "sp", className: "dswxInput", type: "password", placeholder: "SMTP password",
+                  defaultValue: emailDraft.smtpPass, disabled: busy, onChange: (event) => { emailDraft.smtpPass = event.target.value; },
+                }),
+                h("input", {
+                  key: "ip", className: "dswxInput", type: "password", placeholder: "IMAP password",
+                  defaultValue: emailDraft.imapPass, disabled: busy, onChange: (event) => { emailDraft.imapPass = event.target.value; },
+                }),
+              ]),
+              h("div", { key: "email-row4", className: "dswxRow" }, [
+                h("input", {
+                  key: "a", className: "dswxInput", placeholder: t("emailAllow", "allowed senders (comma separated; empty = nobody)"),
+                  defaultValue: emailDraft.allow || (snapshot?.prefs?.email?.allowSenders ?? []).join(", "), disabled: busy,
+                  onChange: (event) => { emailDraft.allow = event.target.value; },
+                }),
+              ]),
+              h("div", { key: "email-actions", className: "dswxRow" }, [
+                h("label", { key: "l", className: "dswxMeta" }, [
+                  h("input", {
+                    key: "c", type: "checkbox", checked: snapshot?.prefs?.email?.enabled === true, disabled: busy,
+                    onChange: (event) => saveEmail({ enabled: event.target.checked }),
+                  }),
+                  " " + t("emailEnable", "Receive mail and answer it"),
+                ]),
+                h("button", { key: "s", type: "button", className: "dswxBtn", disabled: busy, onClick: () => saveEmail({}) }, t("save", "Save")),
+                h("button", { key: "t", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("test") }, t("emailSend", "Send a test mail")),
+                h("button", { key: "k", type: "button", className: "dswxBtn", disabled: busy, onClick: () => emailAction("check") }, t("emailCheck", "Fetch now")),
+              ]),
+              h("div", { key: "email-status", className: "dswxMeta" }, (() => {
+                const status = snapshot?.email;
+                if (!status) return "";
+                const on = snapshot?.prefs?.email?.enabled === true ? "✅ 开" : "⏸ 关";
+                return `${on}${status.reason ? ` · ⚠️ ${status.reason}` : ""}${status.handled ? ` · 已处理 ${status.handled}` : ""}${status.skipped ? ` · 已跳过 ${status.skipped}` : ""}${status.lastError ? ` · ${status.lastError}` : ""}`;
+              })()),
+              // Delivery: whole answers, or shown while they are written. Only WeCom can do the
+              // latter - personal WeChat has no way to edit a message that was already sent - and the
+              // hint says so rather than letting the option look broken.
+              h("div", { key: "delivery", className: "dswxRow" }, [
+                h("label", { key: "l", className: "dswxMeta" }, [
+                  `${t("deliveryLabel", "Sending")} `,
+                  h("select", {
+                    key: "s",
+                    className: "dswxInput",
+                    value: String(snapshot?.prefs?.delivery ?? "whole"),
+                    disabled: busy,
+                    onChange: (event) => setDelivery(event.target.value),
+                  }, [
+                    h("option", { key: "whole", value: "whole" }, t("deliveryWhole", "Whole answer, sent once")),
+                    h("option", { key: "stream", value: "stream" }, t("deliveryStream", "Word by word (WeCom only)")),
+                  ]),
+                ]),
+                h("span", { key: "h", className: "dswxMeta" }, t("deliveryHint", "Word by word streams the answer while it is written; personal WeChat always receives whole answers.")),
+              ]),
+              // Text handling: WeChat and WeCom render no markdown, so the default strips it.
+              h("div", { key: "format", className: "dswxRow" }, [
+                h("label", { key: "l", className: "dswxMeta" }, [
+                  `${t("formatLabel", "Text")} `,
+                  h("select", {
+                    key: "s",
+                    className: "dswxInput",
+                    value: String(snapshot?.prefs?.format ?? "plain"),
+                    disabled: busy,
+                    onChange: (event) => setFormat(event.target.value),
+                  }, [
+                    h("option", { key: "plain", value: "plain" }, t("formatPlain", "Cleaned (drop markdown WeChat cannot render)")),
+                    h("option", { key: "raw", value: "raw" }, t("formatRaw", "Raw (send the model's markdown as-is)")),
+                  ]),
+                ]),
+                h("span", { key: "h", className: "dswxMeta" }, t("formatHint", "Bold markers, headings, code fences, table rules and math delimiters are stripped; ordinary sentences are untouched.")),
+              ]),
+              // The switch drops group messages without a word (that is the point), so the
+              // count is the only place the silence can be seen.
+              snapshot?.prefs?.friendOnly
+                ? h("p", { key: "friendNote", className: "dswxMeta" },
+                    `${t("friendOnlyOn", "Friends only is on: group messages are ignored silently")} · ${t("groupsSkipped", "skipped")} ${snapshot?.counters?.groupsSkipped ?? 0}`)
+                : null,
+              snapshot?.prefs?.interject
+                ? h("p", { key: "interjectNote", className: "dswxMeta" },
+                    `${t("interjectOn", "Interjection is on: a message sent while the agent is working joins that turn")} · ${t("interjected", "interjected")} ${snapshot?.counters?.interjected ?? 0}`)
+                : null,
+              // Authorization: what this plugin does with an approval request it receives. DSH's own
+              // session policy (the file sandbox, whether approvals are asked at all) is a client
+              // setting, not a plugin's - the hint says so rather than pretending otherwise.
+              h("div", { key: "auth", className: "dswxRow" }, [
+                h("label", { key: "l", className: "dswxMeta" }, [
+                  `${t("authLabel", "Approvals")} `,
+                  h("select", {
+                    key: "s",
+                    className: "dswxInput",
+                    value: String(snapshot?.prefs?.authorization ?? "moderate"),
+                    disabled: busy,
+                    onChange: (event) => setAuthorization(event.target.value),
+                  }, [
+                    h("option", { key: "strict", value: "strict" }, t("authStrict", "Strict - always ask, silence means no")),
+                    h("option", { key: "moderate", value: "moderate" }, t("authModerate", "Moderate - ask, fall back to the GUI")),
+                    h("option", { key: "full", value: "full" }, t("authFull", "Full - never ask here")),
+                    h("option", { key: "readonly", value: "readonly" }, t("authReadonly", "View only - refuse anything that asks")),
+                  ]),
+                ]),
+                h("span", { key: "h", className: "dswxMeta" }, t("authHint", "Decides only how this plugin handles an approval request; DSH's own session policy is set in DSH.")),
+              ]),
+              (snapshot?.approvals ?? []).length > 0
+                ? h("div", { key: "waiting", className: "dswxRow" }, [
+                    h("span", { key: "t", className: "dswxMeta" },
+                      `${t("waitingApproval", "Waiting for your approval in WeChat")}: ${(snapshot.approvals ?? []).map((item) => item.toolName ?? "?").join(", ")}`),
+                    h("button", { key: "c", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelApproval(snapshot.approvals[0]) },
+                      t("cancelWaiting", "Cancel")),
+                  ])
+                : null,
             ]),
-            (snapshot?.approvals ?? []).length > 0
-              ? h("div", { key: "waiting", className: "dswxRow" }, [
-                  h("span", { key: "t", className: "dswxMeta" },
-                    `${t("waitingApproval", "Waiting for your approval in WeChat")}: ${(snapshot.approvals ?? []).map((item) => item.toolName ?? "?").join(", ")}`),
-                  h("button", { key: "c", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelApproval(snapshot.approvals[0]) },
-                    t("cancelWaiting", "Cancel")),
-                ])
-              : null,
             // Token usage: one row per account, over a window the user chooses (1..30 days).
             // The host keeps the ledger; this card only reads and steers it.
-            h("div", { key: "tokens", className: "dswxCard" }, [
+            h("div", { key: "tokens", className: "dswxCard dswxSection" }, [
               h("div", { key: "head", className: "dswxRow" }, [
                 h("strong", { key: "t" }, t("tokensTitle", "Token usage")),
                 h("span", { key: "u", className: "dswxMeta" },
@@ -2048,37 +2125,11 @@ function emailDraftRef() {
             h("p", { key: "approval", className: "dswxHint" }, t("approvalHint", "Sensitive operations are asked here: reply 1 to approve once, 2 to reject.")),
           ]),
 
-          pending ? h("div", { key: "qr", className: "dswxQr" }, [
-            pending.hasQr
-              ? h("img", { key: "img", className: "dswxQrImg", alt: "WeChat login QR", src: `${BASE}/qr/${pending.id}` })
-              : h("div", { key: "noimg", className: "dswxMeta" }, t("scanning", "Waiting for the scan…")),
-            h("div", { key: "side", className: "dswxCard" }, [
-              h("p", { key: "state", className: "dswxMsg" }, loginText(pending)),
-              h("div", { key: "actions", className: "dswxRow" }, [
-                h("button", { key: "cancel", type: "button", className: "dswxBtn", disabled: busy, onClick: () => cancelPairing(pending.id) },
-                  t("cancel", "Cancel")),
-              ]),
-              pending.verifyCodeNeeded
-                ? h("div", { key: "code", className: "dswxRow" }, [
-                    h("input", {
-                      key: "i",
-                      className: "dswxInput",
-                      value: code,
-                      inputMode: "numeric",
-                      placeholder: t("needCode", "digits"),
-                      onChange: (event) => setCode(event.target.value),
-                      onKeyDown: (event) => { if (event.key === "Enter") submitCode(); },
-                    }),
-                    h("button", { key: "b", type: "button", className: "dswxBtn dswxPrimary", disabled: busy || code.trim().length === 0, onClick: submitCode },
-                      t("submitCode", "Submit")),
-                  ])
-                : null,
-              h("p", { key: "hint", className: "dswxHint" }, t("scanHint", "Scan with WeChat on your phone.")),
-            ]),
-          ]) : null,
+
 
           error ? h("p", { key: "err", className: "dswxMsg dswxErr" }, error) : null,
-          h("div", { key: "inbox", className: "dswxHint" }, [
+          h("div", { key: "inbox", className: "dswxSection" }, [
+            h("p", { key: "title", className: "dswxSectionTitle" }, t("inboxTitle", "收件目录 / Inbound")),
             h("p", { key: "t" }, `${t("inboxLabel", "Inbound files are saved in")}: ${snapshot?.inboxRoot ?? "…"}`),
             // A real form submit (a navigation) rather than a fetch, so it works even
             // in browsers where the card's requests never reach the plugin.
@@ -2091,7 +2142,8 @@ function emailDraftRef() {
           ]),
           // Feishu: configurable from here, and saving reconnects at once. The whole point of this block
           // is that trying a bot no longer costs a `setx` and a DSH restart.
-          h("div", { key: "feishu", className: "dswxHint" }, [
+          h("div", { key: "feishu", className: "dswxSection" }, [
+            h("p", { key: "title", className: "dswxSectionTitle" }, t("integrationsTitle", "集成 / Integrations")),
             h("p", { key: "t" }, [
               `${t("feishuLabel", "Feishu (飞书 / Lark)")}: `,
               snapshot?.feishu?.configured
@@ -2101,7 +2153,7 @@ function emailDraftRef() {
               snapshot?.feishu?.connection?.lastError ? ` (${snapshot.feishu.connection.lastError})` : "",
             ]),
             snapshot?.feishu?.savedFields?.length
-              ? h("p", { key: "saved", className: "dswxMeta" }, `${t("feishuSavedHere", "saved from this panel")}: ${snapshot.feishu.savedFields.join(", ")}`)
+              ? h("p", { key: "saved", className: "dswxMeta" }, `${t("feishuSavedHere", "saved from this panel")}: ${snapshot.feishu.savedFields.map(feishuFieldLabel).join(", ")}`)
               : null,
             h("div", { key: "scopes", className: "dswxRow" }, [
               h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: copyFeishuScopes },

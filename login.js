@@ -133,6 +133,9 @@ export class WechatLoginManager {
   /** Fetch (or refresh) the QR code for an attempt. */
   async #issue(session) {
     const qr = await this.ilink.requestQrCode({ baseUrl: this.baseUrl, botType: this.botType });
+    // Issuing a code resets the record to "pending", which would undo a Cancel that arrived while the request was
+    // in flight. A terminal attempt keeps its verdict.
+    if (TERMINAL.has(session.status)) return;
     session.qrcode = qr?.qrcode;
     // What goes INSIDE the QR code: the platform hands back a landing-page URL
     // (`qrcode_img_content`), and the official client encodes exactly that URL
@@ -182,6 +185,10 @@ export class WechatLoginManager {
         session.message = `poll-failed: ${error?.message ?? error}`;
         return session;
       }
+      // The status is only meaningful if the attempt is still alive: the cancel route can fire while this poll is
+      // in flight, and writing the platform's answer over it resurrects an attempt the person already stopped -
+      // the session went back to "pending" and started issuing new QR codes after Cancel was pressed.
+      if (TERMINAL.has(session.status)) return session;
       const status = result?.status ?? "wait";
       session.status = status;
       session.phase = classify(status);
@@ -233,6 +240,9 @@ export class WechatLoginManager {
       session.refreshes += 1;
       try {
         await this.#issue(session);
+        // Same race as above: #issue() writes "pending" back onto the record, so a cancel that lands during the
+        // refresh would be undone by the refresh itself.
+        if (TERMINAL.has(session.status)) return session;
       } catch (error) {
         session.status = "error";
         session.phase = "error";

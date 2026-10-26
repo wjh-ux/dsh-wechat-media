@@ -5236,29 +5236,32 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
   async function noteGuiPort(req) {
     try {
-      // The environment wins: it is what the host actually bound, and it exists before the first request.
-      const advertised = guiEnvPort();
-      if (advertised) {
-        const saved = await state.loadGuiPort();
-        if (saved.port === advertised.port) {
-          guiPortCache = { ...saved, source: "env" };
-          return;
-        }
-        guiPortCache = { ...(await state.saveGuiPort(advertised.port, { host: advertised.host, url: advertised.url })), source: "env" };
-        ctx.logger?.info?.("[dsh-wechat-media] GUI port from DSH_WEB_URL: %s", advertised.port);
-        return;
-      }
+      // The request wins: it was served by the very GUI the person is looking at, so its Host header is the
+      // address that works. `$DSH_WEB_URL` is inherited by every shell the GUI spawns - and a plugin loaded from
+      // such a shell (or a second `dsh web` started from inside one) would otherwise advertise that stale port
+      // and write it into gui-port.json, which is exactly how the card came to show a port it was not running on.
       const host = String(req?.headers?.host ?? "").trim();
       const port = Number(host.split(":")[1] ?? (String(req?.socket?.localPort ?? "")));
-      if (!Number.isInteger(port) || port <= 0) return;
-      const saved = await state.loadGuiPort();
-      if (saved.port === port) {
-        // Nothing to write, but /state and /doctor still need to know where the answer came from.
-        guiPortCache = { ...saved, source: "request" };
+      if (Number.isInteger(port) && port > 0) {
+        const saved = await state.loadGuiPort();
+        if (saved.port === port) {
+          // Nothing to write, but /state and /doctor still need to know where the answer came from.
+          guiPortCache = { ...saved, source: "request" };
+          return;
+        }
+        guiPortCache = { ...(await state.saveGuiPort(port, { host, url: `http://${host}` })), source: "request" };
+        ctx.logger?.info?.("[dsh-wechat-media] GUI port recorded: %s", port);
         return;
       }
-      guiPortCache = { ...(await state.saveGuiPort(port, { host, url: `http://${host}` })), source: "request" };
-      ctx.logger?.info?.("[dsh-wechat-media] GUI port recorded: %s", port);
+      const advertised = guiEnvPort();
+      if (!advertised) return;
+      const saved = await state.loadGuiPort();
+      if (saved.port === advertised.port) {
+        guiPortCache = { ...saved, source: "env" };
+        return;
+      }
+      guiPortCache = { ...(await state.saveGuiPort(advertised.port, { host: advertised.host, url: advertised.url })), source: "env" };
+      ctx.logger?.info?.("[dsh-wechat-media] GUI port from DSH_WEB_URL: %s", advertised.port);
     } catch (error) {
       ctx.logger?.warn?.("[dsh-wechat-media] could not record the GUI port: %s", error?.message ?? error);
     }
@@ -6434,7 +6437,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       // Keep the drop countable so the card can show it.
       await state.setPeer(accountId, chatId, noteBlocked(await state.getPeer(accountId, chatId)));
       // A silent drop is indistinguishable from a broken bot: say it once per chat.
-      await explainBlockedOnce({ accountId, chatId, isGroup: verdict.isGroup === true, reply, verdict });
+      await explainBlockedOnce({
+        accountId,
+        chatId,
+        isGroup: verdict.isGroup === true,
+        // The notice goes out through this account's own sender. There is no `reply` in scope here - passing the
+        // bare identifier threw `ReferenceError: reply is not defined` before the notice could be attempted, so
+        // the one explanation a blocked chat ever gets was never sent.
+        reply: (answer) => sendText(account, chatId, answer, { typing: false }),
+        verdict,
+      });
+
       return;
     }
     if (verdict.action === "answer") {
@@ -8938,17 +8951,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   void repairProfileModel().catch(() => {});
 
   (async () => {
-    const advertised = guiEnvPort();
-    if (advertised) {
-      try {
-        guiPortCache = { ...(await state.saveGuiPort(advertised.port, { host: advertised.host, url: advertised.url })), source: "env" };
-        return;
-      } catch { /* fall back to the file below */ }
-    }
+    // Only cache the environment's port at boot; do not persist it. `$DSH_WEB_URL` can be stale (it is inherited
+    // by shells the GUI spawns), and writing it to gui-port.json makes the wrong number survive until the next
+    // request. The recorded file wins here, and the next real request corrects both with the truth.
     try {
       const saved = await state.loadGuiPort();
-      guiPortCache = saved && saved.port ? { ...saved, source: "file" } : null;
+      if (saved && saved.port) {
+        guiPortCache = { ...saved, source: "file" };
+        return;
+      }
     } catch { /* nothing recorded yet */ }
+    const advertised = guiEnvPort();
+    if (advertised) guiPortCache = { port: advertised.port, host: advertised.host, url: advertised.url, source: "env" };
   })();
 
   // Migrate the prefs file in place: any secret still stored as plaintext is sealed once, at startup, so a
@@ -9027,6 +9041,27 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   const isLoopback = (req) => {
     const address = req.socket?.remoteAddress ?? "";
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  };
+
+  /**
+   * Whether this request comes from another site.
+   *
+   * The plugin's routes are loopback-only, which stops a remote caller but not a page in the same browser: with a
+   * plain-GET API, `<img src="http://127.0.0.1:<port>/dsh-wechat-media/logout">` on any website would run a
+   * mutation. Browsers label those `Sec-Fetch-Site: cross-site`; a fetch from the card itself is `same-origin`,
+   * and a typed URL or a panel link is `none`. Requests with no such header (curl, the acceptance run) are not a
+   * browser's cross-site request and stay allowed.
+   */
+  const isCrossSiteRequest = (req) => {
+    const site = String(req?.headers?.["sec-fetch-site"] ?? "").trim().toLowerCase();
+    if (site === "cross-site") return true;
+    const origin = String(req?.headers?.origin ?? "").trim();
+    if (!origin) return false;
+    try {
+      return new URL(origin).host !== String(req?.headers?.host ?? "").trim();
+    } catch {
+      return true;
+    }
   };
 
   ctx.inject(["webServer"], (webCtx) => {
@@ -11020,7 +11055,18 @@ ${field("botSecret", "Secret", "", cfg.botSecret ? "已保存（留空表示不�
       },
     ];
     for (const route of routes) {
-      webCtx.effect(() => webCtx.webServer.register(route), `dsh-wechat-media: ${route.path}`);
+      // Every mutation is a plain GET (that is what kept the card usable in the browser where POSTs never
+      // arrived), so without this a page on any site could unpair an account or flip a preference with
+      // `<img src="http://127.0.0.1:<port>/dsh-wechat-media/logout">`. The guard wraps every route instead of
+      // being repeated in each handler, so a new route cannot forget it.
+      const handler = route.handler;
+      const guarded = {
+        ...route,
+        handler: (req, res) => (isCrossSiteRequest(req)
+          ? json(res, 403, { error: "cross-site request refused" })
+          : handler(req, res)),
+      };
+      webCtx.effect(() => webCtx.webServer.register(guarded), `dsh-wechat-media: ${route.path}`);
     }
   });
 

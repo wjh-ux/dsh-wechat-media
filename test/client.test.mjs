@@ -307,6 +307,57 @@ test("the QQ block explains a reconnect and offers a retry button", () => {
   assert.match(code, /t\("qqReconnect", "Reconnect now"\)/, "and it is on a button");
 });
 
+test("the card polls slowly when idle, fast only for a live QR, and never from a hidden tab", () => {
+  // A one-second `setInterval` refreshed the whole card - twelve requests a minute - even with nothing pairing,
+  // and it kept doing it in a background tab. The slow loop now runs all the time and the one-second tick exists
+  // only while a QR is on screen.
+  assert.match(code, /const IDLE_POLL_MS = \d+;/, "there is an idle cadence");
+  assert.match(code, /setTimeout\(tick, IDLE_POLL_MS\)/, "the slow loop uses it");
+  const fastCount = code.split("setInterval(refresh, POLL_MS)").length - 1;
+  assert.equal(fastCount, 1, "there is exactly one fast interval");
+  const fastAt = code.indexOf("setInterval(refresh, POLL_MS)");
+  assert.ok(code.slice(Math.max(0, fastAt - 200), fastAt).includes("if (!pairingId) return undefined;"), "and it is guarded by the live pairing");
+  assert.match(code, /document\.visibilityState === "hidden"/, "a hidden tab does not poll");
+  assert.match(code, /addEventListener\("visibilitychange"/, "coming back to the tab refreshes at once");
+  assert.match(code, /if \(inFlight\.current\) return;/, "the two poll paths cannot stack requests");
+});
+
+test("no card action calls a setter the component never declared", () => {
+  // `runApprovalSelfTest()` called setFailed()/setMessage(), which this component never had: clicking the button
+  // threw `ReferenceError` before it could send anything. The self-test is a plain link now, and the dead function
+  // (with its undefined setters) is gone.
+  assert.doesNotMatch(code, /setFailed\(/, "no setFailed() call is left behind");
+  assert.doesNotMatch(code, /setMessage\(/, "no setMessage() call is left behind");
+  assert.doesNotMatch(code, /runApprovalSelfTest/, "the dead self-test is removed, not merely unwired");
+  assert.match(code, /href: `\$\{BASE\}\/send-test-approval`/, "the self-test is a real link to the host route");
+});
+
+test("the pairing QR renders directly under the button that starts it", () => {
+  // It used to sit after the token ledger and the peer list, at the bottom of a card three screens tall: the button
+  // looked dead because the code appeared far below the fold.
+  const headerAt = code.indexOf('key: "add", type: "button"');
+  const qrAt = code.indexOf('key: "qr", className: "dswxQr"');
+  const officeAt = code.indexOf('key: "office"');
+  assert.ok(headerAt > 0 && qrAt > headerAt, "the QR block follows the add-account button");
+  assert.ok(officeAt > qrAt, "and comes before the settings sections");
+});
+
+test("long values fit: the card's inputs are not a fixed 110px", () => {
+  // Every text box was `width:110px`, so an inbox path, a webhook URL or a token was cut to its first few characters.
+  assert.doesNotMatch(code, /\.dswxInput\{[^}]*width:110px/, "the fixed input width is gone");
+  assert.match(code, /\.dswxInput\{[^}]*min-width:9em/, "inputs have a sane minimum instead");
+  assert.match(code, /\.dswxInput\{[^}]*flex:1 1 15em/, "and grow with the row");
+});
+
+test("the panel is divided into titled, framed sections", () => {
+  assert.match(code, /\.dswxSection\{[^}]*border:1px solid/, "sections have a frame");
+  assert.match(code, /\.dswxSectionTitle\{/, "and a title style");
+  assert.match(code, /key: "channels", className: "dswxSection"/, "the channels block is its own section");
+  assert.match(code, /t\("channelsTitle"/, "with a translated title");
+  assert.match(code, /key: "inbox", className: "dswxSection"/, "so is the inbox block");
+  assert.match(code, /t\("integrationsTitle"/, "the Feishu / Tavily / browser block has one too");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
 
