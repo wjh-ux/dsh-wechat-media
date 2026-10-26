@@ -74,7 +74,7 @@ await test("files win when both text and paths are given", () => {
 
 await test("readClipboard parses the base64 answer, including Chinese and files", async () => {
   const exec = fakeExec({ ok: true, chars: 12, truncated: false, text: "中文不能变问号", files: ["C:\\a.txt"] });
-  const answer = await clipboard.readClipboard({ exec });
+  const answer = await clipboard.readClipboard({ exec, platform: "win32" });
   assert.equal(answer.text, "中文不能变问号");
   assert.deepEqual(answer.files, ["C:\\a.txt"]);
   assert.equal(answer.truncated, false);
@@ -86,15 +86,15 @@ await test("readClipboard parses the base64 answer, including Chinese and files"
 
 await test("readClipboard reports truncation and tolerates a script that wrote noise first", async () => {
   const exec = fakeExec({ ok: true, chars: 900, truncated: true, text: "abc", files: [] }, { stdoutLines: ["WARNING: something"] });
-  const answer = await clipboard.readClipboard({ exec });
+  const answer = await clipboard.readClipboard({ exec, platform: "win32" });
   assert.equal(answer.truncated, true);
   assert.equal(answer.chars, 900);
 });
 
 await test("writeClipboard returns what was written, and says which kind", async () => {
-  const textAnswer = await clipboard.writeClipboard({ text: "hello", exec: fakeExec({ ok: true, kind: "text", chars: 5 }) });
+  const textAnswer = await clipboard.writeClipboard({ text: "hello", exec: fakeExec({ ok: true, kind: "text", chars: 5 }), platform: "win32" });
   assert.deepEqual(textAnswer, { kind: "text", chars: 5, count: 0, via: "powershell" });
-  const fileAnswer = await clipboard.writeClipboard({ paths: ["C:\\x.txt"], exec: fakeExec({ ok: true, kind: "files", count: 1 }) });
+  const fileAnswer = await clipboard.writeClipboard({ paths: ["C:\\x.txt"], exec: fakeExec({ ok: true, kind: "files", count: 1 }), platform: "win32" });
   assert.equal(fileAnswer.kind, "files");
   assert.equal(fileAnswer.count, 1);
 });
@@ -108,7 +108,7 @@ await test("a failing script surfaces its first stderr line", async () => {
     process.nextTick(() => callback(new Error("Command failed"), "", "The clipboard is being used by another process.\r\nat line:1"));
     return { stdin: { end() {} } };
   };
-  await assert.rejects(() => clipboard.readClipboard({ exec }), /another process/);
+  await assert.rejects(() => clipboard.readClipboard({ exec, platform: "win32" }), /another process/);
 });
 
 await test("garbage on stdout is named, not guessed at", async () => {
@@ -116,7 +116,7 @@ await test("garbage on stdout is named, not guessed at", async () => {
     process.nextTick(() => callback(null, "not-base64-json\r\n", ""));
     return { stdin: { end() {} } };
   };
-  await assert.rejects(() => clipboard.readClipboard({ exec }), /base64 JSON/);
+  await assert.rejects(() => clipboard.readClipboard({ exec, platform: "win32" }), /base64 JSON/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
