@@ -6,7 +6,12 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows, not Ubuntu. These suites exercise the platform the plugin actually drives: PowerShell on an STA thread
+    # (clipboard, desktop, dialogs, serial), registry and chrome.exe discovery (browser, extension), Windows paths and
+    # CRLF handling. On the Linux runner four clipboard cases and the extension install helper failed for that reason
+    # alone, which is why every run since v1.6.6 was red while the code was green on every machine it is developed on.
+    # Wider OS coverage means guarding each Windows-only suite, not running them where they cannot pass.
+    runs-on: windows-latest
     strategy:
       matrix:
         node: ["22", "24"]
@@ -18,6 +23,7 @@ jobs:
       # The package has no dependencies and no build step: the suites are plain
       # node scripts, each printing "N passed, M failed" and exiting non-zero.
       - name: Run every suite
+        shell: bash
         run: |
           set -e
           for suite in test/*.test.mjs; do
