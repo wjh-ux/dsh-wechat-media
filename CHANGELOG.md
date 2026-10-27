@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.10
+
+- **The browser-automation block was one flex row with everything in it** - which is why the 代理 field's label landed on
+  top of the input next to it, 走代理的域名 wrapped into a second line with its 保存 button below, and 保存浏览器设置 sat
+  alone on a line of its own. It is now: which browser (频道 / 端口 / 配置目录), how it runs (模式 / 会话 / 目标), one row
+  for the extension controls (导入登录 / 扩展驱动 / 光标 / 一键安装扩展), then the proxy field, the proxy host list with its
+  save, the scope line, and the save action - each on its own line, in that order.
+- **A button that is a direct child of a column-flex card stretched to the full width** and read as a banner rather than
+  a button; `.dswxCard > .dswxBtn { align-self: flex-start }` fixes every stacked block at once.
+- **The extension status was one run-on line**: status, paste-able address and token, then the counters. It is three
+  lines now - the address and token together, because those are the two things a person copies into the extension.
+- Tavily and 浏览器自动化 were grey hint lines inside 集成; they are section titles now, so the block has a hierarchy
+  instead of three unrelated paragraphs.
+- 46 suites / 738 cases.
+
 ## 1.6.9
 
 - **The contacts card was still one mixed bag.** 1.6.8 gave every block a frame, but this one kept its contents: the

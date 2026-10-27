@@ -102,6 +102,7 @@ textarea.dswxInput{flex:1 1 100%;min-height:4.5em;resize:vertical}
 .dswxHint{margin:0;font-size:12px;opacity:.7}
 .dswxSection{border:1px solid rgba(127,127,127,.2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .dswxSectionTitle{margin:0;font-size:13px;font-weight:600;letter-spacing:.01em;opacity:.85}
+.dswxCard > .dswxBtn{align-self:flex-start}
 `;
 
     function injectCss() {
@@ -2379,7 +2380,7 @@ function emailDraftRef() {
               : null,
             // Tavily: web search for the chat channels. The key is never echoed back - the panel can say whether one is
             // set and nothing more - and a blank field is never submitted, so a saved key cannot be wiped by accident.
-            h("p", { key: "tavilylabel", className: "dswxMeta" }, t("tavilyLabel", "Tavily 联网搜索（微信 / 企业微信 / 飞书 会话可用）")),
+            h("p", { key: "tavilylabel", className: "dswxSectionTitle" }, t("tavilyLabel", "Tavily 联网搜索（微信 / 企业微信 / 飞书 会话可用）")),
             h("div", { key: "tavilyrow", className: "dswxRow" }, [
               h("input", {
                 key: "key",
@@ -2441,7 +2442,7 @@ function emailDraftRef() {
               : "Tavily：状态未知"),
             // Browser automation: the machine's own Chrome or Edge, driven over CDP. No download, no npm install, and a
             // profile of its own under $DSH_HOME so the browser a person actually uses is never touched.
-            h("p", { key: "browserlabel", className: "dswxMeta" }, t("browserLabel", "浏览器自动化（微信 / 企业微信 / 飞书 会话可用）")),
+            h("p", { key: "browserlabel", className: "dswxSectionTitle" }, t("browserLabel", "浏览器自动化（微信 / 企业微信 / 飞书 会话可用）")),
             h("div", { key: "browserrow", className: "dswxRow" }, [
               h("select", {
                 key: "channel",
@@ -2469,6 +2470,9 @@ function emailDraftRef() {
                 disabled: busy,
                 onChange: (event) => setBrowserDraft((draft) => ({ ...draft, browserProfileDir: event.target.value })),
               }),
+            ]),
+            // How it runs: a mode, which profile it uses, and which browser the extension's commands go to.
+            h("div", { key: "browsermode", className: "dswxRow" }, [
               // A mode, not a checkbox: `erp` is not "not headless", it is a visible window with its own
               // persistent profile - a boolean cannot express that, and guessing made the difference invisible.
               h("label", { key: "mode", className: "dswxMeta" }, [
@@ -2520,18 +2524,28 @@ function emailDraftRef() {
                   ]),
                 ])
                 : null,
+            ]),
+            // The extension, its buttons, the proxy and the save action: stacked, one thing per line. In one flex row
+            // the proxy host label landed on top of the input next to it and the save button wrapped onto its own line
+            // anyway - just without any order.
+            h("div", { key: "browserextra", className: "dswxCard" }, [
               // The extension's address and token, shown so they can be pasted into it. The token is what stops any
               // local process from driving the person's browser.
               snapshot?.browser?.extension
-                ? h("p", { key: "extinfo", className: "dswxMeta" },
-                  `扩展：${snapshot.browser.extension.connected ? `已连接${(snapshot.browser.extension.clients ?? []).map((c) => c.browser === "edge" ? " Edge" : " Chrome").join("、")}` : "未连接"}`
-                  + ` · 目标 ${snapshot.browser.extension.browser || "—"}`
-                  + ` · 地址 ${snapshot.browser.extension.url}`
-                  + ` · token ${snapshot.browser.extension.token}`
-                  + ` · 最近命令 ${snapshot.browser.extension.lastDriver === "debugger" ? "调试器" : snapshot.browser.extension.lastDriver === "script" ? "脚本" : "—"}`
-                  + ` · 调试器用过 ${snapshot.browser.extension.debuggerUses ?? 0} 次`
-                  + ` · 目录 ${snapshot.browser.extension.dir ?? ""}`)
+                ? h("div", { key: "extinfo" }, [
+                  h("p", { key: "s", className: "dswxMeta" },
+                    `扩展：${snapshot.browser.extension.connected ? `已连接${(snapshot.browser.extension.clients ?? []).map((c) => c.browser === "edge" ? " Edge" : " Chrome").join("、")}` : "未连接"}`
+                    + ` · 目标 ${snapshot.browser.extension.browser || "—"}`),
+                  // The two things a person has to paste into the extension options page, together and on their own line.
+                  h("p", { key: "u", className: "dswxMeta" },
+                    `地址 ${snapshot.browser.extension.url} · token ${snapshot.browser.extension.token}`),
+                  h("p", { key: "c", className: "dswxMeta" },
+                    `最近命令 ${snapshot.browser.extension.lastDriver === "debugger" ? "调试器" : snapshot.browser.extension.lastDriver === "script" ? "脚本" : "—"}`
+                    + ` · 调试器用过 ${snapshot.browser.extension.debuggerUses ?? 0} 次`
+                    + ` · 目录 ${snapshot.browser.extension.dir ?? ""}`),
+                ])
                 : null,
+              h("div", { key: "extactions", className: "dswxRow" }, [
               h("button", {
                 key: "imp",
                 type: "button",
@@ -2574,8 +2588,9 @@ function emailDraftRef() {
                 onClick: installExtension,
                 title: t("installExtensionHint", "打包扩展、打开 chrome://extensions、把 token 放进剪贴板"),
               }, t("installExtension", "一键安装扩展")),
-              h("label", { key: "proxy", className: "dswxMeta" }, [
-                t("browserProxy", " 代理 ") + " ",
+              ]),
+              h("div", { key: "proxyrow", className: "dswxRow" }, [
+                h("span", { key: "k", className: "dswxName" }, t("browserProxy", "代理")),
                 h("input", {
                   key: "i",
                   className: "dswxInput",
@@ -2604,10 +2619,12 @@ function emailDraftRef() {
                   onClick: () => saveProxyHosts(proxyHostsDraft ?? (snapshot?.browser?.proxyHosts ?? []).join(", ")),
                 }, t("save", "Save")),
               ]),
-              h("span", { key: "pacmode", className: "dswxMeta" },
-                `${t("proxyScope", "范围")}: ${snapshot?.browser?.proxyMode === "pac" ? t("proxyScopePac", "仅列表内域名（PAC）") : snapshot?.browser?.proxyMode === "global" ? t("proxyScopeGlobal", "全部网址") : t("proxyScopeOff", "关闭")}`),
-              h("span", { key: "modenow", className: "dswxMeta" },
-                `${t("browserModeNow", "当前")}: ${snapshot?.browser?.mode ?? "?"}${snapshot?.browser?.visible ? " · 👁 " + t("browserVisible", "可见") : " · " + t("browserInvisible", "无窗口")}`),
+              h("div", { key: "proxystate", className: "dswxRow" }, [
+                h("span", { key: "pacmode", className: "dswxMeta" },
+                  `${t("proxyScope", "范围")}: ${snapshot?.browser?.proxyMode === "pac" ? t("proxyScopePac", "仅列表内域名（PAC）") : snapshot?.browser?.proxyMode === "global" ? t("proxyScopeGlobal", "全部网址") : t("proxyScopeOff", "关闭")}`),
+                h("span", { key: "modenow", className: "dswxMeta" },
+                  `${t("browserModeNow", "当前")}: ${snapshot?.browser?.mode ?? "?"}${snapshot?.browser?.visible ? " · 👁 " + t("browserVisible", "可见") : " · " + t("browserInvisible", "无窗口")}`),
+              ]),
               h("button", {
                 key: "save",
                 type: "button",
