@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.11
+
+- **WeCom was a grey hint line at the very bottom of the card** - outside every section, below the integrations block,
+  reading `企业微信: 未配置 · 配置` where the second half looked like a label rather than something to click. Its two
+  sibling channels (QQ, mail) sit inside 消息通道 with a name, a status and an action; WeCom now does too:
+  **企业微信** · `未配置` · [配置] right under the mail block, and the link is button-shaped.
+- The line was the only channel whose state was printed as prose in a hint, so "is 企业微信 broken?" had no answer on
+  the card. The row says the same three states the backend does: `long connection ✓` when the intelligent robot is
+  authenticated, the configured transport when credentials exist, `not configured` otherwise.
+- 46 suites / 738 cases.
+
 ## 1.6.10
 
 - **The browser-automation block was one flex row with everything in it** - which is why the 代理 field's label landed on

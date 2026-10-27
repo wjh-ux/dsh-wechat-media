@@ -2025,6 +2025,14 @@ function emailDraftRef() {
               const on = snapshot?.prefs?.email?.enabled === true ? "✅ 开" : "⏸ 关";
               return `${on}${status.reason ? ` · ⚠️ ${status.reason}` : ""}${status.handled ? ` · 已处理 ${status.handled}` : ""}${status.skipped ? ` · 已跳过 ${status.skipped}` : ""}${status.lastError ? ` · ${status.lastError}` : ""}`;
             })()),
+            // WeCom is the third channel; it belongs next to QQ and mail, not as a grey line at the bottom of the card.
+            h("div", { key: "wecom", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, t("wecomLabel", "WeCom (企业微信)")),
+              h("span", { key: "s", className: "dswxMeta" }, snapshot?.wecom?.bot?.authenticated
+                ? t("wecomConnected", "long connection ✓")
+                : snapshot?.wecom?.configured ? (snapshot.wecom.via ?? t("wecomConfigured", "configured")) : t("notConfigured", "not configured")),
+              h("a", { key: "l", className: "dswxBtn", href: `${BASE}/wecom`, style: { cursor: "pointer" } }, t("configure", "配置")),
+            ]),
             // Delivery: whole answers, or shown while they are written. Only WeCom can do the
             // latter - personal WeChat has no way to edit a message that was already sent - and the
             // hint says so rather than letting the option look broken.
@@ -2701,10 +2709,6 @@ function emailDraftRef() {
               ? h("p", { key: "sources", className: "dswxMeta" }, `${t("feishuSources", "来源")}: ${Object.entries(snapshot.feishu.sources).map(([field, from]) => `${field}=${from}`).join(" · ")}`)
               : null,
             h("p", { key: "hint", className: "dswxMeta" }, t("feishuFormHint", "Saving takes effect immediately - no DSH restart, no setx.")),
-          ]),
-          h("p", { key: "wecom", className: "dswxHint" }, [
-            `${t("wecomLabel", "WeCom (企业微信)")}: ${snapshot?.wecom?.bot?.authenticated ? "long connection ✓" : snapshot?.wecom?.configured ? (snapshot.wecom.via ?? "configured") : t("notConfigured", "not configured")} · `,
-            h("a", { key: "l", href: `${BASE}/wecom`, style: { cursor: "pointer" } }, t("configure", "Configure")),
           ]),
           snapshot?.inboxRoot
             ? null
