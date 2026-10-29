@@ -140,9 +140,13 @@ import {
 // The user-identity half of the Feishu integration: writes that must land in *the person's* cloud space and
 // knowledge bases, which the app identity can never reach (see lark.js for the measured reasons).
 import {
+  larkCli,
   larkCliPath,
   larkCliMissingHint,
   larkStatus,
+  larkText,
+  larkSplitArgs,
+  larkAssertRunnable,
   larkWikiSpaces,
   larkWikiCreateSpace,
   larkUploadTree,
@@ -7527,6 +7531,85 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
         },
       });
+      // ── The whole lark-cli surface, behind one bridge ─────────────────────────────────────────────────
+      //
+      // The official CLI ships 200+ commands across 18 domains (messaging, docs, base, sheets, slides, calendar, mail,
+      // tasks, meetings, wiki, okr, approval, attendance, contact, minutes, drive, apps, markdown). Wrapping each as its
+      // own tool would be 200 schemas in every prompt, and out of date the first time the CLI ships a new domain - so
+      // the bridge takes the command line itself and the CLI stays the authority on what exists. `feishu_cli_help` is
+      // how the model discovers that surface without guessing.
+
+      const feishuCliHelp = define({
+        name: "feishu_cli_help",
+        description:
+          "Print the official Feishu CLI's help, so the exact command, flags and examples are known before calling feishu_cli. Call it with no arguments for the domain list, or with a domain ('docs', 'base', 'calendar', 'mail', 'tasks', 'wiki', 'drive', …) or a domain plus a subcommand ('wiki +node-create') for that command's flags. This is how to reach Feishu features the plugin has no dedicated tool for.",
+        parameters: {
+          command: { type: "string", description: "Optional: a domain ('docs') or 'domain subcommand' ('wiki +node-create'). Omit for the top-level list." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 60000,
+        async execute(args) {
+          try {
+            if (!larkCliPath()) return larkCliMissingHint();
+            const words = larkSplitArgs(String(args?.command ?? "").trim());
+            if (words.some((word) => !/^[A-Za-z0-9_.+-]+$/.test(word))) return "只接受域名或子命令（字母、数字、. _ + -），不接受参数。";
+            const text = await larkText([...words, "--help"]);
+            return text.length > 6000 ? `${text.slice(0, 6000)}\n…（已截断，共 ${text.length} 字符）` : text;
+          } catch (error) {
+            return `读取 lark-cli 帮助失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuCli = define({
+        name: "feishu_cli",
+        description:
+          "Run any command of the official Feishu (飞书 / Lark) CLI as the person who authorised it - the whole surface, not a hand-picked subset: messages, docs, base, sheets, slides, calendar, mail, tasks, meetings, wiki, okr, approval, attendance, contacts, minutes, drive. Pass the command WITHOUT the leading 'lark-cli', e.g. args=\"calendar +agenda --date today\" or args=\"docs +search --query 周报\". JSON is requested automatically; use raw=true for commands that print text. Interactive commands (auth login, config init/remove) are refused because they would block until the timeout. Run feishu_cli_help first when the exact command or flags are unsure.",
+        parameters: {
+          args: { type: "string", required: true, description: "The command line after 'lark-cli', e.g. \"tasks +list\" or \"im +send --chat-id oc_xxx --text 你好\"." },
+          as: { type: "string", description: "Identity: user (default - acts as you) or bot (acts as the app). Only add it when the command needs the app identity." },
+          raw: { type: "boolean", description: "Return the CLI's text output instead of parsed JSON. Use for qrcode or anything that is not a JSON envelope." },
+          confirmDanger: { type: "boolean", description: "Required for any command carrying --yes (deletes). Set it only after the person confirmed the destructive action." },
+          timeoutMs: { type: "number", description: "How long to allow (default 120000). Long uploads and exports need more." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 1800000,
+        async execute(args) {
+          try {
+            if (!larkCliPath()) return larkCliMissingHint();
+            const words = larkSplitArgs(String(args?.args ?? "").trim());
+            if (!words.length) return "需要一个命令，例如 args=\"calendar +agenda\"。先用 feishu_cli_help 看有哪些命令。";
+            const wanted = String(args?.as ?? "").trim().toLowerCase();
+            if ((wanted === "user" || wanted === "bot") && !words.includes("--as")) words.push("--as", wanted);
+            const argv = larkAssertRunnable(words, { confirmDanger: Boolean(args?.confirmDanger) });
+            const timeoutMs = Math.max(5000, Math.min(1800000, Number(args?.timeoutMs) || 120000));
+
+            if (args?.raw) {
+              const text = await larkText(argv, { timeoutMs });
+              return text.length > 12000 ? `${text.slice(0, 12000)}\n…（已截断，共 ${text.length} 字符）` : text;
+            }
+
+            // `--json` is added rather than required: a model that forgets it gets the same structured answer, and one
+            // that passes its own format (csv, table, jq) keeps it.
+            const hasFormat = argv.some((word) => word === "--json" || word === "--format" || /^--format=/.test(word));
+            const runArgv = hasFormat ? argv : [...argv, "--json"];
+            const envelope = await larkCli(runArgv, { timeoutMs });
+            const ok = envelope.ok !== false;
+            noteRoute("/feishu-cli", { command: argv.slice(0, 3).join(" "), ok });
+            const payload = ok ? (envelope.data ?? envelope) : (envelope.error ?? envelope);
+            const json = JSON.stringify(payload, null, 2);
+            const body = json.length > 12000 ? `${json.slice(0, 12000)}\n…（已截断，共 ${json.length} 字符；要更多就加 --limit 或缩小查询范围）` : json;
+            if (ok) return body;
+            const hint = envelope.error?.hint ? `\n提示：${envelope.error.hint}` : "";
+            const consoleUrl = envelope.error?.console_url ? `\n开通权限：${envelope.error.console_url}` : "";
+            return `命令失败：lark-cli ${argv.join(" ")}\n${body}${hint}${consoleUrl}`;
+          } catch (error) {
+            noteRoute("/feishu-cli", { command: String(args?.args ?? "").slice(0, 80), error: String(error?.message ?? error) });
+            return error?.message ?? String(error);
+          }
+        },
+      });
+
       const sendVoiceTool = define({
         name: "wechat_send_voice",
         description:
@@ -9046,7 +9129,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

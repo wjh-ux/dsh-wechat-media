@@ -102,6 +102,90 @@ export function larkFailure(envelope, action) {
 }
 
 /**
+ * Split a command line into argv, honouring quotes.
+ *
+ * No shell is ever involved: `larkCli` spawns `node run.js <argv…>` with `execFile`, so this tokenizer is the only
+ * place a character could be reinterpreted - and it never interprets anything, it only groups. That is what lets a
+ * Chinese file name with spaces or a `&` in it reach the CLI intact.
+ */
+export function larkSplitArgs(input) {
+  const text = String(input ?? "");
+  const out = [];
+  let current = "";
+  let quote = "";
+  let started = false;
+  for (const char of text) {
+    if (quote) {
+      if (char === quote) { quote = ""; continue; }
+      current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; started = true; continue; }
+    if (/\s/.test(char)) {
+      if (started) { out.push(current); current = ""; started = false; }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) out.push(current);
+  return out;
+}
+
+/**
+ * Commands a tool must not run on someone's behalf.
+ *
+ * Two kinds, both measured rather than guessed:
+ *  - **interactive** ones (`auth login`, `config init/remove`) wait on a browser round-trip or a prompt, so from a tool
+ *    they do not fail - they hang until the timeout, which looks like "the plugin is broken";
+ *  - **credential destruction** (`config remove`) would unauthenticate the machine with no undo.
+ *
+ * Everything else is allowed, because that is the point of a bridge: the CLI is the authority on its own commands, and
+ * a hardcoded list of 200 would be wrong the first time lark-cli ships a new domain.
+ */
+const LARK_INTERACTIVE = new Set(["auth login", "auth logout", "config init", "config remove", "config keychain-downgrade"]);
+
+/** Throw when argv would block on a human, destroy credentials, or delete without an explicit confirmation. */
+export function larkAssertRunnable(argv, { confirmDanger = false } = {}) {
+  const words = (Array.isArray(argv) ? argv : []).map((value) => String(value));
+  const head = words.slice(0, 2).join(" ");
+  const domain = words[0] ?? "";
+  if (LARK_INTERACTIVE.has(head) || LARK_INTERACTIVE.has(domain)) {
+    throw new Error(`\`lark-cli ${head}\` 是交互命令，在工具里跑会一直等到超时。请在终端里手动执行一次。`);
+  }
+  const wantsYes = words.some((word) => word === "--yes" || word === "-y");
+  if (wantsYes && !confirmDanger) {
+    throw new Error("这条命令带 --yes（删除/高危写）。确认真的执行，就把 confirmDanger 设为 true 再调一次。");
+  }
+  return words;
+}
+
+/**
+ * Run a command for its human-readable text rather than its JSON.
+ *
+ * `--help` is the discovery mechanism for 200+ commands: printing it is how the model learns what a domain can do, and
+ * a JSON parser would throw that text away.
+ */
+export function larkText(args, { timeoutMs = 60000, execFileImpl = execFile, cli = undefined } = {}) {
+  const resolved = cli ?? larkCliPath();
+  if (!resolved) return Promise.reject(new Error(larkCliMissingHint()));
+  const argv = (Array.isArray(args) ? args : [args]).map((value) => String(value));
+  return new Promise((resolveRun, rejectRun) => {
+    execFileImpl(
+      resolved.node,
+      [resolved.script, ...argv],
+      { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: timeoutMs, encoding: "utf8" },
+      (error, stdout, stderr) => {
+        const text = `${String(stdout ?? "")}${String(stderr ?? "")}`.trim();
+        if (text) return resolveRun(text);
+        rejectRun(new Error(error ? String(error.message) : `lark-cli ${argv.join(" ")} 没有输出`));
+      },
+    );
+  });
+}
+
+
+/**
  * Who the CLI will act as, and whether that identity is usable.
  *
  * `user` readiness is the only thing that matters for everything in this module: without it, every write would fall

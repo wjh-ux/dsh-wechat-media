@@ -247,9 +247,10 @@ Tools, in one place: `feishu_send_text` (text or markdown, `to` + `toType` optio
 `open_id`/`user_id`/`email` also accepted) and `feishu_send_file` (`path`, `kind` = file/image/audio/video) for talking;
 `feishu_doc_create` / `feishu_doc_read` / `feishu_doc_append` for documents; `feishu_sheet_create` / `feishu_sheet_read` /
 `feishu_sheet_write` for spreadsheets; `feishu_bitable_create` / `feishu_bitable_write` / `feishu_bitable_read` for
-bitables; and `feishu_wiki_spaces` / `feishu_wiki_new` / `feishu_wiki_upload` for knowledge bases (see below - those three
-speak as *you*, the rest speak as the app). A send always says which channel it used and gives the `message_id`, so
-"sent" is not a guess.
+bitables; `feishu_wiki_spaces` / `feishu_wiki_new` / `feishu_wiki_upload` for knowledge bases (see below - those three
+speak as *you*, the rest speak as the app); and `feishu_cli` / `feishu_cli_help`, which reach the entire official CLI -
+every other Feishu feature, as you. A send always says which channel it used and gives the `message_id`, so "sent" is
+not a guess.
 
 **A webhook-only setup cannot send files, and says exactly that** rather than reporting a success that never arrived -
 the custom bot API has no file message at all. Configure `appId`/`appSecret` for that.
@@ -284,6 +285,22 @@ lark-cli auth login --recommend  # scan once - this is the "as you" identity
 Uploads are idempotent by design: re-running `feishu_wiki_upload` over the same folder adds only what is missing, so a half-finished run is retried rather than duplicated. Lesson folders are flattened into their chapter on purpose - a course download of 5 chapter folders / 14 lessons / 49 documents becomes five nodes you can open, not a three-level tree you have to click through.
 
 These tools complement the rest rather than replace them: sending messages, reading documents and editing sheets work fine as the app. Anything that must be **owned by a person** goes through the three above.
+### The whole lark-cli surface / 全部 lark-cli 能力
+
+The dedicated `feishu_*` tools are the common paths, not the ceiling. The official CLI ships **200+ commands across 18 domains** - messaging, docs, base, sheets, slides, calendar, mail, tasks, meetings, minutes, wiki, OKR, approval, attendance, contacts, drive, apps, markdown - and two tools make all of it reachable:
+
+| Tool | What it does |
+|---|---|
+| `feishu_cli_help` | Prints the CLI's own help: no argument for the domain list, `docs` for a domain, `wiki +node-create` for one command's flags. This is how a command is discovered rather than guessed. |
+| `feishu_cli` | Runs any command as the person who authorised the CLI, e.g. `args="calendar +agenda --date today"` or `args="docs +search --query 周报"`. `--json` is added automatically; `raw=true` returns text. |
+
+Why a bridge and not 200 tools: 200 schemas would ride in every prompt, and the list would be wrong the first time lark-cli ships a domain. The CLI stays the authority on what exists; the plugin only adds the identity, the error envelope and the guard rails.
+
+Three behaviours worth knowing:
+
+- **No shell anywhere.** The command line is tokenised in-process and passed as argv, so a title with a space, an `&` or an empty string reaches the CLI exactly as typed.
+- **Interactive commands are refused**, not run: `auth login`, `config init`/`remove` and friends wait on a browser round-trip, which inside a tool call is a hang until the timeout. Run those once in a terminal.
+- **Destructive commands need a second word.** Anything carrying `--yes` (deletes) is refused unless `confirmDanger: true` is passed, because a model that types `--yes` is not the same thing as a person who agreed to it.
 
 Every endpoint and algorithm here was read from the official `@larksuiteoapi/node-sdk` 1.75.0 source, not recalled:
 messages are `POST /open-apis/im/v1/messages?receive_id_type=…`, the token is

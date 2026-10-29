@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.8.0
+
+- **The plugin only exposed the Feishu features somebody had already wrapped.** The official CLI ships 200+ commands
+  across 18 domains - messaging, docs, base, sheets, slides, calendar, mail, tasks, meetings, wiki, okr, approval,
+  attendance, contacts, minutes, drive, apps, markdown - and every one of them was reachable from a terminal and from
+  nowhere else.
+- Two tools now cover that surface instead of 200 hand-written schemas: `feishu_cli` runs any command as the person
+  who authorised the CLI, and `feishu_cli_help` prints the CLI's own help so the exact flags are known before the
+  first attempt. A tool per command would have been 200 schemas in every prompt and would be wrong the first time
+  lark-cli ships a new domain; the CLI stays the authority on what exists.
+- The command line is tokenised locally and passed as argv - no shell is involved anywhere - so a Chinese title with a
+  space, an `&` or an empty string reaches the CLI byte for byte. Two guards exist because a tool call is not a
+  terminal: commands that wait on a human (`auth login`, `config init`/`remove`) are refused instead of hanging
+  until the timeout, and anything carrying `--yes` needs `confirmDanger` first.
+- `--json` is added automatically, and an omitted flag is not an error: a command that fails returns the error, its
+  hint and its scope-apply URL instead of a bare `ok: false`.
 ## 1.7.1
 
 - **The knowledge-base links pointed at `www.feishu.cn`, not at the tenant.** A link a person clicks has to carry their
