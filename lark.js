@@ -65,7 +65,7 @@ export function larkCliMissingHint() {
  *
  * @returns {Promise<{ok: boolean, data?: any, error?: {message?: string, hint?: string, type?: string}, raw: string}>}
  */
-export function larkCli(args, { timeoutMs = 120000, execFileImpl = execFile, cli = undefined } = {}) {
+export function larkCli(args, { timeoutMs = 120000, execFileImpl = execFile, cli = undefined, cwd = undefined } = {}) {
   const resolved = cli ?? larkCliPath();
   if (!resolved) return Promise.reject(new Error(larkCliMissingHint()));
   const argv = Array.isArray(args) ? args.map((value) => String(value)) : [String(args)];
@@ -73,7 +73,7 @@ export function larkCli(args, { timeoutMs = 120000, execFileImpl = execFile, cli
     execFileImpl(
       resolved.node,
       [resolved.script, ...argv],
-      { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, encoding: "utf8" },
+      { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, encoding: "utf8", ...(cwd ? { cwd } : {}) },
       (error, stdout, stderr) => {
         const raw = String(stdout ?? "").trim();
         // A non-zero exit is normal here: the CLI exits 1 for every `ok:false` envelope, including permission ones.
@@ -166,7 +166,7 @@ export function larkAssertRunnable(argv, { confirmDanger = false } = {}) {
  * `--help` is the discovery mechanism for 200+ commands: printing it is how the model learns what a domain can do, and
  * a JSON parser would throw that text away.
  */
-export function larkText(args, { timeoutMs = 60000, execFileImpl = execFile, cli = undefined } = {}) {
+export function larkText(args, { timeoutMs = 60000, execFileImpl = execFile, cli = undefined, cwd = undefined } = {}) {
   const resolved = cli ?? larkCliPath();
   if (!resolved) return Promise.reject(new Error(larkCliMissingHint()));
   const argv = (Array.isArray(args) ? args : [args]).map((value) => String(value));
@@ -174,7 +174,7 @@ export function larkText(args, { timeoutMs = 60000, execFileImpl = execFile, cli
     execFileImpl(
       resolved.node,
       [resolved.script, ...argv],
-      { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: timeoutMs, encoding: "utf8" },
+      { windowsHide: true, maxBuffer: 8 * 1024 * 1024, timeout: timeoutMs, encoding: "utf8", ...(cwd ? { cwd } : {}) },
       (error, stdout, stderr) => {
         const text = `${String(stdout ?? "")}${String(stderr ?? "")}`.trim();
         if (text) return resolveRun(text);
@@ -321,8 +321,37 @@ export async function larkNodeChildren({ spaceId = "", parentNodeToken = "", tim
 export async function larkUploadToNode({ file = "", nodeToken = "", timeoutMs = 300000, ...rest } = {}) {
   if (!String(file ?? "").trim()) throw new Error("上传需要一个本地文件路径");
   if (!String(nodeToken ?? "").trim()) throw new Error("上传需要一个知识库节点 token");
-  const envelope = await larkCli(["drive", "+upload", "--file", file, "--wiki-token", nodeToken, "--json"], { timeoutMs, ...rest });
-  if (!envelope.ok) throw larkFailure(envelope, `上传 ${file}`);
+
+  const { dirname, resolve, join } = await import("node:path");
+  const { copyFile, unlink, mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const absolute = resolve(String(file));
+
+  // The CLI refuses a `--file` outside its allowlist (the process cwd, the account's temp dir, or `~/files`), which is
+  // a sensible guard for a command a person types and a problem for a plugin: the file it was told to upload can be
+  // anywhere. Running the CLI *from the file's own directory* puts it inside the allowlist without copying anything -
+  // measured against a 1.79 MB archive that failed with "unsafe file path" before the cwd was set.
+  const upload = (path, cwd) => larkCli(["drive", "+upload", "--file", path, "--wiki-token", nodeToken, "--json"], { timeoutMs, cwd, ...rest });
+
+  let envelope;
+  try {
+    envelope = await upload(absolute, dirname(absolute));
+  } catch (error) {
+    throw new Error(`上传 ${absolute} 失败：${error?.message ?? error}`);
+  }
+  if (envelope.ok !== true && /unsafe file path/i.test(String(envelope.error?.message ?? ""))) {
+    // Second line of defence: a temp copy under the account's temp dir, which is always allowed. Only reached when a
+    // cwd-based run is still rejected (for example a network path the CLI resolves differently).
+    const scratch = await mkdtemp(join(tmpdir(), "dsh-lark-"));
+    const copy = join(scratch, absolute.split(/[\\/]/).pop());
+    await copyFile(absolute, copy);
+    try {
+      envelope = await upload(copy, scratch);
+    } finally {
+      await unlink(copy).catch(() => {});
+    }
+  }
+  if (envelope.ok !== true) throw larkFailure(envelope, `上传 ${absolute}`);
   const data = envelope.data ?? {};
   rememberOrigin(data.url);
   return { fileName: String(data.file_name ?? ""), fileToken: String(data.file_token ?? ""), url: String(data.url ?? ""), size: Number(data.size ?? 0) };

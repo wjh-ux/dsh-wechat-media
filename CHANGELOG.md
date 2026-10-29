@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.2
+
+- **An upload from a path outside the CLI's allowlist failed with `unsafe file path`.** lark-cli only accepts a
+  `--file` inside the process working directory, the account's temp directory, or `~/files` - a sensible guard for
+  a command a person types, and a wall for a plugin that is told to upload a file wherever it happens to live. Measured
+  on a 1.79 MB archive in the workspace: rejected, and the node it had already created was left empty.
+- The CLI is now spawned *from the file's own directory*, which puts the argument inside the allowlist without copying
+  anything; a temp-dir copy remains as the fallback for paths the CLI resolves differently (a network path, for
+  instance). The failure is also no longer silent: the tool reports the per-file error instead of `uploaded 0`.
+- 47 suites / 746 cases.
 ## 1.8.1
 
 - **The examples in the bridge's description named flags that do not exist** - `calendar +agenda --date today` (the
