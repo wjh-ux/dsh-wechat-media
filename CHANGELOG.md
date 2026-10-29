@@ -10,6 +10,20 @@
   name. The shortcuts that look like they would answer this do not: `whoami`, `spaces get` and `node get` all omit
   the domain, and `tenant/v2/tenant/query` needs a bot scope this app does not hold.
 - An account with no searchable documents still gets the generic link rather than an empty line.
+## 1.7.0
+
+- **The whole `feishu_*` family speaks as the application, and an application is a member of nothing.** Measured on a
+  real tenant: a document created with `tenant_access_token` lands in the app's own drive space, where no person can
+  open it; a 知识库 refuses writes from a non-member, so `move_docs_to_wiki` cannot work at all; and adding the app to
+  a space is an administrator action most individual users simply cannot perform.
+- Three tools now speak as **the person**, through the official [`larksuite/cli`](https://github.com/larksuite/cli)
+  (`user_access_token`): `feishu_wiki_spaces` (what this account can write to, plus whether the user identity is
+  authorised yet), `feishu_wiki_new` (create a space) and `feishu_wiki_upload` (one file, or a whole local folder
+  tree - one node per top-level folder, skipping nodes and files already present, so a retry never duplicates).
+- New `lark.js`, dependency-free: locate the CLI, run one command, parse its `{ok, data}` envelope. No Feishu
+  credentials are stored here - `lark-cli config init` and `auth login` own those, in the OS keychain.
+- 46 suites / 739 cases.
+
 ## 1.6.12
 
 - **The one-click extension install failed with "cannot find path …\\.dsh\\exports".** `packExtension` handed
