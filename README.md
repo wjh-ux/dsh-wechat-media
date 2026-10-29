@@ -22,7 +22,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Media both ways | Images, video, documents and archives. Inbound files are downloaded and decrypted to `$DSH_HOME/wechat-inbox/<date>/<chat>/`; the agent gets the path, so a text model can read images through `read_image`. Outbound files are uploaded and sent by the agent through its tools. |
 | Multiple accounts | Pair a spare account and your main account; each keeps its own token, cursor and session map. |
 | WeCom (企业微信) | Group-robot webhook, a self-built app, or the intelligent-robot **long connection** (receiving without a public address); streaming previews work on this channel. |
-| Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools - and **knowledge bases (知识库) written as you**, through the official lark-cli user identity, because an app is a member of nothing. |
+| Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools - and, as **you**, knowledge bases (知识库) plus the official CLI's whole 200+ command surface (calendar, mail, tasks, meetings, OKR, approval…), because an app is a member of nothing. |
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
@@ -37,6 +37,10 @@ service or real hardware at least once (see *What was actually verified*).
 - **A WeChat account that can scan a QR code.** A spare account is strongly recommended: personal WeChat
   automation is against WeChat's terms of service and carries a ban risk, whichever library you use.
 - Outbound access to `ilinkai.weixin.qq.com` and `novac2c.cdn.weixin.qq.com`.
+- **Optional, for the "act as you" half of Feishu:** the official `lark-cli` (`npx @larksuite/cli@latest install`,
+  then `lark-cli config init --new` and `lark-cli auth login --recommend` once). Without it the app-identity tools
+  (messaging, docs, sheets, bitables) work normally, and the knowledge-base tools and `feishu_cli` say what is
+  missing instead of failing obscurely.
 
 ## Install / 安装
 
@@ -219,6 +223,16 @@ Two kinds of Feishu bot exist, and both are supported, because they solve differ
 | Can send | text and rich text | text, rich text, images, files, audio |
 | Can receive | no | yes - over the **long connection**, with no public URL |
 | Config | `feishu.webhookUrl`, `feishu.secret` | `feishu.appId`, `feishu.appSecret` |
+
+Feishu shows up in three layers, and the layer decides what a tool can reach:
+
+| Layer | Identity | Reaches |
+|---|---|---|
+| `feishu_send_*`, `feishu_doc_*`, `feishu_sheet_*`, `feishu_bitable_*` | the app (`tenant_access_token`) | messages, its own documents/sheets/bitables |
+| `feishu_wiki_*` | the person (`user_access_token` via `lark-cli`) | your knowledge bases, written as you |
+| `feishu_cli` | the person | everything else the official CLI can do - 200+ commands, 18 domains |
+
+The first layer needs nothing but an app; the last two need `lark-cli` authorised once (see *Requirements*).
 
 ### Configuring it from the panel / 在面板里配置（不用 setx，不用重启）
 
