@@ -137,6 +137,16 @@ import {
   feishuBitableWrite,
   feishuAppendText,
 } from "./feishu.js";
+// The user-identity half of the Feishu integration: writes that must land in *the person's* cloud space and
+// knowledge bases, which the app identity can never reach (see lark.js for the measured reasons).
+import {
+  larkCliPath,
+  larkCliMissingHint,
+  larkStatus,
+  larkWikiSpaces,
+  larkWikiCreateSpace,
+  larkUploadTree,
+} from "./lark.js";
 // The long-connection reply helpers come from wecom-bot.js, NOT from wecom.js: calling
 // them as `streamBody(...)` (as this file did) throws
 // `TypeError: wecom.streamBody is not a function` inside the reply's try/catch, so every
@@ -7391,6 +7401,132 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
         },
       });
+      // ── Feishu knowledge base (知识库) through the user's own identity ────────────────────────────────
+      //
+      // The tools above speak as the application; these speak as the person, through the official lark-cli. That is
+      // not a preference - an app is not a member of anybody's knowledge base, so `feishu_doc_create` can only ever
+      // write into the app's private space and nothing can be put into a 知识库 at all. Measured end to end before
+      // this was written: tenant token → 0 spaces, wiki write refused; user token → the person's spaces, write works.
+
+      /** Truthful pre-flight: every tool below is useless without a user identity, and says so before doing work. */
+      const larkReady = async () => {
+        if (!larkCliPath()) return { ok: false, message: larkCliMissingHint() };
+        const status = await larkStatus();
+        if (!status.ready) {
+          return {
+            ok: false,
+            message: "lark-cli 还没有用户身份授权。在能操作终端的地方跑一次 `lark-cli auth login --recommend`，扫码完成后回来重试（这个授权是‘以你本人身份’操作，不是机器人）。",
+          };
+        }
+        return { ok: true, status };
+      };
+
+      const feishuWikiSpaces = define({
+        name: "feishu_wiki_spaces",
+        description:
+          "List the Feishu (飞书) knowledge bases (知识库) this person can write to, acting as the person rather than as the app bot. Use this first when a request mentions 知识库 / wiki: an app identity sees none of them, so the answer here is what makes an upload possible. Also reports whether the user identity is authorised yet.",
+        parameters: {},
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 60000,
+        async execute() {
+          try {
+            const ready = await larkReady();
+            if (!ready.ok) return ready.message;
+            const spaces = await larkWikiSpaces();
+            if (!spaces.length) {
+              return `身份没问题（${ready.status.userOpenId}），但这个账号下还没有知识库。可以用 feishu_wiki_new 建一个，或在飞书里手动建一个再回来。`;
+            }
+            const lines = [`以「你」的身份能看到 ${spaces.length} 个知识库：`];
+            for (const space of spaces) {
+              lines.push(`· ${space.name}（${space.spaceId}，${space.type || "team"}，${space.visibility || "-"}）`);
+              lines.push(`  https://www.feishu.cn/wiki/space/${space.spaceId}`);
+            }
+            return lines.join("\n");
+          } catch (error) {
+            return `读取知识库列表失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuWikiNew = define({
+        name: "feishu_wiki_new",
+        description:
+          "Create a new Feishu (飞书) knowledge base (知识库) owned by the person. Only the user identity can create one, which is what this uses. Returns the space id and link.",
+        parameters: {
+          name: { type: "string", required: true, description: "Knowledge base name, e.g. 军事理论 · 课程资料." },
+          description: { type: "string", description: "Optional one-line description." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 60000,
+        async execute(args) {
+          const name = String(args?.name ?? "").trim();
+          if (!name) return "新建知识库需要一个名字";
+          try {
+            const ready = await larkReady();
+            if (!ready.ok) return ready.message;
+            const space = await larkWikiCreateSpace({ name, description: String(args?.description ?? "") });
+            noteRoute("/feishu-wiki", { action: "create-space", spaceId: space.spaceId });
+            return `已建好知识库「${space.name}」（spaceId ${space.spaceId}）\nhttps://www.feishu.cn/wiki/space/${space.spaceId}\n接下来用 feishu_wiki_upload 往里放文件。`;
+          } catch (error) {
+            return `新建知识库失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const feishuWikiUpload = define({
+        name: "feishu_wiki_upload",
+        description:
+          "Upload a local file, or a whole local folder tree, into a Feishu (飞书) knowledge base (知识库), acting as the person (official lark-cli user identity, not the app bot). Default layout: one node per top-level folder, every file underneath it - so a course download of 5 chapter folders becomes 5 nodes. Idempotent: files and nodes already there are skipped, so a retry never duplicates.",
+        parameters: {
+          path: { type: "string", required: true, description: "Absolute path of a local file or directory." },
+          spaceId: { type: "string", description: "Target knowledge base id. Omitted = the only space the account has; an ambiguous list is reported instead of guessed." },
+          parentNodeToken: { type: "string", description: "Optional parent node token to nest the created nodes under. Omitted = space root." },
+          groupBy: { type: "string", description: "folder (default): one node per top-level folder. flat: everything under a single node." },
+          nodeTitle: { type: "string", description: "Title for the single node (flat mode) or for loose files at the top level. Defaults to the folder's own name." },
+          dryRun: { type: "boolean", description: "Only print the plan (nodes, file counts) without creating or uploading anything." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 1800000,
+        async execute(args) {
+          const filePath = String(args?.path ?? "").trim();
+          if (!filePath) return "上传需要一个本地路径（文件或文件夹）";
+          try {
+            const ready = await larkReady();
+            if (!ready.ok) return ready.message;
+            const groupBy = String(args?.groupBy ?? "folder").toLowerCase() === "flat" ? "flat" : "folder";
+            const progress = [];
+            const result = await larkUploadTree({
+              path: filePath,
+              spaceId: String(args?.spaceId ?? "").trim(),
+              parentNodeToken: String(args?.parentNodeToken ?? "").trim(),
+              groupBy,
+              nodeTitle: String(args?.nodeTitle ?? "").trim(),
+              dryRun: Boolean(args?.dryRun),
+              onProgress: (event) => {
+                if (event.type === "node") progress.push(`  · ${event.title}（${event.files} 个文件）`);
+              },
+            });
+            noteRoute("/feishu-wiki", { action: "upload", spaceId: result.spaceId, uploaded: result.uploaded, skipped: result.skipped, failed: result.failed.length });
+            const lines = [
+              `${args?.dryRun ? "上传计划（未执行）" : "上传完成"}：知识库 ${result.spaceId}`,
+              `文件：新增 ${result.uploaded}，跳过 ${result.skipped}，失败 ${result.failed.length}`,
+              ...progress,
+            ];
+            for (const node of result.nodes) {
+              if (node.url) lines.push(`  ${node.title} → ${node.url}`);
+            }
+            if (result.failed.length) {
+              lines.push("失败明细：");
+              for (const line of result.failed.slice(0, 20)) lines.push(`  ${line}`);
+            }
+            if (!args?.dryRun && result.uploaded) lines.push(`打开：https://www.feishu.cn/wiki/space/${result.spaceId}`);
+            return lines.join("\n");
+          } catch (error) {
+            noteRoute("/feishu-wiki", { action: "upload", error: String(error?.message ?? error) });
+            return `上传到知识库失败：${error?.message ?? error}`;
+          }
+        },
+      });
       const sendVoiceTool = define({
         name: "wechat_send_voice",
         description:
@@ -8910,7 +9046,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

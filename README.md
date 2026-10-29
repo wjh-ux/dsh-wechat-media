@@ -1343,3 +1343,33 @@ notices, listed in [THIRD-PARTY.md](./THIRD-PARTY.md).
 
 WeChat and Weixin are trademarks of Tencent. This project is unofficial and is not affiliated with Tencent
 or DeepSeek.
+
+## 飞书知识库（知识库 / wiki）—— 以「你本人」的身份写入
+
+内置的 `feishu_*` 工具全部使用 `tenant_access_token`，也就是**应用自己的身份**。飞书把应用当成一个独立主体：它有自己的云空间、不是任何知识库的成员、也看不到你个人空间里的任何东西。实测结论：
+
+- 用应用身份创建的文档落在应用私有空间里，人在飞书里看不到；
+- 知识库拒绝对非成员写入，`move_docs_to_wiki` 直接失败；
+- 而「把应用加进知识库成员」通常是管理员操作，个人用户根本做不到。
+
+所以新增了三个走**用户身份**的工具（官方 CLI [larksuite/cli](https://github.com/larksuite/cli) 提供 `user_access_token`）：
+
+| 工具 | 作用 |
+| --- | --- |
+| `feishu_wiki_spaces` | 列出这个账号能写进去的知识库，并报告用户身份是否已授权 |
+| `feishu_wiki_new` | 新建一个知识库 |
+| `feishu_wiki_upload` | 把一个本地文件、或一整棵本地目录树传进知识库；默认「每个顶层文件夹一个节点」，已存在的文件与节点会跳过（可重跑、不重复） |
+
+### 一次性安装与授权
+
+```bash
+npx @larksuite/cli@latest install
+lark-cli config init --new      # 在浏览器里点两下，自动建一个 CLI 专用应用
+lark-cli auth login --recommend # 扫码授权，这一步是「以你本人身份」
+```
+
+授权信息存在系统钥匙串里，本插件不接触任何飞书凭证——`lark.js` 只负责找到 CLI、跑一条命令、解析它打印的 JSON。
+
+### 和 `feishu_*` 的关系
+
+不是替代关系，是补位：发消息、读文档、读写表格这些用应用身份就够了；**凡是需要落进「人的」云空间或知识库的写入**，用这三个。
