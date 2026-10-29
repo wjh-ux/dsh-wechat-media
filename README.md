@@ -22,7 +22,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Media both ways | Images, video, documents and archives. Inbound files are downloaded and decrypted to `$DSH_HOME/wechat-inbox/<date>/<chat>/`; the agent gets the path, so a text model can read images through `read_image`. Outbound files are uploaded and sent by the agent through its tools. |
 | Multiple accounts | Pair a spare account and your main account; each keeps its own token, cursor and session map. |
 | WeCom (企业微信) | Group-robot webhook, a self-built app, or the intelligent-robot **long connection** (receiving without a public address); streaming previews work on this channel. |
-| Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools. |
+| Feishu (飞书 / Lark) | Custom webhook bot or app bot with a long connection; documents, spreadsheets and bitables through tools - and **knowledge bases (知识库) written as you**, through the official lark-cli user identity, because an app is a member of nothing. |
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
@@ -243,15 +243,47 @@ Two rules make that safe:
 `feishu.domain` is `feishu` (mainland China) or `lark` (international); an explicit URL also works. `/state` reports
 `savedFields` and, per field, whether the value in force came from the panel, the config or the environment.
 
-Tools: `feishu_send_text` (text or markdown, `to` + `toType` optional - `chat_id` by default, `open_id`/`user_id`/`email`
-also accepted) and `feishu_send_file` (`path`, `kind` = file/image/audio/video). The reply always says which channel it
-used and gives the `message_id`, so "sent" is not a guess.
+Tools, in one place: `feishu_send_text` (text or markdown, `to` + `toType` optional - `chat_id` by default,
+`open_id`/`user_id`/`email` also accepted) and `feishu_send_file` (`path`, `kind` = file/image/audio/video) for talking;
+`feishu_doc_create` / `feishu_doc_read` / `feishu_doc_append` for documents; `feishu_sheet_create` / `feishu_sheet_read` /
+`feishu_sheet_write` for spreadsheets; `feishu_bitable_create` / `feishu_bitable_write` / `feishu_bitable_read` for
+bitables; and `feishu_wiki_spaces` / `feishu_wiki_new` / `feishu_wiki_upload` for knowledge bases (see below - those three
+speak as *you*, the rest speak as the app). A send always says which channel it used and gives the `message_id`, so
+"sent" is not a guess.
 
 **A webhook-only setup cannot send files, and says exactly that** rather than reporting a success that never arrived -
 the custom bot API has no file message at all. Configure `appId`/`appSecret` for that.
 
 `/feishu` (`/飞书`, `/lark`) reports what is configured - **never the secret itself, only whether one is set** - and
 `/feishu test [id] [type]` sends a self-test.
+
+### Knowledge base (知识库): written as you, not as the app / 知识库：以「你本人」的身份写入
+
+Every `feishu_*` tool speaks with a `tenant_access_token`, which is the **application's** identity. Feishu treats an app as a principal of its own: it owns its own cloud space, it is a member of no knowledge base, and nothing of a person's is visible to it. Measured on a real tenant:
+
+- a document created with the app token lands in the app's private drive space, where no person can open it;
+- a 知识库 refuses writes from a non-member, so `move_docs_to_wiki` cannot work at all;
+- adding an app to a space is an administrator action most individuals cannot perform.
+
+So writes that must land in *your* space go through the official [`larksuite/cli`](https://github.com/larksuite/cli) instead, which holds a `user_access_token` - the same calls run as you, with your knowledge bases, folders and permissions already in scope. It is a different principal, not a different API.
+
+| Tool | What it does |
+|---|---|
+| `feishu_wiki_spaces` | What this account can write to, and whether the user identity is authorised yet |
+| `feishu_wiki_new` | Create a knowledge base |
+| `feishu_wiki_upload` | One file, or a whole local folder tree: one node per top-level folder, skipping nodes and files already present, so a retry never duplicates |
+
+One-time setup. The plugin stores no Feishu credentials of its own - `lark-cli` keeps them in the OS keychain, and `lark.js` only locates the binary, runs one command and parses the JSON it prints:
+
+```bash
+npx @larksuite/cli@latest install
+lark-cli config init --new       # creates a CLI-only app in your tenant; two clicks in the browser
+lark-cli auth login --recommend  # scan once - this is the "as you" identity
+```
+
+Uploads are idempotent by design: re-running `feishu_wiki_upload` over the same folder adds only what is missing, so a half-finished run is retried rather than duplicated. Lesson folders are flattened into their chapter on purpose - a course download of 5 chapter folders / 14 lessons / 49 documents becomes five nodes you can open, not a three-level tree you have to click through.
+
+These tools complement the rest rather than replace them: sending messages, reading documents and editing sheets work fine as the app. Anything that must be **owned by a person** goes through the three above.
 
 Every endpoint and algorithm here was read from the official `@larksuiteoapi/node-sdk` 1.75.0 source, not recalled:
 messages are `POST /open-apis/im/v1/messages?receive_id_type=…`, the token is
@@ -1343,33 +1375,3 @@ notices, listed in [THIRD-PARTY.md](./THIRD-PARTY.md).
 
 WeChat and Weixin are trademarks of Tencent. This project is unofficial and is not affiliated with Tencent
 or DeepSeek.
-
-## 飞书知识库（知识库 / wiki）—— 以「你本人」的身份写入
-
-内置的 `feishu_*` 工具全部使用 `tenant_access_token`，也就是**应用自己的身份**。飞书把应用当成一个独立主体：它有自己的云空间、不是任何知识库的成员、也看不到你个人空间里的任何东西。实测结论：
-
-- 用应用身份创建的文档落在应用私有空间里，人在飞书里看不到；
-- 知识库拒绝对非成员写入，`move_docs_to_wiki` 直接失败；
-- 而「把应用加进知识库成员」通常是管理员操作，个人用户根本做不到。
-
-所以新增了三个走**用户身份**的工具（官方 CLI [larksuite/cli](https://github.com/larksuite/cli) 提供 `user_access_token`）：
-
-| 工具 | 作用 |
-| --- | --- |
-| `feishu_wiki_spaces` | 列出这个账号能写进去的知识库，并报告用户身份是否已授权 |
-| `feishu_wiki_new` | 新建一个知识库 |
-| `feishu_wiki_upload` | 把一个本地文件、或一整棵本地目录树传进知识库；默认「每个顶层文件夹一个节点」，已存在的文件与节点会跳过（可重跑、不重复） |
-
-### 一次性安装与授权
-
-```bash
-npx @larksuite/cli@latest install
-lark-cli config init --new      # 在浏览器里点两下，自动建一个 CLI 专用应用
-lark-cli auth login --recommend # 扫码授权，这一步是「以你本人身份」
-```
-
-授权信息存在系统钥匙串里，本插件不接触任何飞书凭证——`lark.js` 只负责找到 CLI、跑一条命令、解析它打印的 JSON。
-
-### 和 `feishu_*` 的关系
-
-不是替代关系，是补位：发消息、读文档、读写表格这些用应用身份就够了；**凡是需要落进「人的」云空间或知识库的写入**，用这三个。
