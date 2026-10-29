@@ -123,17 +123,69 @@ export async function larkStatus({ timeoutMs = 30000, ...rest } = {}) {
   };
 }
 
+/**
+ * The tenant's own host, e.g. `https://ccnje3t5tkro.feishu.cn`.
+ *
+ * A link a person can click has to carry the tenant domain: `www.feishu.cn/wiki/space/<id>` only redirects after a
+ * login round-trip, and pasted into a chat it reads as a generic page rather than "your knowledge base". The CLI does
+ * not expose the domain directly (`whoami`, `spaces get` and `node get` all omit it, and `tenant/v2/tenant/query`
+ * needs a bot scope this app does not hold), but every URL it prints carries it - node create, file upload, and the
+ * document search results. So the origin is learned from whichever of those we see and cached for the process.
+ */
+let tenantOriginCache = "";
+
+/** Pull the origin out of any URL-bearing envelope field, and remember it. */
+export function rememberOrigin(value) {
+  const text = String(value ?? "");
+  const found = text.match(/https:\/\/[a-z0-9-]+\.(?:feishu\.cn|larksuite\.com)/i);
+  if (found && !tenantOriginCache) tenantOriginCache = found[0];
+  return tenantOriginCache;
+}
+
+/** `` for "not known yet" - callers fall back to the generic link. */
+export function tenantOrigin() {
+  return tenantOriginCache;
+}
+
+/**
+ * Learn the tenant host without writing anything: one document search, whose results carry full URLs.
+ *
+ * `query` is required by the search API, so the caller passes something it already knows - a knowledge base name is
+ * the natural choice, because whoever is looking at a space link just came from that name.
+ */
+export async function larkDiscoverOrigin({ query = "", timeoutMs = 60000, ...rest } = {}) {
+  if (tenantOriginCache) return tenantOriginCache;
+  const wanted = String(query ?? "").trim();
+  if (!wanted) return "";
+  try {
+    const envelope = await larkCli(["drive", "+search", "--query", wanted, "--json"], { timeoutMs, ...rest });
+    if (envelope.ok) rememberOrigin(envelope.raw);
+  } catch { /* no search index, no scope, or nothing matches: the caller falls back to the generic link */ }
+  return tenantOriginCache;
+}
+
+/** The clickable link for a knowledge base, tenant host when known. */
+export function spaceUrl(spaceId) {
+  const id = String(spaceId ?? "").trim();
+  if (!id) return "";
+  return tenantOriginCache ? `${tenantOriginCache}/wiki/space/${id}` : `https://www.feishu.cn/wiki/space/${id}`;
+}
+
 /** The knowledge bases (wiki spaces) this person can reach. The app identity sees none of these. */
 export async function larkWikiSpaces({ timeoutMs = 60000, ...rest } = {}) {
   const envelope = await larkCli(["wiki", "+space-list", "--json"], { timeoutMs, ...rest });
   if (!envelope.ok) throw larkFailure(envelope, "列出知识库");
   const rows = envelope.data?.spaces ?? envelope.data?.items ?? [];
-  return rows.map((space) => ({
+  const spaces = rows.map((space) => ({
     spaceId: String(space.space_id ?? space.spaceId ?? ""),
     name: String(space.name ?? ""),
     type: String(space.space_type ?? ""),
     visibility: String(space.visibility ?? ""),
   }));
+  // Best-effort: one search for a known name teaches us the tenant host, so every link below is clickable rather
+  // than a generic redirect. A failure here costs nothing - spaceUrl falls back on its own.
+  if (spaces.length) await larkDiscoverOrigin({ query: spaces[0].name, ...rest });
+  return spaces.map((space) => ({ ...space, url: spaceUrl(space.spaceId) }));
 }
 
 /** Create a knowledge base. `--as user` is the only identity the API accepts. */
@@ -142,7 +194,9 @@ export async function larkWikiCreateSpace({ name = "", description = "", timeout
   const envelope = await larkCli(["wiki", "+space-create", "--name", name, "--description", description, "--json"], { timeoutMs, ...rest });
   if (!envelope.ok) throw larkFailure(envelope, "新建知识库");
   const space = envelope.data ?? {};
-  return { spaceId: String(space.space_id ?? ""), name: String(space.name ?? name), url: String(space.url ?? "") };
+  rememberOrigin(envelope.raw);
+  const spaceId = String(space.space_id ?? "");
+  return { spaceId, name: String(space.name ?? name), url: String(space.url ?? "") || spaceUrl(spaceId) };
 }
 
 /** Create one node (a titled child) inside a space; `parentNodeToken` omitted means the space root. */
@@ -154,6 +208,7 @@ export async function larkWikiCreateNode({ spaceId = "", title = "", parentNodeT
   const envelope = await larkCli(args, { timeoutMs, ...rest });
   if (!envelope.ok) throw larkFailure(envelope, `建节点「${title}」`);
   const node = envelope.data ?? {};
+  rememberOrigin(node.url);
   return {
     nodeToken: String(node.node_token ?? ""),
     title: String(node.title ?? title),
@@ -185,6 +240,7 @@ export async function larkUploadToNode({ file = "", nodeToken = "", timeoutMs = 
   const envelope = await larkCli(["drive", "+upload", "--file", file, "--wiki-token", nodeToken, "--json"], { timeoutMs, ...rest });
   if (!envelope.ok) throw larkFailure(envelope, `上传 ${file}`);
   const data = envelope.data ?? {};
+  rememberOrigin(data.url);
   return { fileName: String(data.file_name ?? ""), fileToken: String(data.file_token ?? ""), url: String(data.url ?? ""), size: Number(data.size ?? 0) };
 }
 
@@ -261,7 +317,7 @@ export async function larkUploadTree({
         }
       }
     }
-    return { spaceId: target, nodes: [{ title, nodeToken, url: "" }], uploaded, skipped, failed };
+    return { spaceId: target, url: spaceUrl(target), nodes: [{ title, nodeToken, url: "" }], uploaded, skipped, failed };
   }
 
   const entries = readdirSync(absolute, { withFileTypes: true });
@@ -313,5 +369,5 @@ export async function larkUploadTree({
     }
   }
 
-  return { spaceId: target, nodes, uploaded, skipped, failed };
+  return { spaceId: target, url: spaceUrl(target), nodes, uploaded, skipped, failed };
 }

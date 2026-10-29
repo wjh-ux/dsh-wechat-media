@@ -7439,7 +7439,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const lines = [`以「你」的身份能看到 ${spaces.length} 个知识库：`];
             for (const space of spaces) {
               lines.push(`· ${space.name}（${space.spaceId}，${space.type || "team"}，${space.visibility || "-"}）`);
-              lines.push(`  https://www.feishu.cn/wiki/space/${space.spaceId}`);
+              if (space.url) lines.push(`  ${space.url}`);
             }
             return lines.join("\n");
           } catch (error) {
@@ -7466,7 +7466,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (!ready.ok) return ready.message;
             const space = await larkWikiCreateSpace({ name, description: String(args?.description ?? "") });
             noteRoute("/feishu-wiki", { action: "create-space", spaceId: space.spaceId });
-            return `已建好知识库「${space.name}」（spaceId ${space.spaceId}）\nhttps://www.feishu.cn/wiki/space/${space.spaceId}\n接下来用 feishu_wiki_upload 往里放文件。`;
+            return `已建好知识库「${space.name}」（spaceId ${space.spaceId}）\n${space.url}\n接下来用 feishu_wiki_upload 往里放文件。`;
           } catch (error) {
             return `新建知识库失败：${error?.message ?? error}`;
           }
@@ -7519,7 +7519,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               lines.push("失败明细：");
               for (const line of result.failed.slice(0, 20)) lines.push(`  ${line}`);
             }
-            if (!args?.dryRun && result.uploaded) lines.push(`打开：https://www.feishu.cn/wiki/space/${result.spaceId}`);
+            if (!args?.dryRun && result.uploaded && result.url) lines.push(`打开：${result.url}`);
             return lines.join("\n");
           } catch (error) {
             noteRoute("/feishu-wiki", { action: "upload", error: String(error?.message ?? error) });
