@@ -7564,9 +7564,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       const feishuCli = define({
         name: "feishu_cli",
         description:
-          "Run any command of the official Feishu (飞书 / Lark) CLI as the person who authorised it - the whole surface, not a hand-picked subset: messages, docs, base, sheets, slides, calendar, mail, tasks, meetings, wiki, okr, approval, attendance, contacts, minutes, drive. Pass the command WITHOUT the leading 'lark-cli', e.g. args=\"calendar +agenda --date today\" or args=\"docs +search --query 周报\". JSON is requested automatically; use raw=true for commands that print text. Interactive commands (auth login, config init/remove) are refused because they would block until the timeout. Run feishu_cli_help first when the exact command or flags are unsure.",
+          "Run any command of the official Feishu (飞书 / Lark) CLI as the person who authorised it - the whole surface, not a hand-picked subset: messages, docs, base, sheets, slides, calendar, mail, tasks, meetings, wiki, okr, approval, attendance, contacts, minutes, drive. Pass the command WITHOUT the leading 'lark-cli', e.g. args=\"calendar +agenda\" or args=\"docs +search --query 周报\". JSON is requested automatically; use raw=true for commands that print text. Interactive commands (auth login, config init/remove) are refused because they would block until the timeout. Run feishu_cli_help first when the exact command or flags are unsure.",
         parameters: {
-          args: { type: "string", required: true, description: "The command line after 'lark-cli', e.g. \"tasks +list\" or \"im +send --chat-id oc_xxx --text 你好\"." },
+          args: { type: "string", required: true, description: "The command line after 'lark-cli', e.g. \"task +get-my-tasks\" or \"im +messages-send --chat-id oc_xxx --text 你好\"." },
           as: { type: "string", description: "Identity: user (default - acts as you) or bot (acts as the app). Only add it when the command needs the app identity." },
           raw: { type: "boolean", description: "Return the CLI's text output instead of parsed JSON. Use for qrcode or anything that is not a JSON envelope." },
           confirmDanger: { type: "boolean", description: "Required for any command carrying --yes (deletes). Set it only after the person confirmed the destructive action." },
@@ -7578,7 +7578,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           try {
             if (!larkCliPath()) return larkCliMissingHint();
             const words = larkSplitArgs(String(args?.args ?? "").trim());
-            if (!words.length) return "需要一个命令，例如 args=\"calendar +agenda\"。先用 feishu_cli_help 看有哪些命令。";
+            if (!words.length) return "需要一个命令，例如 args=\"calendar +agenda\" 或 args=\"task +get-my-tasks\"。先用 feishu_cli_help 看有哪些命令。";
             const wanted = String(args?.as ?? "").trim().toLowerCase();
             if ((wanted === "user" || wanted === "bot") && !words.includes("--as")) words.push("--as", wanted);
             const argv = larkAssertRunnable(words, { confirmDanger: Boolean(args?.confirmDanger) });

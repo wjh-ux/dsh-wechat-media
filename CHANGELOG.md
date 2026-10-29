@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.1
+
+- **The examples in the bridge's description named flags that do not exist** - `calendar +agenda --date today` (the
+  real flags are `--start`/`--end`), `	asks +list` (the domain is `	ask`, and the shortcut is
+  `+get-my-tasks`) and `im +send` (`im +messages-send`). An example is the first thing a model copies, so a
+  wrong one is worse than none: it produces a validation error that looks like a broken bridge.
+- Corrected in the tool description, the README and the inline hint. Verified against `lark-cli <domain> --help`
+  rather than assumed.
 ## 1.8.0
 
 - **The plugin only exposed the Feishu features somebody had already wrapped.** The official CLI ships 200+ commands

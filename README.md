@@ -292,7 +292,7 @@ The dedicated `feishu_*` tools are the common paths, not the ceiling. The offici
 | Tool | What it does |
 |---|---|
 | `feishu_cli_help` | Prints the CLI's own help: no argument for the domain list, `docs` for a domain, `wiki +node-create` for one command's flags. This is how a command is discovered rather than guessed. |
-| `feishu_cli` | Runs any command as the person who authorised the CLI, e.g. `args="calendar +agenda --date today"` or `args="docs +search --query 周报"`. `--json` is added automatically; `raw=true` returns text. |
+| `feishu_cli` | Runs any command as the person who authorised the CLI, e.g. `args="calendar +agenda"` or `args="docs +search --query 周报"` or `args="task +get-my-tasks"`. `--json` is added automatically; `raw=true` returns text. |
 
 Why a bridge and not 200 tools: 200 schemas would ride in every prompt, and the list would be wrong the first time lark-cli ships a domain. The CLI stays the authority on what exists; the plugin only adds the identity, the error envelope and the guard rails.
 
