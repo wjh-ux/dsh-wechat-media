@@ -7689,6 +7689,209 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
+      // ── Outreach: plan first, send second ───────────────────────────────────────────────────────────────
+      //
+      // Three channels, and they are not interchangeable: email can reach a stranger because the address is on the
+      // company's own site; WeChat and WeCom can only reach a conversation that already exists. Planning is therefore a
+      // separate step from sending - the plan says who, on which channel, with exactly what text and *why everyone
+      // else was skipped* - and nothing leaves until someone confirms it.
+
+      const outreachPlanTool = define({
+        name: "outreach_plan",
+        description:
+          "Build an outreach plan without sending anything: who gets which message, on which channel, and why each skipped target was skipped (no address, in cooldown, template placeholder empty). email reaches a lead's address directly; wechat/wecom can only reach conversations that already exist. Review the text here, then call outreach_send with confirm=true.",
+        parameters: {
+          channel: { type: "string", required: true, description: "email | wechat | wecom. email is the only cold channel; the other two reach existing chats." },
+          template: { type: "string", required: true, description: "Message body. Placeholders: {{company}} {{email}} {{website}} {{city}} {{market}} {{score}} {{role}}." },
+          subject: { type: "string", description: "Email subject (email channel). Defaults to a neutral one that names the company." },
+          limit: { type: "number", description: "How many messages this plan may contain (default 20, max 200)." },
+          cooldownDays: { type: "number", description: "Do not contact the same address again within this many days (default 30). Only a *delivered* message starts the clock." },
+          minScore: { type: "number", description: "Email only: ignore leads scored below this (default 20)." },
+          buyerOnly: { type: "boolean", description: "Email only: only companies whose pages read like a buyer (default true - a competitor is worse than a gap)." },
+          market: { type: "string", description: "Email only: restrict to leads collected for this market (de/uk/…)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 60000,
+        async execute(args) {
+          try {
+            const outreach = await import("./outreach.js");
+            const fs = await import("node:fs/promises");
+            const channel = String(args?.channel ?? "").trim().toLowerCase();
+            if (!["email", "wechat", "wecom"].includes(channel)) return "channel 只能是 email / wechat / wecom。";
+            const template = String(args?.template ?? "");
+            if (!template.trim()) return "需要一个模板：template 里可以写 {{company}} {{website}} 这类占位符。";
+
+            const planPath = join(state.root, "outreach-plan.json");
+            const historyPath = join(state.root, "outreach.json");
+            const readJson = async (path, fallback) => {
+              try { return JSON.parse(await fs.readFile(path, "utf8")); } catch { return fallback; }
+            };
+
+            let targets = [];
+            if (channel === "email") {
+              const leads = await readJson(join(state.root, "leads.json"), []);
+              const wantedMarket = String(args?.market ?? "").trim().toLowerCase();
+              const buyerOnly = args?.buyerOnly !== false;
+              const minScore = Math.max(0, Math.min(100, Number(args?.minScore ?? 20)));
+              targets = (Array.isArray(leads) ? leads : [])
+                .filter((lead) => lead && (lead.emails ?? []).length)
+                .filter((lead) => Number(lead.score ?? 0) >= minScore)
+                .filter((lead) => !buyerOnly || lead.role !== "seller")
+                .filter((lead) => !wantedMarket || String(lead.market ?? "").toLowerCase() === wantedMarket)
+                .map((lead) => ({
+                  company: lead.company, email: (lead.emails ?? [])[0], website: lead.url,
+                  city: lead.address, market: lead.market, score: lead.score, role: lead.role,
+                  subject: String(args?.subject ?? "").trim(),
+                }));
+              if (!targets.length) {
+                return "线索库里没有可用的邮箱地址。先用 collect_leads 采一批（save 一份 CSV 也行），注意 buyerOnly 默认开着，会把卖家过滤掉。";
+              }
+            } else {
+              // Chat channels address conversations, not companies: the peer table is the whole address book.
+              const peers = await state.loadPeers();
+              const accounts = await state.listAccounts();
+
+              for (const [accountId, chats] of Object.entries(peers ?? {})) {
+                for (const [chatId, peer] of Object.entries(chats ?? {})) {
+                  targets.push({
+                    company: peer?.name && peer.name !== chatId ? peer.name : chatId,
+                    chatId, accountId, allowed: peer?.allowed,
+                  });
+                }
+              }
+              if (accounts.length === 0) targets = targets.filter(() => false);
+              if (!targets.length) {
+                return `没有可发的会话：${channel === "wechat" ? "微信" : "企业微信"} 里还没有人给机器人发过消息。先让对方发一条，或改用 email。`;
+              }
+            }
+
+            const history = await readJson(historyPath, []);
+            const plan = outreach.planOutreach({
+              channel,
+              targets,
+              template,
+              history,
+              limit: Math.max(1, Math.min(200, Number(args?.limit) || 20)),
+              cooldownDays: Number(args?.cooldownDays ?? 30),
+            });
+            await fs.writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+            noteRoute("/outreach", { action: "plan", channel, items: plan.items.length, skipped: plan.skipped.length });
+            const lines = [outreach.planText(plan)];
+            if (plan.items.length) {
+              lines.push("");
+              lines.push(`计划已存到 ${planPath}。核对无误后发送：outreach_send { confirm: true }（或只发前几条：ids: "1,2"）`);
+            }
+            return lines.join("\n");
+          } catch (error) {
+            return `生成计划失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
+      const outreachSendTool = define({
+        name: "outreach_send",
+        description:
+          "Send messages from the plan outreach_plan produced - one by one, with a delay between them, recording each outcome so the same address is never messaged twice inside the cooldown. Requires confirm=true: nothing is sent without it. Stops at the first hard channel failure rather than hammering a broken transport.",
+        parameters: {
+          confirm: { type: "boolean", required: true, description: "Must be true. The person has read the plan and agreed to send it." },
+          ids: { type: "string", description: "Which planned items, e.g. \"1,3,5\" or \"all\" (default: all)." },
+          maxPerRun: { type: "number", description: "Hard cap for this call (default 10, max 50) - a runaway loop is worse than a slow campaign." },
+          delayMs: { type: "number", description: "Delay between sends (default 5000 for email, 3000 wechat, 2000 wecom)." },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 600000,
+        async execute(args) {
+          try {
+            if (args?.confirm !== true) return "没有发送：需要 confirm: true。先跑 outreach_plan，核对过文案再发。";
+            const outreach = await import("./outreach.js");
+            const fs = await import("node:fs/promises");
+            const planPath = join(state.root, "outreach-plan.json");
+            const historyPath = join(state.root, "outreach.json");
+            const readJson = async (path, fallback) => {
+              try { return JSON.parse(await fs.readFile(path, "utf8")); } catch { return fallback; }
+            };
+            const plan = await readJson(planPath, null);
+            if (!plan || !Array.isArray(plan.items) || !plan.items.length) return "还没有可发的计划：先调 outreach_plan。";
+
+            const wanted = String(args?.ids ?? "all").trim();
+            const picked = wanted.toLowerCase() === "all"
+              ? plan.items
+              : new Set(wanted.split(/[,，\s]+/).filter(Boolean).map((id) => id.replace(/^item-?/i, "")));
+            const chosen = picked instanceof Set
+              ? plan.items.filter((item) => picked.has(String(item.id)) || picked.has(String(item.id).split("#").pop()))
+              : picked;
+            if (!chosen.length) return `没有匹配的计划项：${wanted}`;
+
+            const cap = Math.max(1, Math.min(50, Number(args?.maxPerRun) || 10));
+            const batch = chosen.slice(0, cap);
+            const shipped = new Set(batch.map((item) => String(item.id)));
+            const delay = Math.max(0, Number(args?.delayMs) || (plan.channel === "email" ? 5000 : plan.channel === "wechat" ? 3000 : 2000));
+
+            const prefs = await state.loadPrefs();
+            const email = prefs?.email ?? {};
+            if (plan.channel === "email") {
+              const reason = emailReadiness(prefs);
+              if (reason) return `邮件通道还没配好：${reason}`;
+            }
+
+            let history = await readJson(historyPath, []);
+            const results = [];
+            let sent = 0;
+            let failed = 0;
+            for (const [index, item] of batch.entries()) {
+              if (index > 0 && delay) await new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+              try {
+                if (item.channel === "email") {
+                  const subject = item.subject || String(args?.subject ?? "").trim() || `${item.label} × 合作`;
+                  await smtpSend({
+                    host: email.smtpHost,
+                    port: Number(email.smtpPort),
+                    secure: email.smtpSecure !== false,
+                    user: email.user,
+                    pass: email.smtpPass,
+                    ca: emailCaPem(email),
+                    mail: { from: email.user, to: item.to, payload: buildMail({ from: email.user, to: item.to, subject, text: item.text }) },
+                  });
+                } else if (item.channel === "wechat") {
+                  const account = await state.loadAccount(item.accountId);
+                  if (!account?.token) throw new Error(`账号 ${item.accountId} 没有可用的 token`);
+                  await sendText(account, item.chatId, item.text);
+                } else {
+                  await wecomSendText({ text: item.text, to: item.chatId });
+                }
+                sent += 1;
+                history = outreach.recordSend(history, item, { ok: true });
+                results.push(`  ✅ ${item.id} → ${item.label}`);
+              } catch (error) {
+                failed += 1;
+                const message = String(error?.message ?? error);
+                history = outreach.recordSend(history, item, { ok: false, error: message });
+                results.push(`  ❌ ${item.id} → ${item.label}：${message.slice(0, 120)}`);
+                // A broken transport fails every remaining item too; stopping keeps the failure from looking like a
+                // delivery problem on each address.
+                if (/SMTP|ECONN|ETIMEDOUT|token|not configured|未配置/i.test(message)) {
+                  results.push(`  已停止：${message.slice(0, 120)}（剩下的 ${batch.length - index - 1} 条没有尝试）`);
+                  break;
+                }
+              }
+            }
+            await fs.writeFile(historyPath, `${JSON.stringify(history, null, 2)}\n`, "utf8");
+            const remaining = plan.items.filter((item) => !shipped.has(String(item.id)));
+            const nextPlan = { ...plan, items: remaining };
+            await fs.writeFile(planPath, `${JSON.stringify(nextPlan, null, 2)}\n`, "utf8");
+            noteRoute("/outreach", { action: "send", channel: plan.channel, sent, failed });
+            return [
+              `发送完成（${plan.channel}）：成功 ${sent}，失败 ${failed}`,
+              ...results,
+              remaining.length ? `计划里还剩 ${remaining.length} 条：再调一次 outreach_send 会继续。` : "计划已发完。",
+              `历史：${historyPath}（${outreach.outreachSummary(history).total} 条记录）`,
+            ].join("\n");
+          } catch (error) {
+            return `发送失败：${error?.message ?? error}`;
+          }
+        },
+      });
+
       const sendVoiceTool = define({
         name: "wechat_send_voice",
         description:
@@ -9510,7 +9713,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

@@ -1004,6 +1004,26 @@ twice adds only what is new. Exports go through the same save rules as `browser_
 
 Two things it deliberately does **not** do: it never treats a search hit as a qualified buyer, and it stops instead of
 retrying when the engine shows a captcha - burning the address for a few more rows is the worse trade.
+## Outreach / 触达
+
+`outreach_plan` then `outreach_send`. Two steps because the plan is the thing worth reviewing: it lists every recipient,
+the exact text, and **why each skipped target was skipped**.
+
+| Channel | Can reach | Note |
+|---|---|---|
+| `email` | a stranger | the address is on the company's own website - the only genuinely cold channel |
+| `wechat` | an existing conversation | a contact who wrote to the bot; there is no "message this phone number" API |
+| `wecom` | an existing conversation | same, via the intelligent robot |
+
+Rules that protect the account and the reader:
+
+- **A delivered message starts a 30-day cooldown** per address; a bounced one does not - a bounce is a reason to try
+  again tomorrow, not to lock the address out for a month.
+- **No address is repeated inside one batch**, and the plan refuses a template whose placeholders it cannot fill
+  (`{{contact}}` stays visible in the preview rather than going out blank).
+- **`outreach_send` needs `confirm: true`**, sends one at a time with a delay, caps at 10 per call, and stops at the
+  first hard channel failure instead of hammering a broken transport.
+- History lives in `$DSH_HOME/dsh-wechat-media/outreach.json`; the pending plan in `outreach-plan.json`.
 ## Chat commands / 聊天里的命令
 
 A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and

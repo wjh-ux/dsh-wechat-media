@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.13.0
+
+- **A lead list had nowhere to go.** The collector could find companies; the plugin could send messages; nothing joined
+  them, and the join is where the damage happens - the same company twice, a template that goes out with
+  `{{company}}` still in it, or a "3 ready" that quietly dropped the ones it could not address.
+- Two tools now do it in two steps: `outreach_plan` builds the plan (who, on which channel, with exactly what text,
+  and why each skipped target was skipped) and `outreach_send` sends it - only with `confirm: true`, one message at
+  a time, with a delay, stopping at the first hard channel failure.
+- **All three channels, honestly differentiated.** Email is the only one that can reach a stranger, because the
+  address is on the company's own site. WeChat and WeCom reach *existing conversations* only - a contact who wrote to
+  the bot - and the plan says so instead of inventing an id.
+- A delivered message starts a 30-day cooldown per address; a **bounced** one does not, because a bounce is a reason
+  to try again tomorrow, not to lock the address out for a month. The plan never repeats an address inside one batch,
+  and the cap (10 per call by default) exists because a runaway loop is worse than a slow campaign.
+- 49 suites / 775 cases.
 ## 1.12.2
 
 - **A casting agency came back as an outdoor-furniture shop.** The map query also asked for `office=company` to catch
