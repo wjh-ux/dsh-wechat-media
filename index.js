@@ -9907,7 +9907,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       // detection is only a default. Build gates are the same as Keil's: nothing runs until the feature is armed.
       const firmwarePlan = async (args = {}) => {
         const prefs = await state.loadPrefs();
-        const dir = String(args.dir ?? "").trim() || String(prefs?.keil?.dir ?? "").trim() || String(prefs?.build?.dir ?? "").trim();
+        const rememberedProject = String(prefs?.keil?.project ?? "").trim();
+        // A remembered .uvprojx *is* the project directory. `/keil project` stores both, but a project set through
+        // `/prefs` (the panel, a script) only carries the path - and "no directory" was a lie when one was right there.
+        const dir =
+          String(args.dir ?? "").trim() ||
+          String(prefs?.keil?.dir ?? "").trim() ||
+          String(prefs?.build?.dir ?? "").trim() ||
+          (rememberedProject ? dirname(rememberedProject) : "");
         if (!dir) return { error: "还没有工程目录：给 dir 参数，或用 /keil project <路径> 记住一个工程" };
         const forced = String(args.toolchain ?? prefs?.build?.toolchain ?? "auto").trim().toLowerCase();
         const detected = firmware.detectProject({ dir });

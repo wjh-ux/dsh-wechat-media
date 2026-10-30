@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.4
+
+- **`project_build()` with no arguments said "还没有工程目录" while a project was remembered.** `/keil project` stores the
+  folder, but a project set through `/prefs` (the panel, a script) carries only the path - so the derivation now takes
+  `dirname(rememberedProject)` when neither the argument nor the prefs name a directory. The tool that exists to save
+  typing should read what was already typed.
 ## 1.17.3
 
 - **A Keil project built "successfully" in 2.2 s having done nothing.** `project_build` ran `UV4 -b <project> -j0` with
