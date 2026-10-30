@@ -484,9 +484,12 @@ await test("the same message delivered twice becomes one turn", async () => {
   const app = await boot();
   try {
     app.socket().deliver(messageEvent({ messageId: "om_dup" }));
-    await settle();
+    // Wait for the first delivery to land: a fixed settle() asserted "1" before the pipeline had queued anything and
+    // reported 0 !== 1 (CI run #637, node 22). The duplicate is the opposite case - it must produce *nothing*, so
+    // there is no condition to poll for; give it a generous slice and check the queue stayed at one.
+    assert.ok(await until(() => app.queued.length >= 1), "the first delivery is queued");
     app.socket().deliver(messageEvent({ messageId: "om_dup" }));
-    await settle();
+    await settle(300);
     assert.equal(app.queued.length, 1, "a redelivered event must not be answered twice");
   } finally {
     await app.close();
@@ -572,9 +575,9 @@ await test("a turn that fails is reported to the chat instead of leaving it wait
       }
     };
     app.socket().deliver(messageEvent({ messageId: "om_fail" }));
-    await settle(120);
+    const replied = await until(() => app.fetchCalls.some((call) => call.url.includes("/im/v1/messages")));
     const replies = app.fetchCalls.filter((call) => call.url.includes("/im/v1/messages"));
-    assert.ok(replies.length >= 1, "the chat is told something");
+    assert.ok(replied && replies.length >= 1, "the chat is told something");
     const texts = replies.map((call) => JSON.parse(String(call.body)).content).join("\n");
     assert.match(texts, /出错|失败/, "the failure is named");
     const state = await app.readState();

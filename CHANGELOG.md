@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.3
+
+- **One inbound test was a bet on how fast the machine is, and a shared CI runner lost that bet.** "The same message
+  delivered twice becomes one turn" asserted `queued.length === 1` after a fixed 40ms sleep; on node 22 it read 0,
+  because the first delivery had not been queued yet - the duplicate was never the problem. `settle()` is now a
+  condition wait (`until()`, which this suite already grew for the same flake) followed by a 300ms silence check, and
+  the failure path waits for the reply instead of sleeping 120ms. Eight consecutive runs of the suite, and the CI
+  rerun, are green; the failure is not reproducible by making the machine faster, only by making the assertion honest.
 ## 1.16.2
 
 - **The file picker kept listing every file, and the Target box said "(project default)" in a Chinese panel.**
