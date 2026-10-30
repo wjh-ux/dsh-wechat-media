@@ -8188,6 +8188,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           queries: { type: "string", description: "Explicit search terms (JSON array or comma separated) instead of the generated ones." },
           save: { type: "string", description: "Where to write the CSV (same rules as browser_flow save: a path, a folder, or a bare file name)." },
           reset: { type: "boolean", description: "Ignore the existing lead store and start empty." },
+          deadlineMs: { type: "number", description: "Overall time budget for the run (default 180000). Reaching it stops cleanly and reports what it has." },
+          visitTimeoutMs: { type: "number", description: "Per-page budget (default 15000). A slow site is abandoned, not waited on." },
+          searchTimeoutMs: { type: "number", description: "Per-search budget (default 20000)." },
         },
         async (args) => {
           const { live } = await browserEnsure();
@@ -8248,18 +8251,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return out.slice(0, 40);
           })()`;
 
+          // Hard per-step budgets. Measured the hard way: one live run spent ~5 minutes per company because a page
+          // that never fires `load` leaves the navigation promise pending, and a tool call is not allowed to hang.
+          // A raced timeout gives up on that page and moves on; the browser keeps loading it in the background.
+          const withTimeout = (promise, ms, label) => Promise.race([
+            promise,
+            new Promise((_, reject) => { setTimeout(() => reject(new Error(`${label} 超时 ${Math.round(ms / 1000)}s`)), ms); }),
+          ]);
+          const searchTimeoutMs = Math.max(5000, Number(args?.searchTimeoutMs) || 20000);
+          const visitTimeoutMs = Math.max(5000, Number(args?.visitTimeoutMs) || 15000);
+
           const adapter = {
             async search(query, page) {
               const url = engine === "ddg"
                 ? `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
                 : `https://www.bing.com/search?q=${encodeURIComponent(query)}&first=${page * 10 + 1}`;
-              await browserMod.browserOpen(live.session, url, { waitMs: 25000 });
-              const rows = await browserMod.browserEvaluate(live.session, serpExpression);
+              await withTimeout(browserMod.browserOpen(live.session, url, { waitMs: 8000 }), searchTimeoutMs, "搜索页");
+              const rows = await withTimeout(browserMod.browserEvaluate(live.session, serpExpression), searchTimeoutMs, "结果提取");
               return Array.isArray(rows) ? rows : [];
             },
             async visit(url) {
-              await browserMod.browserOpen(live.session, url, { waitMs: 25000 });
-              const page = await browserMod.browserEvaluate(live.session, snapshot);
+              await withTimeout(browserMod.browserOpen(live.session, url, { waitMs: 8000 }), visitTimeoutMs, "打开站点");
+              const page = await withTimeout(browserMod.browserEvaluate(live.session, snapshot), visitTimeoutMs, "读取页面");
               return page && typeof page === "object" ? page : { url, title: "", text: "", links: [] };
             },
           };
@@ -8273,6 +8286,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             search: adapter.search,
             visit: adapter.visit,
             store: args?.reset ? [] : store,
+            deadlineMs: Math.max(30000, Number(args?.deadlineMs) || 180000),
+            stepTimeoutMs: visitTimeoutMs,
             onProgress: (event) => {
               if (event.stage === "search") process.stderr.write(`[collect] search ${event.query} p${event.page} -> ${event.results ?? "err"}\n`);
               if (event.stage === "visit") process.stderr.write(`[collect] visit ${event.url}\n`);
@@ -8300,6 +8315,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             `查询 ${result.searches} 次（${result.queries.join(" / ")}），候选 ${result.candidates} 个，入库 ${rows.length} 个${result.merged ? `，合并 ${result.merged} 个已有线索` : ""}`,
           ];
           if (result.skipped.length) lines.push(`跳过的目录/社交站：${result.skipped.slice(0, 6).join("、")}`);
+          if (result.stopped === "deadline") lines.push(`时间预算到了（${Math.round(result.elapsedMs / 1000)}s），先停在这里；再调一次会接着往库里合并，不会重复。`);
           if (!rows.length) {
             lines.push("");
             lines.push("一条都没采到。常见原因：搜索引擎要验证码（换 engine=ddg）、目标词太窄，或浏览器会话没登录/被墙。");

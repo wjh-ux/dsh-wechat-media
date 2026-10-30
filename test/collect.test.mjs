@@ -127,5 +127,27 @@ await testAsync("the pipeline skips directories, collapses duplicates and keeps 
   assert.ok(visits.some((url) => url.endsWith("/kontakt")), "the contact page is fetched, not just linked");
 });
 
+await testAsync("a page that never answers is abandoned, not waited on", async () => {
+  const search = async () => [{ title: "Slow Co", url: "https://slow.example.co" }, { title: "Fast Co", url: "https://fast.example.co" }];
+  const visit = async (url) => {
+    if (url.includes("slow")) return new Promise(() => {});
+    return { url, title: "Fast Co", text: "hello@fast.example.co", links: [] };
+  };
+  const started = Date.now();
+  const result = await collectLeads({ goal: "widgets", limit: 2, search, visit, queries: ["widgets"], maxSearches: 1, stepTimeoutMs: 300 });
+  const elapsed = Date.now() - started;
+  assert.equal(result.leads.length, 1, "the fast company is still collected");
+  assert.ok(elapsed < 3000, `the hung page must not cost more than the budget (took ${elapsed}ms)`);
+});
+
+await testAsync("three timeouts in a row stop the run and name the browser as the problem", async () => {
+  const search = async () => [
+    { title: "A", url: "https://a.example.co" }, { title: "B", url: "https://b.example.co" }, { title: "C", url: "https://c.example.co" },
+  ];
+  const visit = async () => new Promise(() => {});
+  const result = await collectLeads({ goal: "widgets", limit: 3, search, visit, queries: ["widgets"], maxSearches: 1, stepTimeoutMs: 200, maxConsecutiveTimeouts: 3 });
+  assert.equal(result.stopped, "bridge");
+  assert.equal(result.leads.length, 0);
+});
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);

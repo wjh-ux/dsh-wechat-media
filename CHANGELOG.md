@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.1
+
+- **A live run took 25 minutes and was killed by the tool timeout.** Five leads, ~5 minutes each: a page that never
+  finishes loading leaves the transport's own ceiling (45 s navigate + 30 s evaluate) to fire on *every* call, and
+  nothing in the collector was willing to give up on it. Each step now runs under its own budget (12 s by default), the
+  overall run under a deadline (3 min), and three timeouts in a row stop the run with `stopped: "bridge"` - because
+  at that point the browser bridge is the problem, not the sites.
+- **The deadline almost never fired, because the timer was `unref()`-ed.** An unref'd timer does not keep the event
+  loop alive, so with a hung promise nothing else pending the process simply idles - the "timeout" is never reached.
+  Found by the test that hangs a fake page on purpose, which is why that test now exists.
+- **Directory filtering missed the Chinese B2B aggregators.** `10100.com`, `beiei.com` and the portal/news sites
+  came back as leads at score 10-22; adding them (and the usual export portals) is what keeps a "lead" a company.
+- 48 suites / 758 cases.
 ## 1.9.0
 
 - **The plugin could drive a browser and send messages, but it could not turn "找德国做户外家具的进口商" into a list.**

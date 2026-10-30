@@ -30,6 +30,8 @@ const DIRECTORY_HOSTS = [
   "wordpress.com", "wix.com", "shopify.com", "trustpilot.com", "crunchbase.com", "bloomberg.com", "zoominfo.com",
   "dnb.com", "opencorporates.com", "companieshouse.gov.uk", "handelsregister.de", "northdata.de", "unternehmen24.info",
   "google.", "bing.com", "duckduckgo.com", "baidu.com", "yandex.", "wikipedia.", "zhihu.com", "baike.baidu.com",
+  "10100.com", "beiei.com", "sohu.com", "163.com", "qq.com", "sina.com", "toutiao.com", "b2b168.com", "hc360.com",
+  "china.cn", "chinabidding.com", "tradeindia.com", "exportersindia.com", "go4worldbusiness.com",
 ];
 
 /** Postal / generic mailboxes that are worth keeping but score lower than a named human or sales address. */
@@ -313,7 +315,47 @@ export async function collectLeads({
   onProgress = () => {},
   maxSearches = 4,
   maxPagesPerQuery = 1,
+  deadlineMs = 180000,
+  stepTimeoutMs = 12000,
+  maxConsecutiveTimeouts = 3,
 } = {}) {
+  const started = Date.now();
+  const outOfTime = () => Date.now() - started > deadlineMs;
+
+  /**
+   * Run one adapter call under a budget.
+   *
+   * Measured: a page that never finishes loading leaves the transport's own ceiling to fire, and one live run spent
+   * ~5 minutes per company - 25 minutes for five leads, long enough that the tool call itself was killed. The budget
+   * belongs here rather than in the caller because this is the layer that knows a step is optional.
+   */
+  const withinBudget = (promise, what) => new Promise((resolveStep, rejectStep) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const error = new Error(`${what} 超时 ${Math.round(stepTimeoutMs / 1000)}s`);
+      error.timeout = true;
+      rejectStep(error);
+    }, stepTimeoutMs);
+    Promise.resolve(promise).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveStep(value);
+    }, (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectStep(error);
+    });
+  });
+  let timeoutsInARow = 0;
+  const noteTimeout = (timedOut) => {
+    timeoutsInARow = timedOut ? timeoutsInARow + 1 : 0;
+    return timeoutsInARow;
+  };
+  let bridgeDead = false;
   const wanted = String(goal ?? "").trim();
   if (!wanted) throw new Error("collect_leads 需要一个目标，例如 goal=\"户外家具 进口商\"");
   const target = Math.max(1, Math.min(200, Number(limit) || 10));
@@ -325,12 +367,16 @@ export async function collectLeads({
   let searches = 0;
 
   for (const term of terms) {
+    if (outOfTime()) break;
     for (let page = 0; page < maxPagesPerQuery; page += 1) {
+      if (outOfTime()) break;
       let rows = [];
       try {
-        rows = await search(term, page);
+        rows = await withinBudget(search(term, page), "搜索");
+        noteTimeout(false);
       } catch (error) {
         onProgress({ stage: "search", query: term, page, error: String(error?.message ?? error) });
+        if (error?.timeout && noteTimeout(true) >= maxConsecutiveTimeouts) { bridgeDead = true; break; }
         continue;
       }
       searches += 1;
@@ -356,14 +402,18 @@ export async function collectLeads({
   let merged = 0;
   let current = Array.isArray(store) ? [...store] : [];
 
+  let stopped = "";
   for (const candidate of candidates) {
     if (leads.length >= target) break;
+    if (outOfTime()) { stopped = "deadline"; break; }
     onProgress({ stage: "visit", url: candidate.url, collected: leads.length, of: target });
     let page = { url: candidate.url, title: candidate.title, text: "", links: [] };
     try {
-      page = await visit(candidate.url);
+      page = await withinBudget(visit(candidate.url), "打开站点");
+      noteTimeout(false);
     } catch (error) {
       onProgress({ stage: "visit", url: candidate.url, error: String(error?.message ?? error) });
+      if (error?.timeout && noteTimeout(true) >= maxConsecutiveTimeouts) { bridgeDead = true; stopped = "bridge"; break; }
       continue;
     }
     let text = String(page?.text ?? "");
@@ -372,7 +422,7 @@ export async function collectLeads({
     if (contacts.length) {
       contactPage = contacts[0];
       try {
-        const extra = await visit(contactPage);
+        const extra = await withinBudget(visit(contactPage), "打开联系页");
         text += `\n${String(extra?.text ?? "")}`;
       } catch { /* a dead contact page still leaves the homepage evidence */ }
     }
@@ -393,5 +443,6 @@ export async function collectLeads({
     if (result.added) leads.push(lead); else merged += 1;
   }
 
-  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, skipped: [...new Set(skipped)].slice(0, 20), store: current };
+  if (!stopped && bridgeDead) stopped = "bridge";
+  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, skipped: [...new Set(skipped)].slice(0, 20), store: current };
 }
