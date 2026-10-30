@@ -8301,6 +8301,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           // limit on every call would just be noise in every call.
           const settings = collectSettings(await state.loadPrefs());
           const limit = Math.max(1, Math.min(50, Number(args?.limit) || settings.limit));
+          // One value, two consumers (the search pipeline and the map loop). Inlined at the call site, the map half
+          // died with "minScore is not defined" - after the maps had already run, so the error looked like a network
+          // problem in a run that had in fact collected nothing from the map.
+          const minScore = Math.max(0, Math.min(100, Number(args?.minScore ?? 20)));
 
           // One file under the plugin's own state root: the lead store belongs to this machine, not to a session.
           const storePath = join(state.root, "leads.json");
@@ -8407,7 +8411,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             limit,
             sources: [sources],
             buyerOnly: Boolean(args?.buyerOnly),
-            minScore: Math.max(0, Math.min(100, Number(args?.minScore) || 20)),
+            minScore,
             queries: explicit,
             search: adapter.search,
             visit: adapter.visit,
@@ -8450,7 +8454,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const searchEmpty = !rows.length;
           lines.push("", "公司 | 角色 | 邮箱 | 分数");
           for (const row of rows.slice(0, 20)) {
-            lines.push(`${row["公司"] || "?"} | ${row["邮箱"] || "—"} | ${row["电话"] || "—"} | ${row["分数"]}`);
+            lines.push(`${row["公司"] || "?"} | ${row["角色"] || "不明"} | ${row["邮箱"] || "—"} | ${row["分数"]}`);
           }
           if (rows.length > 20) lines.push(`…（还有 ${rows.length - 20} 条）`);
           const reasons = rows.slice(0, 5).map((row) => `· ${row["公司"]}：${row["理由"]}`).join("\n");

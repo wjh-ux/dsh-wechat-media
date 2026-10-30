@@ -232,7 +232,7 @@ export function contactLinks(links, { max = 3 } = {}) {
  * of 100+ Countries" arrived as a lead at score 0 - it was filtered by score, not by knowing what it was. The title is
  * the honest signal, because that is exactly what the page says about itself.
  */
-export const JUNK_TITLE = /marketplace|b2b\b|trade data|import export data|customs data|directory|yellow ?pages|suppliers? (?:list|directory|network)|business directory|company list|黄页|名录|数据平台|企业库/i;
+export const JUNK_TITLE = /marketplace|b2b\b|trade data|import export data|customs data|directory|yellow ?pages|suppliers? (?:list|directory|network|search)|supplier search|lieferantensuche|lieferantenverzeichnis|business directory|company list|b2b platform|黄页|名录|数据平台|企业库|供应商搜索|供应商目录/i;
 
 const ROLE_SIGNALS = {
   buyer: [

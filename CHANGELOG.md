@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.1
+
+- **The map half of a combined run died with `minScore is not defined`** - after the search half had already reported
+  its results, so it read like a network problem in a run that had in fact collected nothing from the map. The value was
+  inlined at one call site instead of being a variable; it now is one, used by both halves.
+- **The result table printed the email under the 角色 heading**, because the header gained a column that the print line
+  did not. A table whose columns are off by one is worse than no table: it silently misattributes every value.
+- **`Lieferanten.de - Die clevere Lieferantensuche` came back as a lead at score 62** - a supplier *directory*, which
+  the title filter did not know because it only spoke English. German directory words (Lieferantensuche,
+  Lieferantenverzeichnis) and 供应商搜索/供应商目录 are in the filter now.
+- 48 suites / 766 cases.
 ## 1.12.0
 
 - **A third of the market was invisible: shops that never rank for a query but sell the product at an address.** The
