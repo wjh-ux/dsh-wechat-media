@@ -554,7 +554,8 @@ function chatHtml() {
     border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 6px; font: inherit;
   }
   #bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-  #bar .gap { flex: 1 1 auto; }
+  /* 发送占一整行：侧边栏太窄，五个按钮挤一行时它会被挤到下一行、还靠左，看着像漏了一个。 */
+  #send.wide { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 7px 10px; }
   button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit; }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   button:disabled { opacity: .5; cursor: default; }
@@ -574,9 +575,8 @@ function chatHtml() {
       <button id="file" title="附上文件（插入 @路径）">＋文件</button>
       <button id="build" title="编译当前 Keil 工程（与聊天里的 keil_build 同一个工具）">编译</button>
       <button id="flash" title="编译产物烧到板子（STC 自动走 stcgal）">烧录</button>
-      <span class="gap"></span>
-      <button id="send" class="primary">发送</button>
     </div>
+    <button id="send" class="primary wide">发送</button>
     <div id="foot">
       <label title="允许 DSH 修改这个项目里的文件"><input type="checkbox" id="write" checked> 可写</label>
       <span id="where"></span>

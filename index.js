@@ -9865,7 +9865,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 const note = result.code === 0
                   ? `⚡ 烧录完成（stcgal，${port}，${plan.device || plan.vendor}）`
                   : `❌ 烧录失败（stcgal，${port}）`;
-                return `${note}${portNote}\nHEX：${plan.hex}\n${serialReport(result, "stcgal 输出")}`;
+                const waitHint = result.code === 0 ? "" : keil.stcWaitHint(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+                return `${note}${portNote}\nHEX：${plan.hex}${waitHint ? `\n${waitHint}` : ""}\n${serialReport(result, "stcgal 输出")}`;
               }
             }
             const chosen = String(args?.target ?? "").trim() || String(prefs.target ?? "").trim();

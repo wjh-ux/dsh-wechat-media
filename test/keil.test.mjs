@@ -29,6 +29,7 @@ import {
   keilSupport,
   normalizeKeilPrefs,
   pickBoardPort,
+  stcWaitHint,
   parseBuildLog,
   parseToolsIni,
   runUv4,
@@ -351,6 +352,14 @@ await test("an STC project is not a UV4 download, and the plan says so before a 
   // Anything that is not an STC part keeps the uVision path.
   const arm = flashPlan({ project: "C:\\work\\m.uvprojx", xml: "<Device>STM32F407VG</Device><Vendor>STMicroelectronics</Vendor>" });
   assert.equal(arm.via, "uv4");
+});
+await test("stcgal's English wait becomes an instruction, but only on a failure", () => {
+  const waited = "Waiting for MCU, please cycle power:\n....";
+  assert.match(stcWaitHint(waited), /拔掉再插上/);
+  assert.match(stcWaitHint(waited), /冷启动/);
+  // A run that never had to wait gets no hint: the sentence would be noise on a success.
+  assert.equal(stcWaitHint("Erasing flash: done\nTarget UID: F734C3FC31F408"), "");
+  assert.equal(stcWaitHint(""), "");
 });
 await test("the board is the USB port, not the Bluetooth modem next to it", () => {
   // The real machine: COM4/COM5 are "蓝牙链接上的标准串行", COM3 is the CH340 the board is on.

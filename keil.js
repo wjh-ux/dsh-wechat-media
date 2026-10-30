@@ -197,6 +197,19 @@ export function pickBoardPort(ports = []) {
   return null;
 }
 
+/**
+ * stcgal's "Waiting for MCU, please cycle power" translated.
+ *
+ * It prints that the moment it opens the port, because the ISP handshake starts with a cold boot: `-A dtr` pulls the
+ * reset line, and on a board whose DTR is not wired to RST there is nothing to pull. The English sentence is technically
+ * accurate and practically useless, so the failure carries the instruction instead.
+ */
+export function stcWaitHint(output) {
+  const text = String(output ?? "");
+  if (!/Waiting for MCU|please cycle power/i.test(text)) return "";
+  return "板子没进 ISP：把 USB 拔掉再插上（或按复位键）后重试 —— 这块板的 DTR 自动复位没有生效，STC 需要冷启动才进 ISP。";
+}
+
 /** A project path is only usable if it is a file and looks like a uVision project - checked before any process runs. */
 export function assertProject(project, { exists = existsSync } = {}) {
   const file = String(project ?? "").trim().replace(/^"|"$/g, "");

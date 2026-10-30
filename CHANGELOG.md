@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.10
+
+- **`Waiting for MCU, please cycle power` now says what to do.** stcgal prints that the moment it opens the port, because
+  the ISP handshake starts with a cold boot: `-A dtr` pulls the reset line, and on a board whose DTR is not wired to RST
+  there is nothing to pull - 77 s of waiting and then a `PermissionError` from a port already closed. The failure now
+  carries the instruction (`拔掉 USB 再插上…STC 需要冷启动才进 ISP`), and a run that never waited gets no hint at all.
+- **`发送` is a full-width button on its own row.** At sidebar width the five buttons did not fit, so Send wrapped to the
+  next line and sat left-aligned - it read like a button had gone missing. Extension 0.6.1.
 ## 1.16.9
 
 - **The panel's Compile button answered `keilBuildTool is not defined`.** The `/keil-run` route was written in a scope
