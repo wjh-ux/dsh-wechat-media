@@ -14,6 +14,7 @@ import {
   mergeLead,
   normalizeCompany,
   resolveMarket,
+  classifyRole,
   scoreLead,
 } from "../collect.js";
 
@@ -148,6 +149,35 @@ await testAsync("three timeouts in a row stop the run and name the browser as th
   const result = await collectLeads({ goal: "widgets", limit: 3, search, visit, queries: ["widgets"], maxSearches: 1, stepTimeoutMs: 200, maxConsecutiveTimeouts: 3 });
   assert.equal(result.stopped, "bridge");
   assert.equal(result.leads.length, 0);
+});
+test("an exporter is not a buyer, however many product words it shares", () => {
+  const seller = classifyRole("We are a manufacturer with our own factory in Foshan. OEM and ODM services, production capacity 20000 pcs/month. We export to Europe.");
+  assert.equal(seller.role, "seller");
+  const buyer = classifyRole("Wir sind Importeur und Großhandel für Outdoor-Möbel. Einkauf und Vertrieb unter einem Dach.");
+  assert.equal(buyer.role, "buyer");
+  const unclear = classifyRole("Gartenmöbel. Schöne Dinge für draußen.");
+  assert.equal(unclear.role, "unclear", "no role evidence must stay unclear rather than guess");
+});
+
+test("the role moves the score in the right direction", () => {
+  const base = { url: "https://x.de", title: "X", emails: ["info@x.de"], phones: [], socials: [], contactPage: "" };
+  const seller = scoreLead({ ...base, text: "We are a manufacturer, our factory exports worldwide. OEM available." }, { goal: "garden furniture", market: "de" });
+  const buyer = scoreLead({ ...base, text: "Wir sind Importeur und Großhandel für Gartenmöbel." }, { goal: "garden furniture", market: "de" });
+  assert.ok(buyer.score > seller.score, `buyer ${buyer.score} should beat seller ${seller.score}`);
+  assert.equal(seller.role, "seller");
+  assert.ok(seller.reasons.some((reason) => reason.includes("卖家")), "the reason must say why it lost points");
+});
+
+await testAsync("buyerOnly drops the sellers instead of shipping them to a salesperson", async () => {
+  const search = async () => [{ title: "Maker", url: "https://maker.cn" }, { title: "Buyer", url: "https://buyer.de" }];
+  const visit = async (url) => url.includes("maker")
+    ? { url, title: "Maker", text: "We are a manufacturer with our own factory. OEM/ODM, export worldwide.", links: [] }
+    : { url, title: "Buyer GmbH", text: "Wir sind Importeur und Großhandel. kontakt@buyer.de", links: [] };
+  const all = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1 });
+  const onlyBuyers = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, buyerOnly: true, store: [] });
+  assert.equal(all.leads.length, 2);
+  assert.equal(onlyBuyers.leads.length, 1);
+  assert.match(onlyBuyers.leads[0].url, /buyer\.de/);
 });
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.11.0
+
+- **A perfect score told you nothing about whether the company buys or sells.** Measured on a live run: a Chinese
+  outdoor-furniture *exporter* came first with every box ticked (email, phone, contact page, product words) - it
+  satisfies all of them, because the signals were about reachability, not about the role. The same run also surfaced a
+  Swiss *manufacturer* and a Dutch wholesaler in the same shape.
+- `classifyRole` now reads the page for role evidence - in both directions. A buyer says "we are an importer",
+  "Großhandel", "Einkauf", "procurement", "private label"; a seller says "we are a manufacturer", "our factory",
+  "OEM/ODM", "exporter", "Hersteller", "production capacity". Weighted, so "we are a manufacturer" is not the same
+  statement as the noun appearing in a footer, and the verdict is `buyer` / `seller` / `unclear` - "unclear" is
+  a legitimate answer and far better than a confident wrong one.
+- The verdict moves the score (+15 / -25) **and** travels with the lead (`role` + `roleEvidence`), so a person can
+  see why. `buyerOnly: true` drops the sellers entirely, because a competitor in a customer list is worse than a
+  gap.
+- Verified against the three real sites from the bad run: `nbymoutdoor.com` → seller (ODM / MANUFACTURER),
+  `denova-gartenmoebel.ch` → seller (Hersteller), `tica.nl` → buyer (Groothandel). Two of three were never
+  prospects.
+- 48 suites / 761 cases.
 ## 1.10.0
 
 - **Discovery no longer scrapes a search-results page.** Measured on this machine: Bing, asked for "outdoor furniture

@@ -970,6 +970,23 @@ transport's own ceilings fired on every call:
 
 Change them with `/collect step 12` in the chat, or in the control panel's 获客采集 block. `/collect` alone prints the
 effective values, and `/state` reports the same numbers the tool actually uses.
+### Buyer or competitor? / 买家还是同行
+
+Every lead carries a **role verdict** - `buyer` / `seller` / `unclear` - read from the company's own words, in both
+directions:
+
+| Reads like a buyer | Reads like a seller |
+|---|---|
+| "we are an importer", Großhandel, Einkauf, procurement, private label | "we are a manufacturer", our factory, OEM/ODM, exporter, Hersteller |
+
+It is weighted, not a keyword count: "we are a manufacturer" is not the same statement as the noun appearing in a
+footer. The verdict moves the score (+15 / −25) and is stored with the lead, so a person sees why. `buyerOnly: true`
+drops sellers entirely - a competitor in a customer list is worse than a gap in it.
+
+Measured on a live run: the top result was a Chinese exporter with a perfect score, because every signal the scorer
+had (email, phone, contact page, product words) is satisfied by a seller too. After the check: `nbymoutdoor.com` →
+seller (ODM / MANUFACTURER), `denova-gartenmoebel.ch` → seller (Hersteller), `tica.nl` → buyer (Groothandel). Two out
+of three were never prospects.
 The lead store lives at `$DSH_HOME/dsh-wechat-media/leads.json` and is merged, not overwritten - running the same goal
 twice adds only what is new. Exports go through the same save rules as `browser_flow`.
 

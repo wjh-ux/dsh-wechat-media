@@ -214,6 +214,73 @@ export function contactLinks(links, { max = 3 } = {}) {
  * trading in the product beats both. Nothing here is a model call - a score you cannot explain is a score you cannot
  * defend in a meeting.
  */
+/**
+ * Words that say "this company trades, it does not make".
+ *
+ * The distinction a salesperson needs is not "does it mention furniture" but "is it a buyer or a competitor". A
+ * manufacturer's page is full of the same product words as an importer's, and ranks just as well - measured: a run
+ * for German outdoor furniture returned a Chinese *exporter* at the top with a perfect score, because every signal
+ * the scorer had (email, phone, contact page, product words) was satisfied by a seller.
+ *
+ * Weights, not just hits: "we are a manufacturer" is a different statement from the noun "manufacturer" appearing in a
+ * footer, and "import and export" is a trader's phrase rather than a maker's.
+ */
+const ROLE_SIGNALS = {
+  buyer: [
+    [/we (?:are|r) (?:an? )?(?:importer|distributor|wholesaler|retailer)/i, 4],
+    [/(?:importer|importateur|importador|importeur|importatore)\s*(?:and|&|und|et|y)\s*(?:distributor|wholesaler|großhändler|grosshandler)/i, 4],
+    [/\b(?:importer|importers|importeur|importeure|importateur|importador|importatore|импорт[её]р)\b/i, 3],
+    [/\b(?:distributor|distributors|distributeur|distribuidor|distributore|großhändler|grosshandler|groothandel|wholesaler|wholesale distributor)\b/i, 3],
+    [/\b(?:dealer|dealers|retailer|retailers|reseller|resellers|fachhändler|fachhandel|händler|rivenditore|revendeur)\b/i, 2],
+    [/\b(?:we (?:import|buy|purchase)|einkauf|einkäufer|procurement|purchasing|sourcing|buying (?:department|office|team))\b/i, 3],
+    [/\b(?:brand owner|private label|own brand|handelsmarke|eigenmarke)\b/i, 2],
+    [/进口商|进口公司|经销商|代理商|批发商|采购/, 3],
+  ],
+  seller: [
+    [/\b(?:we are|we're) (?:a |an )?(?:manufacturer|factory|producer|maker)\b/i, 5],
+    [/\bour (?:own )?factory\b/i, 5],
+    [/\b(?:oem|odm)\b/i, 4],
+    [/\b(?:manufacturer|manufactory|hersteller|produzent|fabrik|fabricant|fabricante|fabbricante|производитель)\b/i, 3],
+    [/\b(?:exporter|exporters|exporteur|exportateur|exportador|esportatore)\b/i, 4],
+    [/\b(?:(?:we|our company) export|export(?:ing)? (?:to|worldwide)|made in china|中国制造|出口商|制造商|工厂|厂家|生产商)\b/i, 4],
+    [/\b(?:supplier|suppliers|lieferant|proveedor|fornitore|поставщик)\b/i, 2],
+    [/\b(?:production capacity|production line|assembly line|mass production)\b/i, 3],
+  ],
+};
+
+/**
+ * Decide whether a page reads like a buyer, a seller, or neither.
+ *
+ * Deliberately conservative: "unclear" is a legitimate answer and far better than a confident wrong one. The collector
+ * is allowed to hand a person a list they still have to judge; it is not allowed to call an exporter a customer.
+ */
+export function classifyRole(text) {
+  const haystack = String(text ?? "");
+  let buyer = 0;
+  let seller = 0;
+  const buyerEvidence = [];
+  const sellerEvidence = [];
+  for (const [pattern, weight] of ROLE_SIGNALS.buyer) {
+    const match = haystack.match(pattern);
+    if (!match) continue;
+    buyer += weight;
+    if (buyerEvidence.length < 4) buyerEvidence.push(match[0].trim().slice(0, 40));
+  }
+  for (const [pattern, weight] of ROLE_SIGNALS.seller) {
+    const match = haystack.match(pattern);
+    if (!match) continue;
+    seller += weight;
+    if (sellerEvidence.length < 4) sellerEvidence.push(match[0].trim().slice(0, 40));
+  }
+  const role = buyer > seller + 1 ? "buyer" : seller > buyer + 1 ? "seller" : "unclear";
+  return {
+    role,
+    buyerWeight: buyer,
+    sellerWeight: seller,
+    evidence: role === "buyer" ? buyerEvidence : role === "seller" ? sellerEvidence : [...buyerEvidence, ...sellerEvidence].slice(0, 4),
+  };
+}
+
 export function scoreLead(lead, { goal = "", market = "" } = {}) {
   const reasons = [];
   let score = 0;
@@ -237,9 +304,18 @@ export function scoreLead(lead, { goal = "", market = "" } = {}) {
   const matched = words.filter((word) => haystack.includes(word));
   if (matched.length) { score += Math.min(20, 8 + matched.length * 4); reasons.push(`正文命中：${matched.slice(0, 3).join("、")}`); }
 
-  const roleHits = [];
-  for (const list of Object.values(ROLE_WORDS)) for (const role of list) if (haystack.includes(role.toLowerCase())) roleHits.push(role);
-  if (roleHits.length) { score += Math.min(15, 6 + roleHits.length * 3); reasons.push(`角色词：${[...new Set(roleHits)].slice(0, 3).join("、")}`); }
+  // Role evidence replaces the old "any role word is good" rule: a seller's page is full of role words too, and the
+  // only thing that separates a lead from a competitor is *which* role the words describe.
+  const role = classifyRole(`${lead.title ?? ""} ${lead.text ?? ""}`);
+  if (role.role === "buyer") {
+    score += 15;
+    reasons.push(`像买家：${role.evidence.slice(0, 2).join("、")}`);
+  } else if (role.role === "seller") {
+    score -= 25;
+    reasons.push(`像卖家/同行：${role.evidence.slice(0, 2).join("、")}`);
+  } else if (role.evidence.length) {
+    reasons.push(`角色不明：${role.evidence.slice(0, 2).join("、")}`);
+  }
 
   const resolved = resolveMarket(market);
   if (resolved) {
@@ -250,7 +326,7 @@ export function scoreLead(lead, { goal = "", market = "" } = {}) {
   }
   if (/\b(ust\.?-?id|vat|steuernummer|handelsregister|siret|partita iva|cvr)\b/i.test(haystack)) { score += 10; reasons.push("有工商/税号信息（可验证主体）"); }
 
-  return { score: Math.max(0, Math.min(100, score)), reasons };
+  return { score: Math.max(0, Math.min(100, score)), reasons, role: role.role, roleEvidence: role.evidence };
 }
 
 /** One CSV line per lead, quoted the way a spreadsheet expects. */
@@ -318,6 +394,7 @@ export async function collectLeads({
   deadlineMs = 180000,
   stepTimeoutMs = 12000,
   maxConsecutiveTimeouts = 3,
+  buyerOnly = false,
 } = {}) {
   const started = Date.now();
   const outOfTime = () => Date.now() - started > deadlineMs;
@@ -435,16 +512,22 @@ export async function collectLeads({
       emails: extractEmails(text), phones: extractPhones(text), socials: extractSocials(text),
       contactPage, query: candidate.query, at: new Date().toISOString(),
     };
-    const { score, reasons } = scoreLead(base, { goal: wanted, market });
-    const lead = { ...base, score, reasons };
+    const { score, reasons, role, roleEvidence } = scoreLead(base, { goal: wanted, market });
+    const lead = { ...base, score, reasons, role, roleEvidence };
     delete lead.text;
+    // `buyerOnly` drops the companies whose own page says they make or export the thing - the single biggest source of
+    // wasted outreach, and the one thing a keyword search cannot tell you.
+    if (buyerOnly && role === "seller") {
+      onProgress({ stage: "skip-seller", url: candidate.url, evidence: roleEvidence });
+      continue;
+    }
     const result = mergeLead(current, lead);
     current = result.store;
     if (result.added) leads.push(lead); else merged += 1;
   }
 
   if (!stopped && bridgeDead) stopped = "bridge";
-  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, skipped: [...new Set(skipped)].slice(0, 20), store: current };
+  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, buyerOnly, skipped: [...new Set(skipped)].slice(0, 20), store: current };
 }
 
 /**

@@ -8267,6 +8267,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           queries: { type: "string", description: "Explicit search terms (JSON array or comma separated) instead of the generated ones." },
           save: { type: "string", description: "Where to write the CSV (same rules as browser_flow save: a path, a folder, or a bare file name)." },
           reset: { type: "boolean", description: "Ignore the existing lead store and start empty." },
+          buyerOnly: { type: "boolean", description: "Keep only companies whose own pages read like a buyer; exporters and manufacturers are dropped with the words that gave them away. Default false - run without it first to see both kinds." },
           deadlineMs: { type: "number", description: "Overall time budget for the run (default 180000). Reaching it stops cleanly and reports what it has." },
           visitTimeoutMs: { type: "number", description: "Per-page budget (default 15000). A slow site is abandoned, not waited on." },
           searchTimeoutMs: { type: "number", description: "Per-search budget (default 20000)." },
@@ -8406,6 +8407,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             market,
             limit,
             sources: [sources],
+            buyerOnly: Boolean(args?.buyerOnly),
             queries: explicit,
             search: adapter.search,
             visit: adapter.visit,
@@ -8421,10 +8423,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           await fs.mkdir(state.root, { recursive: true }).catch(() => {});
           await fs.writeFile(storePath, `${JSON.stringify(result.store, null, 2)}\n`, "utf8").catch(() => {});
 
+          const roleLabel = { buyer: "买家", seller: "卖家/同行", unclear: "不明" };
           const rows = result.leads.map((lead) => ({
             "公司": lead.company,
             "网址": lead.url,
             "国家/市场": lead.market,
+            "角色": roleLabel[lead.role] ?? "不明",
             "邮箱": (lead.emails ?? []).join(" "),
             "电话": (lead.phones ?? []).join(" "),
             "社媒": (lead.socials ?? []).map((s) => `${s.kind}:${s.url}`).join(" "),
@@ -8438,14 +8442,17 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             `采集完成：目标「${goal}」${result.market ? ` · 市场 ${result.market}` : ""}`,
             `查询 ${result.searches} 次（${result.queries.join(" / ")}），候选 ${result.candidates} 个，入库 ${rows.length} 个${result.merged ? `，合并 ${result.merged} 个已有线索` : ""}`,
           ];
+          const buyers = result.leads.filter((lead) => lead.role === "buyer").length;
+          const sellers = result.leads.filter((lead) => lead.role === "seller").length;
+          if (buyers || sellers) lines.push(`角色核验：像买家 ${buyers} · 像卖家/同行 ${sellers} · 不明 ${result.leads.length - buyers - sellers}`);
           if (result.skipped.length) lines.push(`跳过的目录/社交站：${result.skipped.slice(0, 6).join("、")}`);
           if (result.stopped === "deadline") lines.push(`时间预算到了（${Math.round(result.elapsedMs / 1000)}s），先停在这里；再调一次会接着往库里合并，不会重复。`);
           if (!rows.length) {
             lines.push("");
-            lines.push("一条都没采到。常见原因：搜索引擎要验证码（换 engine=ddg）、目标词太窄，或浏览器会话没登录/被墙。");
+            lines.push(`一条都没采到。${args?.buyerOnly ? "开了 buyerOnly，可能候选全是卖家公司——去掉它再看一遍。" : "常见原因：搜索没结果、目标词太窄，或所有站点都抓不动。"}`);
             return lines.join("\n");
           }
-          lines.push("", "公司 | 邮箱 | 电话 | 分数");
+          lines.push("", "公司 | 角色 | 邮箱 | 分数");
           for (const row of rows.slice(0, 20)) {
             lines.push(`${row["公司"] || "?"} | ${row["邮箱"] || "—"} | ${row["电话"] || "—"} | ${row["分数"]}`);
           }
