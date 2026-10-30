@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.14.1** · 49 test suites / 781 cases · every capability below has been exercised against a real
+**Current release: v1.15.0** · 50 test suites / 801 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -27,6 +27,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
 | Lead collection & outreach | **`collect_leads`** turns a goal and a market (`de`, `us`, `ae`…) into a scored, de-duplicated list with contacts, reading the page rather than trusting the search snippet, and telling a buyer from a seller. **`outreach_plan` / `outreach_send`** turn that list into messages over email, WeChat or WeCom - with a cooldown per address, a human confirmation slot, and a stop at the first hard channel failure. |
+| Embedded build | **Keil uVision5** through the UV4.exe already installed: `keil_build` runs build / rebuild / clean / flash, and returns every error as `file(line): error C141: message` plus the Program Size and the .hex - so a failed build says *where*. The same module also installs a Tools-menu entry, so the same build is one click inside uVision. |
 | Multi-agent | With one switch, **each conversation can mount its own agent preset** - its own prompt, tools and model wiring - instead of every chat sharing the host default. Off by default; `/multiagent on`, then `/agent <preset>` per chat. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
@@ -709,6 +710,73 @@ The flasher's verdict lives in its last lines ("Hash of data verified", "avrdude
 than capped from the start. Discovery is real: on this machine it found `D:\Espressif\frameworks\esp-idf-v4.4.8` with
 its `python_env` interpreter - and reported "no serial ports" when no board was plugged in, rather than inventing one.
 
+## Keil uVision5: build from the chat, and from uVision itself / Keil 编译
+
+`keil_build` drives the **UV4.exe already installed** - C51 or MDK - and reads the log it writes, because that log is
+the only place a uVision build says *which file, which line*. It does not reimplement a compiler, for the same reason
+`serial_flash` does not reimplement a bootloader.
+
+```text
+/keil                                        # status: is UV4 found, which project, which target
+/keil on                                     # arm it (default off)
+/keil project D:\work\blinky.uvprojx         # remember the project (its targets are listed back)
+/keil target "MCBx51: 8xC51Rx"               # pick a target, or leave it to the project default
+/keil build                                  # build; rebuild / clean / flash as well
+```
+
+The tool is the same four actions: `keil_build(project?, action?, target?, timeoutMs?)` with
+`action = build | rebuild | clean | flash`. `flash` is `UV4 -f`, which downloads through the project's own debugger
+settings - it writes the chip, which is why the whole thing is off until `/keil on`.
+
+What comes back is a verdict, not a wall of log:
+
+```text
+❌ 编译失败（退出码 2，1714ms）
+工程：D:\work\blinky.uvprojx
+Target：MCBx51: 8xC51Rx
+  ✖ BLINKY.C(38): error C141: syntax error near '{', expected 'bit'
+（Target not created：没有产出可下载的文件）
+UV4 退出码 2：有错误
+```
+
+Both dialects are parsed, because one uVision ships both: `.\main.c(12): error C141: ...` (C51 / ARMCC5) and
+`../src/main.c:23:5: error: ...` (ARMCC6 / GCC), plus the tools' own `*** ERROR: ...`. A **warning-only** build exits 1
+and is reported as a success; a log that says `Target not created` is a failure even when the counts read
+`0 Error(s)` - both facts are in the text, so both are read.
+
+### The same code, from inside uVision
+
+Two entry points, one module (`keil.js`): if the chat and the IDE disagreed about what a build was, one of them would be
+lying. For the IDE side there is a Tools-menu entry, and a script that writes it:
+
+```powershell
+# adds "Keil: 编译 (DSH)" and "Keil: 编译+下载 (DSH)" to Tools → Customize Tools Menu
+powershell -ExecutionPolicy Bypass -File scripts\keil\install-tools-menu.ps1 -WithFlash
+
+# and to take them back out
+powershell -ExecutionPolicy Bypass -File scripts\keil\install-tools-menu.ps1 -Remove
+```
+
+uVision stores those entries in `HKCU\Software\Keil\<product key>\ToolM` as five values per entry - `Mtx` (name), `Mex`
+(command), `Mag` (arguments), `Mid` (initial folder), `Mfg` (option bits, `0x900` = run independent). The installer
+writes exactly that, so it is idempotent and reversible: it exports the key to a `.reg` under
+`$DSH_HOME\dsh-wechat-media\` first, and `-Remove` deletes only the entries it created.
+
+The arguments are `cmd.exe /c "<plugin>\scripts\keil\dsh-keil.cmd" "#P"` - `#P` is uVision's own substitution for the
+open project, so one menu item works on every project without per-project setup. Exit codes are meant for scripts:
+`0` built (warnings fine), `2` build failed, `3` could not run at all.
+
+**What was actually verified.** Against a copy of Keil's own `BLINKY` example (`MCBx51: 8xC51Rx`, C51 V9.61): the chat
+tool ran `UV4 -b` and got `Program Size: data=9.0 xdata=0 code=82` in 3.8s, and the same build through
+`scripts\keil\dsh-keil.cmd` exited 0. Adding one broken line to `BLINKY.C` produced
+`BLINKY.C(38): error C141: syntax error near '{', expected 'bit'` and exit code 2 on both paths, with
+`Target not created` reported as a failure. Pointing the CLI at a `.c` file instead of a project exited 3 with
+`不是 uVision 工程文件`. The Tools-menu entries were written to the registry and read back intact.
+
+**Limits.** Keil Lite caps a build at 32K of code and says so through exit code 20 - the message is passed through
+rather than guessed at. Only the C51 toolchain was exercised on this machine; the parsing for ARMCC5/AC6 logs is
+written against their documented formats and covered by tests, but has not been run against an MDK install here.
+
 ## Scrapling: fetch what a plain client cannot / 抓取引擎
 
 Scrapling is a python scraping library with a browser-shaped TLS fingerprint, real-browser headers and adaptive selectors,
@@ -1382,6 +1450,7 @@ each era added, with the releases that mattered most:
 | 1.9 – 1.12 | Lead collection: a sentence into a scored list, buyers told apart from sellers, budgets as preferences, shops that never rank (maps), and a `market` that constrains the search instead of only scoring it |
 | 1.13 | Outreach: `outreach_plan` / `outreach_send` over three channels, with cooldown, a confirmation step, and a stop at the first hard failure |
 | 1.14 | Lead quality: a company name from the domain when the headline is a sentence, a twenty-country phone prefix table, and one human confirmation slot before a cold email leaves |
+| 1.15 | Keil uVision5: `keil_build` drives the installed UV4 (build / rebuild / clean / flash) and answers with `file(line): error`, plus a Tools-menu entry so the same module is one click inside uVision |
 
 Each era ended with the same discipline: a release only goes out after the suite passes, and a claim only goes in the README
 after something real produced the number.

@@ -100,6 +100,7 @@ import * as clipboard from "./clipboard.js";
 import * as ssh from "./ssh.js";
 import * as serial from "./serial.js";
 import * as scrapling from "./scrapling.js";
+import * as keil from "./keil.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -3448,6 +3449,67 @@ export function apply(ctx, config = {}) {
       ];
       await reply(lines.join("\n"));
       noteRoute("/command", { command: "scrapling", action: "status" });
+      return true;
+    }
+    if (command.name === "keil") {
+      // The same switch serial has, for the same reason: a build runs a compiler over a named project and `flash`
+      // writes a chip, so neither happens because a model felt like it. The gate is checked before UV4 is spawned.
+      const prefs = await state.loadPrefs();
+      const current = prefs?.keil && typeof prefs.keil === "object" ? prefs.keil : {};
+      const [action = "status", ...rest] = String(command.args ?? "").trim().split(/\s+/).filter(Boolean);
+      if (action === "on" || action === "off") {
+        await state.savePrefs({ keil: { ...current, enabled: action === "on" } });
+        const support = keil.keilSupport();
+        if (action === "on" && !support.ok) await reply(`⚠️ Keil 已打开，但${support.reason}`);
+        else if (action === "on") await reply(`🛠 Keil → **开**（UV4：${support.uv4.program}）。可用：keil_build（build / rebuild / clean / flash，错误带文件和行号）。工程用 /keil project <路径> 记住。`);
+        else await reply("🛠 Keil → **关**。keil_build 现在一律拒绝执行，直到 /keil on。");
+        noteRoute("/command", { command: "keil", action, enabled: action === "on" });
+        return true;
+      }
+      if (action === "project") {
+        const wanted = rest.join(" ").replace(/^"|"$/g, "").trim();
+        if (!wanted) {
+          await reply(`当前工程：${current.project || "（未设置）"}`);
+          return true;
+        }
+        try {
+          const info = keil.inspectProject(wanted);
+          await state.savePrefs({ keil: { ...current, project: info.file, dir: info.dir, target: current.target ?? "" } });
+          const lines = [`工程 → ${info.file}`];
+          if (info.targets.length) lines.push(`Target：${info.targets.join(" / ")}（用 /keil target <名字> 选一个）`);
+          await reply(lines.join("\n"));
+          noteRoute("/command", { command: "keil", action: "project" });
+        } catch (error) {
+          await reply(`设置失败：${String(error?.message ?? error)}`);
+        }
+        return true;
+      }
+      if (action === "target") {
+        const wanted = rest.join(" ").trim();
+        const next = { ...current };
+        if (wanted) next.target = wanted;
+        else delete next.target;
+        await state.savePrefs({ keil: next });
+        await reply(wanted ? `Keil Target → ${wanted}` : "已清掉 Target（回到工程默认的那个）");
+        noteRoute("/command", { command: "keil", action: "target", target: next.target ?? "" });
+        return true;
+      }
+      if (["build", "rebuild", "clean", "flash"].includes(action)) {
+        await reply(await keilBuildTool.execute({ action }));
+        return true;
+      }
+      const support = keil.keilSupport();
+      const lines = [
+        `Keil → ${current.enabled ? "**开**" : "**关**（默认关）"}`,
+        `  UV4：${support.ok ? support.uv4.program : support.reason}`,
+        `  工程：${current.project || "（未设置，用 /keil project <路径>）"}`,
+        `  Target：${current.target || "（工程默认）"}`,
+        "",
+        "用法：/keil on · /keil project D:\\work\\x.uvprojx · /keil target \"Target 1\" · /keil build|rebuild|clean|flash",
+        "Keil 的 Tools 菜单入口：scripts/keil/install-tools-menu.ps1（点一下编译，结果推到这个对话）",
+      ];
+      await reply(lines.join("\n"));
+      noteRoute("/command", { command: "keil", action: "status" });
       return true;
     }
     if (command.name === "serial") {
@@ -9726,7 +9788,66 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      // ── Keil uVision5: build from the chat ───────────────────────────────────
+      //
+      // This does not compile anything: it drives the UV4.exe the machine already has, and reads the log it writes,
+      // because that log is the only place a build says which file and line failed. Off until armed, like serial.
+      const keilGate = async () => {
+        const prefs = await state.loadPrefs();
+        if (prefs?.keil?.enabled === true) return prefs.keil;
+        throw new Error("Keil 功能未开启——在聊天里发 /keil on 开启（默认关：会调 UV4 跑编译，flash 会写芯片）");
+      };
+
+      const keilBuildTool = define({
+        name: "keil_build",
+        description:
+          "Build a Keil uVision5 project with the machine's own UV4.exe (C51 or MDK): action=build | rebuild | clean | flash. It returns the verdict with every error as `file(line): error C141: message`, the Program Size line, and the .hex it produced - so a failing build answers 'where' instead of 'it failed'. action=flash downloads through the project's own debugger settings (UV4 -f), which writes the chip. The project path is remembered by /keil project, and the target by /keil target. Off until /keil on.",
+        parameters: {
+          project: { type: "string", description: "Path to the .uvprojx (or .uvproj). Omit to use the one /keil project remembered." },
+          action: { type: "string", description: "build (default) | rebuild | clean | flash." },
+          target: { type: "string", description: "Target name inside the project (UV4 -t). Omit for the project's default." },
+          timeoutMs: { type: "number", description: `How long to allow (default ${keil.KEIL_TIMEOUT_MS}, max 900000).` },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 900000,
+        async execute(args) {
+          const action = String(args?.action ?? "build").trim() || "build";
+          try {
+            // The gate comes first: a build spawns a compiler, and `flash` writes a chip.
+            const prefs = await keilGate();
+            const wanted = String(args?.project ?? "").trim() || String(prefs.project ?? "").trim();
+            if (!wanted) return "还没指定工程：给 project 参数，或在聊天里发 /keil project D:\\work\\blinky.uvprojx（会记住）";
+            const file = keil.assertProject(wanted);
+            const support = keil.keilSupport();
+            if (!support.ok) return `keil_build 失败：${support.reason}`;
+            const chosen = String(args?.target ?? "").trim() || String(prefs.target ?? "").trim();
+            const limit = Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : keil.KEIL_TIMEOUT_MS;
+            const logPath = keil.defaultLogPath(file, action);
+            const result = await keil.runUv4({
+              uv4: support.uv4.program,
+              project: file,
+              action,
+              target: chosen,
+              logPath,
+              timeoutMs: Math.min(limit, 900000),
+            });
+            noteRoute("/keil", {
+              action,
+              ok: result.parsed.ok,
+              code: result.code,
+              errors: result.parsed.errors.length,
+              warnings: result.parsed.warnings.length,
+            });
+            return keil.summarizeBuild(result, { project: file, action });
+          } catch (error) {
+            const reason = String(error?.message ?? error);
+            noteRoute("/keil", { action, ok: false, error: reason });
+            return `keil_build 失败：${reason}`;
+          }
+        },
+      });
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, keilBuildTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);

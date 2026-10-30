@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.15.0
+
+- **The plugin could flash a 51 board but could not build the program it flashed.** Keil uVision5 is where that program
+  comes from, and a build that fails only says so inside the log UV4 writes - `.\main.c(31): error C141: syntax error
+  near 'return'` is the useful sentence, and it never reaches a console. `keil_build` drives the UV4.exe already
+  installed (C51 or MDK) with `-b / -r / -c / -f`, reads that log, and answers with every error as
+  `file(line): error C141: message`, the `Program Size` line and the `.hex` it produced. Warning-only builds are a
+  success (UV4 exits 1); `Target not created` is a failure even when the counts read `0 Error(s)`. Off until
+  `/keil on`, because `flash` writes a chip.
+- **The same build is one click inside uVision.** `scripts\keil\install-tools-menu.ps1` writes the Tools menu entries
+  in the format uVision reads (`HKCU\Software\Keil\<product key>\ToolM`: `Mtx` / `Mex` / `Mag` / `Mid` / `Mfg`), with
+  the current project passed by uVision's own `#P`, and backs the key up to a `.reg` before touching it. Both entry
+  points call the same `keil.js`, so the chat and the IDE cannot disagree about what a build was.
 ## 1.14.1
 
 - **The one-click extension install failed on a fresh machine with `cannot find path …\.dsh\exports`, although nothing

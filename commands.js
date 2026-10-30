@@ -156,6 +156,12 @@ export const COMMANDS = [
     summary: "串口烧录开关与默认值：serial_ports 列串口、serial_flash 烧录（ESP-IDF idf.py / esptool / avrdude）、serial_monitor 读打印（默认关；会写板子 Flash、会占用串口）",
   },
   {
+    name: "keil",
+    aliases: ["编译", "uvision"],
+    usage: "/keil [on|off|status] · /keil project D:\\work\\x.uvprojx · /keil target \"Target 1\" · /keil build|rebuild|clean|flash",
+    summary: "Keil uVision5 开关与工程：keil_build 用本机 UV4.exe 编译，错误带文件和行号；project / target 会记住（默认关；flash 会写芯片）",
+  },
+  {
     name: "ssh",
     aliases: ["远程"],
     usage: "/ssh [list|on|off] · /ssh add <名字> <user@host[:port]> [identity] · /ssh remove <名字>",
@@ -373,6 +379,7 @@ export const COMMAND_META = Object.freeze({
   clipboard: { default: "开", restart: "立即" },
   ssh: { default: "关（且主机列表为空）", restart: "立即" },
   serial: { default: "关 · 波特率 115200 · 无默认端口", restart: "立即" },
+  keil: { default: "关 · 工程与 Target 都未设置", restart: "立即" },
   scrapling: { default: "直连 · stealth 关", restart: "立即" },
   qq: { default: "关", restart: "保存凭据后立即重连网关" },
   email: { default: "关；允许发件人为空 = 谁都不回", restart: "保存后立即生效，下一轮轮询开始" },
