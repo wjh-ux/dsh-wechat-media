@@ -515,6 +515,13 @@ export async function collectLeads({
       } catch { /* a dead contact page still leaves the homepage evidence */ }
     }
     const title = String(page?.title ?? candidate.title ?? "");
+    // The SERP title and the page title are not the same string: "Lieferanten.de" was the search result, while the
+    // page calls itself "Die clevere Lieferantensuche". Filtering only the SERP title let a supplier directory through
+    // at score 62 - so the visited page gets the same check before it is scored.
+    if (JUNK_TITLE.test(title)) {
+      onProgress({ stage: "skip-junk", url: candidate.url, title });
+      continue;
+    }
     // The company name is the title without the marketing tail every site appends: "ACME GmbH | Outdoor furniture".
     const company = title.split(/\s[|–—·:]\s|\s\|\s/)[0].trim().slice(0, 80) || candidate.host;
     const base = {
@@ -676,7 +683,9 @@ export function osmCategoriesFor(goal) {
 export function overpassQuery({ city = "", bbox = [], categories = OSM_CATEGORIES.default, limit = 120 } = {}) {
   const wanted = (Array.isArray(categories) ? categories : OSM_CATEGORIES.default).join("|");
   const cap = Math.max(1, Math.min(300, Number(limit) || 120));
-  const shops = (scope) => `  nwr["shop"~"^(${wanted})$"](${scope});\n  nwr["office"~"^(company|wholesale)$"](${scope});`;
+  // Only shops: `office=company` was meant to catch wholesalers and caught a casting agency instead. A `shop` tag is a
+  // fact about what the place sells; an `office` tag is only a fact about it having an office.
+  const shops = (scope) => `  nwr["shop"~"^(${wanted})$"](${scope});`;
 
   const name = String(city ?? "").trim();
   if (name) {

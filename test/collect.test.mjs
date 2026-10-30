@@ -227,5 +227,23 @@ test("OSM tags become leads, and a place without a website is still a place", ()
   assert.equal(rows[0].phone, "+49 89 1234567");
   assert.equal(rows[1].url, "");
 });
+await testAsync("a directory whose page title says so is dropped even when the SERP title did not", async () => {
+  const search = async () => [
+    { title: "Lieferanten.de", url: "https://lieferanten.de" },
+    { title: "Möbelhaus Süd", url: "https://moebel-sued.de" },
+  ];
+  const visit = async (url) => url.includes("lieferanten")
+    ? { url, title: "Lieferanten.de - Die clevere Lieferantensuche", text: "Großhändler finden. Kontakt +49 3606 60800", links: [] }
+    : { url, title: "Möbelhaus Süd", text: "Gartenmöbel. hallo@moebel-sued.de", links: [] };
+  const result = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1 });
+  assert.equal(result.leads.length, 1, "the directory is filtered on the page it actually visited");
+  assert.match(result.leads[0].url, /moebel-sued/);
+});
+
+test("the map query asks for shops, not for offices", () => {
+  const query = overpassQuery({ city: "München", categories: ["furniture"] });
+  assert.doesNotMatch(query, /office/, "office=company pulled a casting agency into a furniture search");
+  assert.match(query, /nwr\["shop"/);
+});
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);

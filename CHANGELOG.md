@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.2
+
+- **A casting agency came back as an outdoor-furniture shop.** The map query also asked for `office=company` to catch
+  wholesalers; it caught an office. Only `shop` categories are queried now - a shop tag is a fact about what a place
+  sells, an office tag is only a fact about it having an office. Munich: 120 places, 82 with a website (up from 73).
+- **`Lieferanten.de - Die clevere Lieferantensuche` survived the directory filter** because the filter only saw the
+  search-result title ("Lieferanten.de") while the page calls itself something else. The visited page's own title is
+  checked too now - the page is the authority on what it is.
+- 48 suites / 768 cases.
 ## 1.12.1
 
 - **The map half of a combined run died with `minScore is not defined`** - after the search half had already reported
