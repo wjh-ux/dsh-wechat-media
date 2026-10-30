@@ -2895,6 +2895,53 @@ export function apply(ctx, config = {}) {
       ].join("\n"));
       return true;
     }
+    if (command.name === "collect") {
+      // The budgets are the difference between "two minutes" and "twenty-five minutes, then killed", so they belong
+      // where a person can change them without editing code: a chat command here, the panel below, the same prefs.
+      const sub = String(command.args ?? "").trim();
+      const prefs = await state.loadPrefs();
+      const current = collectSettings(prefs);
+      if (!sub) {
+        await reply([
+          "采集设置（" + collectSettingsLine(current) + "）：",
+          "  step      单页预算，秒 —— 一个页面多久没响应就放弃（越小越快，越小也越容易漏）",
+          "  search    搜索页预算，秒",
+          "  deadline  整轮截止，分钟 —— 到点先停，已采到的照样入库",
+          "  limit     默认留几条",
+          "  searches  每轮搜几次",
+          "",
+          "改：/collect step 12 · /collect deadline 3 · /collect limit 10 · /collect searches 4",
+          "也可以到控制面板的「获客采集」里改。",
+        ].join("\n"));
+        return true;
+      }
+      const parts = sub.split(/\s+/);
+      const key = String(parts[0] ?? "").toLowerCase();
+      const value = Number(parts[1]);
+      if (!Number.isFinite(value) || value <= 0) {
+        await reply("用法：/collect step 12 | search 15 | deadline 3 | limit 10 | searches 4（收到 \"" + sub + "\"）");
+        return true;
+      }
+      const map = {
+        step: ["stepTimeoutMs", 1000, "单页预算"],
+        search: ["searchTimeoutMs", 1000, "搜索预算"],
+        deadline: ["deadlineMs", 60000, "整轮截止"],
+        limit: ["limit", 1, "默认条数"],
+        searches: ["maxSearches", 1, "每轮搜索"],
+      };
+      const hit = map[key];
+      if (!hit) {
+        await reply("未知项：" + key + "（step / search / deadline / limit / searches）");
+        return true;
+      }
+      const [field, scale, label] = hit;
+      const next = { ...(prefs.collect ?? {}), [field]: Math.round(value * scale) };
+      await state.savePrefs({ collect: next });
+      const after = collectSettings({ ...prefs, collect: next });
+      noteRoute("/command", { command: "collect", action: field, value: next[field] });
+      await reply(label + " → " + value + "（已保存）\n当前：" + collectSettingsLine(after));
+      return true;
+    }
     if (command.name === "office") {
       // The honest status line: which program each capability needs, whether it was found, and where relative
       // paths land. A tool that refuses because the toolchain is missing should never look like a broken
@@ -5504,6 +5551,38 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
   }
 
   /** Apply a browser patch. Nothing to reconnect: the next browser action reads the refreshed settings. */
+  /**
+   * The collector's budgets, resolved once so the tool, the command and the panel cannot disagree.
+   *
+   * The defaults are the measured ones, not guesses: a page that never finishes loading used to cost five minutes
+   * because the transport's own ceilings (45 s navigate + 30 s evaluate) fired on every call, so a step is capped at
+   * 12 seconds by default and a whole run at three minutes. Every value is a preference, because "how patient should
+   * it be" is a property of the person's network and the sites they chase, not of the code.
+   */
+  const COLLECT_DEFAULTS = Object.freeze({ deadlineMs: 180000, stepTimeoutMs: 12000, searchTimeoutMs: 15000, limit: 10, maxSearches: 4 });
+
+  function collectSettings(prefs = {}) {
+    const saved = prefs?.collect && typeof prefs.collect === "object" ? prefs.collect : {};
+    const pick = (value, fallback, min, max) => {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) return fallback;
+      return Math.max(min, Math.min(max, Math.round(number)));
+    };
+    return {
+      deadlineMs: pick(saved.deadlineMs, COLLECT_DEFAULTS.deadlineMs, 30000, 3600000),
+      stepTimeoutMs: pick(saved.stepTimeoutMs, COLLECT_DEFAULTS.stepTimeoutMs, 3000, 120000),
+      searchTimeoutMs: pick(saved.searchTimeoutMs, COLLECT_DEFAULTS.searchTimeoutMs, 3000, 120000),
+      limit: pick(saved.limit, COLLECT_DEFAULTS.limit, 1, 50),
+      maxSearches: pick(saved.maxSearches, COLLECT_DEFAULTS.maxSearches, 1, 20),
+    };
+  }
+
+  /** One line a person can read, used by the command, the panel and the tool's own report. */
+  function collectSettingsLine(settings) {
+    return "单页 " + Math.round(settings.stepTimeoutMs / 1000) + "s · 整轮 " + Math.round(settings.deadlineMs / 60000)
+      + "min · " + settings.limit + " 条 · 搜 " + settings.maxSearches + " 次";
+  }
+
   async function applyBrowserPrefs(args = {}) {
     const result = browserPrefsPatch(args);
     if (!result.changed.length) return { changed: [], browser: browserState() };
@@ -8206,7 +8285,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             return "maps 源还没接上（下一步做）。现在用 sources=search，或先用 browser_maps_places 把地图结果单独采出来。";
           }
           const engine = String(args?.engine ?? "bing").toLowerCase() === "ddg" ? "ddg" : "bing";
-          const limit = Math.max(1, Math.min(50, Number(args?.limit) || 10));
+          // Preference first, argument second: a person who set "12 seconds" in the panel means it, and passing a
+          // limit on every call would just be noise in every call.
+          const settings = collectSettings(await state.loadPrefs());
+          const limit = Math.max(1, Math.min(50, Number(args?.limit) || settings.limit));
 
           // One file under the plugin's own state root: the lead store belongs to this machine, not to a session.
           const storePath = join(state.root, "leads.json");
@@ -8258,8 +8340,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             promise,
             new Promise((_, reject) => { setTimeout(() => reject(new Error(`${label} 超时 ${Math.round(ms / 1000)}s`)), ms); }),
           ]);
-          const searchTimeoutMs = Math.max(5000, Number(args?.searchTimeoutMs) || 20000);
-          const visitTimeoutMs = Math.max(5000, Number(args?.visitTimeoutMs) || 15000);
+          const searchTimeoutMs = Math.max(3000, Number(args?.searchTimeoutMs) || settings.searchTimeoutMs);
+          const visitTimeoutMs = Math.max(3000, Number(args?.visitTimeoutMs) || settings.stepTimeoutMs);
 
           const adapter = {
             async search(query, page) {
@@ -8286,7 +8368,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             search: adapter.search,
             visit: adapter.visit,
             store: args?.reset ? [] : store,
-            deadlineMs: Math.max(30000, Number(args?.deadlineMs) || 180000),
+            deadlineMs: Math.max(30000, Number(args?.deadlineMs) || settings.deadlineMs),
             stepTimeoutMs: visitTimeoutMs,
             onProgress: (event) => {
               if (event.stage === "search") process.stderr.write(`[collect] search ${event.query} p${event.page} -> ${event.results ?? "err"}\n`);
@@ -9715,6 +9797,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             counters: { ...counters },
             interjections: interjections.slice(-10),
             feishu: await feishuState(),
+            // The collector's budgets, so a card and a chat command show the same numbers the tool actually uses.
+            collect: collectSettings(prefs),
             // Tavily reports whether a key is set, never the key itself - the same rule the Feishu block follows.
             tavily: tavilyState(),
             browser: browserState({
@@ -11068,6 +11152,18 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               note = `收件目录已改为 ${value}`;
             }
             noteRoute("/panel", { action: "inboxDir", value, ok: note.startsWith("收件目录") });
+          } else if (args.collectDeadline || args.collectStep || args.collectLimit || args.collectSearches) {
+            // Saved as one block: a half-written save leaving "12 seconds, 3 minutes" mixed from two runs is exactly
+            // the kind of state nobody can debug later.
+            const merged = { ...(await state.loadPrefs()).collect };
+            if (args.collectDeadline) merged.deadlineMs = Math.round(Number(args.collectDeadline) * 60000);
+            if (args.collectStep) merged.stepTimeoutMs = Math.round(Number(args.collectStep) * 1000);
+            if (args.collectLimit) merged.limit = Math.round(Number(args.collectLimit));
+            if (args.collectSearches) merged.maxSearches = Math.round(Number(args.collectSearches));
+            await state.savePrefs({ collect: merged });
+            const after = collectSettings(await state.loadPrefs());
+            note = "采集设置已保存：" + collectSettingsLine(after);
+            noteRoute("/panel", { action: "collect", ...after });
           } else if (args.allowlist) {
             await state.savePrefs({ requireAllowlist: args.allowlist === "true" });
             note = `白名单开关 → ${args.allowlist === "true" ? "开" : "关"}`;
@@ -11140,6 +11236,20 @@ ${pending.length ? `<a class="b" href="?cancel=1">取消等待中的审批</a><d
 <h4>企业微信（WeCom）</h4>
 <div class="m">当前：${(await state.loadWecom()).webhookUrl ? "群机器人 webhook 已配置" : (await state.loadWecom()).corpSecret ? "自建应用已配置" : "未配置"} · 长连接：${wecomBotStatus.authenticated ? "已认证" : ((await state.loadWecom()).botId ? "未连接/连接中" : "未配置")}</div>
 <p><a class="b" href="/dsh-wechat-media/wecom">配置企业微信 / 发送测试消息</a></p>
+<h4>获客采集</h4>
+<div class="m">当前：${collectSettingsLine(collectSettings(prefs))}</div>
+<form method="get" style="margin:8px 0">
+  <input name="collectStep" title="单页预算（秒）" value="${Math.round(collectSettings(prefs).stepTimeoutMs / 1000)}" style="width:80px;padding:5px 8px">
+  <span class="m">秒/页</span>
+  <input name="collectDeadline" title="整轮截止（分钟）" value="${Math.round(collectSettings(prefs).deadlineMs / 60000)}" style="width:80px;padding:5px 8px">
+  <span class="m">分钟</span>
+  <input name="collectLimit" title="默认条数" value="${collectSettings(prefs).limit}" style="width:80px;padding:5px 8px">
+  <span class="m">条</span>
+  <input name="collectSearches" title="每轮搜索次数" value="${collectSettings(prefs).maxSearches}" style="width:80px;padding:5px 8px">
+  <span class="m">次搜索</span>
+  <button type="submit">保存</button>
+  <span class="m">也支持 /collect step 12</span>
+</form>
 <h4>收件目录</h4>
 <div class="m">微信收到的文件保存在：<code>${await resolvedInbox()}</code></div>
 <p><a class="b" href="/dsh-wechat-media/pick-folder">用系统文件夹选择器选择…</a></p>

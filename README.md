@@ -957,6 +957,19 @@ The method is the part worth reading, because each rule exists to kill a specifi
 | **Noise is filtered from contacts** | `logo@2x.png`, `name@example.com`, `@wixpress.com` and HTML-entity artefacts all look exactly like a mailbox |
 | **Every score carries its reasons** | a lead at 60 with "has email, no contact page" is actionable; a bare 60 is a mystery nobody can audit |
 
+The budgets are settings, not constants - a page that never finishes loading used to cost five minutes because the
+transport's own ceilings fired on every call:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `step` | 12 s | how long one page gets before it is abandoned |
+| `search` | 15 s | how long one search page gets |
+| `deadline` | 3 min | the whole run; reaching it stops cleanly and keeps what it has |
+| `limit` | 10 | how many companies an unadorned run keeps |
+| `searches` | 4 | how many queries are tried |
+
+Change them with `/collect step 12` in the chat, or in the control panel's 获客采集 block. `/collect` alone prints the
+effective values, and `/state` reports the same numbers the tool actually uses.
 The lead store lives at `$DSH_HOME/dsh-wechat-media/leads.json` and is merged, not overwritten - running the same goal
 twice adds only what is new. Exports go through the same save rules as `browser_flow`.
 

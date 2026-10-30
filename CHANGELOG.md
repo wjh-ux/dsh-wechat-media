@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.9.2
+
+- **The collector's budgets were only reachable by editing code.** They are the difference between "two minutes" and
+  "twenty-five minutes, then killed", so they now live in prefs and are settable from two places a person already uses:
+  `/collect step 12` in the chat (and `deadline 3`, `limit 10`, `searches 4`), and a 获客采集 block in the control
+  panel. `/collect` with no arguments prints the effective values; `/state` reports the same numbers, so a card and
+  a command can never disagree with what the tool actually uses.
+- Resolution order is preference-then-argument: a tool call can still override per run, but the saved value is what an
+  unadorned `collect_leads` uses. Each value is clamped to a sane range (3 s..120 s per step, 30 s..60 min per run,
+  1..50 leads, 1..20 searches), because a typo of `120` seconds for a step is how a run silently becomes useless.
+- 48 suites / 758 cases.
 ## 1.9.1
 
 - **A live run took 25 minutes and was killed by the tool timeout.** Five leads, ~5 minutes each: a page that never

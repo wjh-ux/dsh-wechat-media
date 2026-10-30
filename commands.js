@@ -96,6 +96,12 @@ export const COMMANDS = [
     summary: "Office 工具链状态：读、写、转 PDF 分别需要哪个程序，以及现在找到没有",
   },
   {
+    name: "collect",
+    aliases: ["采集", "获客"],
+    usage: "/collect [deadline 3 | step 12 | limit 10 | searches 4]",
+    summary: "获客采集的预算：单页多久放弃、整轮跑多久、默认留几条、每轮搜几次；不带参数看当前值",
+  },
+  {
     name: "desktop",
     aliases: ["桌面"],
     usage: "/desktop [on|off|status]",
@@ -362,6 +368,7 @@ export const COMMAND_META = Object.freeze({
   delivery: { default: "whole（整段）", restart: "立即" },
   auth: { default: "适中（询问，超时转 GUI）", restart: "立即" },
   name: { default: "（未命名时显示 id）", restart: "立即" },
+  collect: { default: "单页 12s · 整轮 3min · 10 条 · 搜 4 次", restart: "立即（下一次采集生效）" },
   desktop: { default: "关", restart: "立即" },
   clipboard: { default: "开", restart: "立即" },
   ssh: { default: "关（且主机列表为空）", restart: "立即" },
