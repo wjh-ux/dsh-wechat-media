@@ -51,15 +51,15 @@ const ROLE_WORDS = {
 
 /** Market → the language whose role words are worth appending, and a TLD hint for scoring. */
 const MARKETS = {
-  de: { lang: "de", tld: [".de", ".at", ".ch"], label: "德国" },
-  uk: { lang: "en", tld: [".co.uk", ".uk"], label: "英国" },
-  us: { lang: "en", tld: [".us", ".com"], label: "美国" },
-  fr: { lang: "fr", tld: [".fr", ".be"], label: "法国" },
-  es: { lang: "es", tld: [".es"], label: "西班牙" },
-  it: { lang: "it", tld: [".it"], label: "意大利" },
-  nl: { lang: "nl", tld: [".nl", ".be"], label: "荷兰" },
-  ru: { lang: "ru", tld: [".ru"], label: "俄罗斯" },
-  ae: { lang: "ar", tld: [".ae"], label: "阿联酋" },
+  de: { lang: "de", tld: [".de", ".at", ".ch"], label: "德国", query: "Deutschland", country: /deutschland|germany/i, phone: /^\+?49/ },
+  uk: { lang: "en", tld: [".co.uk", ".uk"], label: "英国", query: "United Kingdom", country: /united kingdom|\buk\b|england|scotland|wales/i, phone: /^\+?44/ },
+  us: { lang: "en", tld: [".us"], label: "美国", query: "USA", country: /united states|\busa\b|\bu\.s\.\b/i, phone: /^\+?1/ },
+  fr: { lang: "fr", tld: [".fr"], label: "法国", query: "France", country: /france|français/i, phone: /^\+?33/ },
+  es: { lang: "es", tld: [".es"], label: "西班牙", query: "España", country: /españa|spain/i, phone: /^\+?34/ },
+  it: { lang: "it", tld: [".it"], label: "意大利", query: "Italia", country: /italia|italy/i, phone: /^\+?39/ },
+  nl: { lang: "nl", tld: [".nl"], label: "荷兰", query: "Nederland", country: /nederland|netherlands|holland/i, phone: /^\+?31/ },
+  ru: { lang: "ru", tld: [".ru"], label: "俄罗斯", query: "Россия", country: /россия|russia/i, phone: /^\+?7/ },
+  ae: { lang: "ar", tld: [".ae"], label: "阿联酋", query: "UAE", country: /\buae\b|emirates|dubai|abu dhabi/i, phone: /^\+?971/ },
 };
 
 /** The market a person named, or none of the above. Accepts the code, the Chinese label, or a raw country name. */
@@ -87,8 +87,11 @@ export function leadQueries({ goal = "", market = "", max = 8 } = {}) {
   const roles = ROLE_WORDS[resolved?.lang ?? "en"] ?? ROLE_WORDS.en;
   const english = ROLE_WORDS.en;
   const out = [];
-  for (const role of roles) out.push(`${wanted} ${role}`);
-  for (const role of english) out.push(`${wanted} ${role} ${resolved?.label ?? ""}`.trim());
+  // The market goes in as the name people there use, not as the Chinese label: "outdoor furniture importer 德国"
+  // finds Chinese pages about Germany - measured, that is exactly what the first runs returned.
+  const where = resolved?.query ?? "";
+  for (const role of roles) out.push(`${wanted} ${role} ${where}`.trim());
+  for (const role of english) out.push(`${wanted} ${role} ${where}`.trim());
   const seen = new Set();
   return out
     .map((query) => query.replace(/\s+/g, " ").trim())
@@ -290,6 +293,84 @@ export function classifyRole(text) {
   };
 }
 
+/**
+ * Is this company actually in the market that was asked for?
+ *
+ * `market` used to be a scoring nudge only, so a run for `de` happily returned a US direct-to-consumer brand and a
+ * Chinese supply-chain company - both real companies, neither a German buyer. A lead that is in the wrong country is
+ * not a weaker lead, it is the wrong lead, so this is a verdict (like the role check) rather than a few points.
+ */
+export function marketFit(lead, market) {
+  const resolved = resolveMarket(market);
+  if (!resolved) return { fit: "unknown", evidence: [] };
+  const host = hostOf(lead?.url);
+  const text = `${lead?.title ?? ""} ${lead?.text ?? ""}`;
+  const phones = [...(Array.isArray(lead?.phones) ? lead.phones : []), ...(text.match(/\+?\d[\d\s()./-]{6,}\d/g) ?? [])];
+  const evidence = [];
+
+  if (resolved.tld.some((tld) => host.endsWith(tld))) {
+    evidence.push(`域名 ${resolved.tld[0]}`);
+    return { fit: "target", evidence };
+  }
+  if (resolved.country && resolved.country.test(text)) {
+    evidence.push(`正文提到 ${resolved.label}`);
+    return { fit: "target", evidence };
+  }
+  if (resolved.phone) {
+    const hit = phones.find((phone) => resolved.phone.test(String(phone).replace(/[\s()./-]/g, "")));
+    if (hit) {
+      evidence.push(`当地电话 ${String(hit).slice(0, 20)}`);
+      return { fit: "target", evidence };
+    }
+  }
+  // A foreign phone on a .com host, with no market signal anywhere, is the shape of "wrong country" rather than
+  // "we cannot tell": the earlier runs produced exactly this.
+  // Every other market, not just the first one that has a phone pattern: `find` stopped at the first entry and tested
+  // only that country, so a US lead against `de` came back "unknown" because the loop happened to check `uk` first.
+  for (const [code, spec] of Object.entries(MARKETS)) {
+    if (code === resolved.code || !spec.phone) continue;
+    const hit = phones.find((phone) => spec.phone.test(String(phone).replace(/[\s()./-]/g, "")));
+    if (!hit) continue;
+    evidence.push(`别国电话 ${String(hit).slice(0, 20)}（${spec.label}）`);
+    return { fit: "foreign", evidence, foreign: code };
+  }
+  return { fit: "unknown", evidence };
+}
+
+/**
+ * Does this page read like a directory of companies rather than one company?
+ *
+ * The role check cannot catch these: a supplier directory is *full* of buyer vocabulary ("find wholesalers",
+ * "Händler", "Einkäufer"), because describing its members is its whole job. Measured - `Lieferanten.de` scored 62 and
+ * was classified as a buyer, which is how a directory ends up on a call list.
+ *
+ * The strongest structural signal is outgoing links: a company site links to its own pages and a few socials, a
+ * directory links to dozens of other domains.
+ */
+export function directoryLikelihood({ title = "", text = "", links = [] } = {}) {
+  const evidence = [];
+  let score = 0;
+  const heading = String(title ?? "");
+  const body = String(text ?? "");
+  if (JUNK_TITLE.test(heading)) { score += 5; evidence.push("标题像目录"); }
+
+  const hosts = new Set();
+  for (const link of Array.isArray(links) ? links : []) {
+    const host = hostOf(link?.href);
+    if (host) hosts.add(host);
+  }
+  if (hosts.size >= 15) { score += 3; evidence.push(`链到 ${hosts.size} 个不同域名`); }
+  if (hosts.size >= 40) { score += 2; evidence.push("外链极多"); }
+
+  const listing = /(verzeichnis|branchenbuch|liste der|firmenverzeichnis|find (?:suppliers|companies|manufacturers)|compare (?:suppliers|companies)|top \d+ (?:suppliers|companies)|marktplatz|b2b portal)/i;
+  if (listing.test(body)) { score += 3; evidence.push("正文像在列举公司"); }
+
+  const supplierWords = (body.match(/\b(supplier|suppliers|hersteller|händler|lieferant|distributor|wholesaler|company list)\b/gi) ?? []).length;
+  if (supplierWords >= 25) { score += 2; evidence.push(`供应商类词 ${supplierWords} 次`); }
+
+  return { score, evidence, isDirectory: score >= 3 };
+}
+
 export function scoreLead(lead, { goal = "", market = "" } = {}) {
   const reasons = [];
   let score = 0;
@@ -335,7 +416,12 @@ export function scoreLead(lead, { goal = "", market = "" } = {}) {
   }
   if (/\b(ust\.?-?id|vat|steuernummer|handelsregister|siret|partita iva|cvr)\b/i.test(haystack)) { score += 10; reasons.push("有工商/税号信息（可验证主体）"); }
 
-  return { score: Math.max(0, Math.min(100, score)), reasons, role: role.role, roleEvidence: role.evidence };
+  // Wrong country is not a weaker lead, it is the wrong lead.
+  const fit = marketFit({ ...lead, text: haystack }, market);
+  if (fit.fit === "foreign") { score -= 25; reasons.push(`不在目标市场：${fit.evidence[0]}`); }
+  else if (fit.fit === "target") { score += 5; reasons.push(`市场吻合：${fit.evidence[0]}`); }
+
+  return { score: Math.max(0, Math.min(100, score)), reasons, role: role.role, roleEvidence: role.evidence, marketFit: fit.fit };
 }
 
 /** One CSV line per lead, quoted the way a spreadsheet expects. */
@@ -405,6 +491,7 @@ export async function collectLeads({
   maxConsecutiveTimeouts = 3,
   buyerOnly = false,
   minScore = 20,
+  strictMarket = true,
 } = {}) {
   const started = Date.now();
   const outOfTime = () => Date.now() - started > deadlineMs;
@@ -530,8 +617,19 @@ export async function collectLeads({
       emails: extractEmails(text), phones: extractPhones(text), socials: extractSocials(text),
       contactPage, query: candidate.query, at: new Date().toISOString(),
     };
-    const { score, reasons, role, roleEvidence } = scoreLead(base, { goal: wanted, market });
-    const lead = { ...base, score, reasons, role, roleEvidence };
+    // A directory is decided by structure, before scoring: it is full of buyer vocabulary by nature, so the role
+    // check would call it a customer.
+    const structure = directoryLikelihood({ title, text, links: page?.links ?? [] });
+    if (structure.isDirectory) {
+      onProgress({ stage: "skip-directory", url: candidate.url, evidence: structure.evidence });
+      continue;
+    }
+    const { score, reasons, role, roleEvidence, marketFit: fit } = scoreLead(base, { goal: wanted, market });
+    if (strictMarket && fit === "foreign") {
+      onProgress({ stage: "skip-foreign", url: candidate.url });
+      continue;
+    }
+    const lead = { ...base, score, reasons, role, roleEvidence, marketFit: fit };
     delete lead.text;
     // `buyerOnly` drops the companies whose own page says they make or export the thing - the single biggest source of
     // wasted outreach, and the one thing a keyword search cannot tell you.

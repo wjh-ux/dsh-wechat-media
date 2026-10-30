@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.13.1
+
+- **`market` only scored leads; it never constrained the search.** A run for `de` returned a US direct-to-consumer
+  brand and a Chinese supply-chain company, both real companies and neither a German buyer. The market now goes into
+  the queries **in the language people there use** (`Deutschland`, not `德国` - the Chinese label found Chinese pages
+  about Germany), and a lead whose phone belongs to another market is dropped (`strictMarket`, default on) rather
+  than merely penalised.
+- **A supplier directory was classified as a buyer**, because describing its members fills the page with buyer
+  vocabulary ("Händler", "Einkäufer", "Großhändler"). Directories are now decided by **structure** before scoring: a
+  company site links to its own pages and a few socials, a directory links to dozens of other domains. Verified:
+  `Lieferanten.de` → directory (30 outbound domains), `Möbel Süd GmbH` → not.
+- Two bugs the new tests caught while writing them: `marketFit` used `find` and tested only the *first* other
+  market's phone pattern (a US lead against `de` came back "unknown" because the loop checked `uk` first), and the
+  market-aware query builder crashed on an undefined `where` - the literal `\n` from the patch had landed inside a
+  `//` comment.
+- Measured after the change: queries become `outdoor furniture importeur Deutschland`, and a run returns
+  `april-furniture.de` (German, target) instead of a US brand.
+- 49 suites / 779 cases.
 ## 1.13.0
 
 - **A lead list had nowhere to go.** The collector could find companies; the plugin could send messages; nothing joined

@@ -18,6 +18,8 @@ import {
   parseOverpass,
   resolveMarket,
   classifyRole,
+  directoryLikelihood,
+  marketFit,
   scoreLead,
 } from "../collect.js";
 
@@ -244,6 +246,54 @@ test("the map query asks for shops, not for offices", () => {
   const query = overpassQuery({ city: "München", categories: ["furniture"] });
   assert.doesNotMatch(query, /office/, "office=company pulled a casting agency into a furniture search");
   assert.match(query, /nwr\["shop"/);
+});
+test("a US brand is not a German lead, however good its site is", () => {
+  const us = marketFit({ url: "https://yardbird.com", title: "Yardbird", text: "Outdoor furniture, ships across the USA", phones: ["+1 800 555 0100"] }, "de");
+  assert.equal(us.fit, "foreign", "a US phone on a .com with no German signal");
+  const de = marketFit({ url: "https://moebel-sued.de", title: "Möbel Süd", text: "Gartenmöbel in München", phones: [] }, "de");
+  assert.equal(de.fit, "target");
+  const dePhone = marketFit({ url: "https://shop.com", title: "Shop", text: "Gartenmöbel", phones: ["+49 89 1234567"] }, "de");
+  assert.equal(dePhone.fit, "target", "a German phone is a market signal even on a .com");
+});
+
+test("a supplier directory is caught by structure, not by its words", () => {
+  const directory = directoryLikelihood({
+    title: "Lieferanten.de - Die clevere Lieferantensuche",
+    text: "Finden Sie Händler und Hersteller. Große Liste der Lieferanten. ".repeat(3),
+    links: Array.from({ length: 30 }, (_, index) => ({ href: `https://firma${index}.de` })),
+  });
+  assert.equal(directory.isDirectory, true);
+  assert.ok(directory.evidence.some((row) => row.includes("域名")));
+
+  const company = directoryLikelihood({
+    title: "Möbel Süd GmbH",
+    text: "Wir sind Importeur für Gartenmöbel in München. Kontakt: info@moebel-sued.de",
+    links: [{ href: "https://moebel-sued.de/kontakt" }, { href: "https://moebel-sued.de/ueber-uns" }],
+  });
+  assert.equal(company.isDirectory, false);
+});
+
+await testAsync("the pipeline drops a directory before it can be called a buyer", async () => {
+  const search = async () => [
+    { title: "Lieferanten.de", url: "https://lieferanten.de" },
+    { title: "Möbel Süd", url: "https://moebel-sued.de" },
+  ];
+  const manyLinks = Array.from({ length: 30 }, (_, index) => ({ href: `https://firma${index}.de`, text: "Firma" }));
+  const visit = async (url) => url.includes("lieferanten")
+    ? { url, title: "Die clevere Lieferantensuche", text: "Finden Sie Händler. Liste der Lieferanten.", links: manyLinks }
+    : { url, title: "Möbel Süd GmbH", text: "Wir sind Importeur für Gartenmöbel. info@moebel-sued.de +49 89 1234567", links: [{ href: "https://moebel-sued.de/kontakt", text: "Kontakt" }] };
+  const result = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1 });
+  assert.equal(result.leads.length, 1);
+  assert.match(result.leads[0].url, /moebel-sued/);
+});
+
+await testAsync("strictMarket drops a lead from the wrong country", async () => {
+  const search = async () => [{ title: "US Brand", url: "https://usbrand.com" }];
+  const visit = async (url) => ({ url, title: "US Brand", text: "Outdoor furniture. Call +1 800 555 0100. hello@usbrand.com", links: [] });
+  const loose = await collectLeads({ goal: "outdoor furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, minScore: 0, strictMarket: false });
+  const strict = await collectLeads({ goal: "outdoor furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, minScore: 0, strictMarket: true });
+  assert.equal(loose.leads.length, 1, "without the flag it is still reported, with the penalty");
+  assert.equal(strict.leads.length, 0, "with the flag it never reaches the list");
 });
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);
