@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.10.0
+
+- **Discovery no longer scrapes a search-results page.** Measured on this machine: Bing, asked for "outdoor furniture
+  importeur" from a Chinese IP, answered with dictionary entries, JD.com listings and a Baidu Zhidao thread; the
+  market-forcing parameters returned either nothing or off-topic German pages. Tavily answered the same question with
+  GO IN GmbH and siebensee.com - actual outdoor-furniture sellers in Germany. Search now goes through the plugin's
+  existing Tavily module, which also means one fewer moving part.
+- **The browser is now a fallback, not a requirement.** Pages are fetched as plain HTTP and parsed with four small
+  functions (`parseBingSerp`, `htmlToText`, `htmlLinks`, `pageFromHtml`) instead of a renderer. That matters
+  because the extension bridge, measured mid-run, took 45 s per command and then returned nothing - the collector
+  reported "0 results, no error" while the bridge was stuck. A site that refuses a plain client still falls back to
+  the browser when one is connected.
+- Measured end to end: **26 seconds for 5 leads** on a live run (`outdoor furniture` / `de`), where the previous
+  architecture took 20+ minutes and was killed by the tool timeout.
+- 48 suites / 758 cases.
 ## 1.9.2
 
 - **The collector's budgets were only reachable by editing code.** They are the difference between "two minutes" and

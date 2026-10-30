@@ -8272,13 +8272,25 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           searchTimeoutMs: { type: "number", description: "Per-search budget (default 20000)." },
         },
         async (args) => {
-          const { live } = await browserEnsure();
-          const browserMod = await import("./browser.js");
+          // The browser is a *fallback* here, not a requirement. Discovery goes through Tavily and pages are plain
+          // HTTP, so a stuck extension bridge must not make the tool unusable - measured: 45 s per command, nothing
+          // returned, and the run reported "0 results" with no error at all.
+          let live = null;
+          let browserMod = null;
+          try {
+            ({ live } = await browserEnsure());
+            browserMod = await import("./browser.js");
+          } catch (error) {
+            live = null;
+            browserMod = null;
+            process.stderr.write(`[collect] 浏览器不可用，改用 HTTP 直取：${String(error?.message ?? error)}\n`);
+          }
           const collect = await import("./collect.js");
           const fs = await import("node:fs/promises");
           const { join } = await import("node:path");
 
           const goal = String(args?.goal ?? "").trim();
+          const market = String(args?.market ?? "").trim();
           if (!goal) return "需要一个目标，例如 goal=\"户外家具 进口商\"。";
           const sources = String(args?.sources ?? "search").toLowerCase();
           if (sources.includes("maps")) {
@@ -8343,25 +8355,55 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const searchTimeoutMs = Math.max(3000, Number(args?.searchTimeoutMs) || settings.searchTimeoutMs);
           const visitTimeoutMs = Math.max(3000, Number(args?.visitTimeoutMs) || settings.stepTimeoutMs);
 
+          // Discovery goes through Tavily, not through a search-results page.
+          //
+          // Measured both ways on this machine: scraping Bing from a Chinese IP returned dictionary entries and JD.com
+          // listings for "outdoor furniture importeur", and the market-forcing parameters returned either nothing or
+          // off-topic German pages. Tavily answered the same question with GO IN GmbH and siebensee.com - real outdoor
+          // furniture sellers in Germany. It also needs no browser, so a stuck extension bridge can no longer turn a
+          // run into "0 results, no error".
+          const tavily = await import("./tavily.js");
+          const tavilyKey = String((await state.loadPrefs())?.tavily?.apiKey ?? "").trim();
+
+          const fetchPage = async (url) => {
+            const response = await fetch(url, {
+              redirect: "follow",
+              signal: AbortSignal.timeout(visitTimeoutMs),
+              headers: {
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
+                "accept-language": market ? `${market},en;q=0.8` : "en-US,en;q=0.9",
+                accept: "text/html,application/xhtml+xml",
+              },
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.text();
+          };
+
           const adapter = {
             async search(query, page) {
-              const url = engine === "ddg"
-                ? `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-                : `https://www.bing.com/search?q=${encodeURIComponent(query)}&first=${page * 10 + 1}`;
-              await withTimeout(browserMod.browserOpen(live.session, url, { waitMs: 8000 }), searchTimeoutMs, "搜索页");
-              const rows = await withTimeout(browserMod.browserEvaluate(live.session, serpExpression), searchTimeoutMs, "结果提取");
-              return Array.isArray(rows) ? rows : [];
+              // Tavily paginates by asking more, not by an `&first=` offset, so page 0 is the only page it has.
+              if (page > 0) return [];
+              const outcome = await withTimeout(tavily.tavilySearch({ query, apiKey: tavilyKey, maxResults: 10, searchDepth: "basic", timeoutMs: searchTimeoutMs }), searchTimeoutMs, "搜索");
+              const rows = Array.isArray(outcome?.results) ? outcome.results : [];
+              return rows.map((row) => ({ title: String(row.title ?? ""), url: String(row.url ?? ""), snippet: String(row.content ?? row.snippet ?? "").slice(0, 300) }));
             },
             async visit(url) {
-              await withTimeout(browserMod.browserOpen(live.session, url, { waitMs: 8000 }), visitTimeoutMs, "打开站点");
-              const page = await withTimeout(browserMod.browserEvaluate(live.session, snapshot), visitTimeoutMs, "读取页面");
-              return page && typeof page === "object" ? page : { url, title: "", text: "", links: [] };
+              try {
+                const html = await withTimeout(fetchPage(url), visitTimeoutMs, "打开站点");
+                return collect.pageFromHtml(html, url);
+              } catch (error) {
+                // A site that refuses a plain client still has the browser as an option - when one is connected.
+                if (!live || !browserMod) throw error;
+                await withTimeout(browserMod.browserOpen(live.session, url, { waitMs: 8000 }), visitTimeoutMs, "打开站点");
+                const page = await withTimeout(browserMod.browserEvaluate(live.session, snapshot), visitTimeoutMs, "读取页面");
+                return page && typeof page === "object" ? page : { url, title: "", text: "", links: [] };
+              }
             },
           };
 
           const result = await collect.collectLeads({
             goal,
-            market: String(args?.market ?? ""),
+            market,
             limit,
             sources: [sources],
             queries: explicit,

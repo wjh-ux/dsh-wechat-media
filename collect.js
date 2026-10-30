@@ -446,3 +446,92 @@ export async function collectLeads({
   if (!stopped && bridgeDead) stopped = "bridge";
   return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, skipped: [...new Set(skipped)].slice(0, 20), store: current };
 }
+
+/**
+ * Bing's server-rendered result page -> rows.
+ *
+ * Parsing HTML instead of driving a browser is a deliberate trade: the collector needs no login, and a plain `fetch`
+ * answers in ~200 ms where the extension bridge costs seconds per command (and, measured, sometimes never answers at
+ * all - 45 s then a timeout, which is how a run ends with "0 results" and no error). Bing still ships the results
+ * inside `li.b_algo` for non-JavaScript clients, so the data is there without a renderer.
+ */
+export function parseBingSerp(html, { max = 20 } = {}) {
+  const source = String(html ?? "");
+  const out = [];
+  const blocks = source.split(/<li class="b_algo"/).slice(1);
+  for (const block of blocks) {
+    const anchor = block.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!anchor) continue;
+    const url = decodeBingLink(anchor[1]);
+    if (!/^https?:\/\//i.test(url)) continue;
+    const title = htmlToText(anchor[2]).slice(0, 140);
+    const snippet = htmlToText(block.replace(/<h2[\s\S]*?<\/h2>/i, "")).slice(0, 300);
+    if (!out.some((row) => row.url === url)) out.push({ title, url, snippet });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** Bing sometimes wraps outbound links in `/ck/a?...&u=a1<base64url>`; unwrap it rather than claiming a bing URL. */
+export function decodeBingLink(href) {
+  const raw = String(href ?? "").replace(/&amp;/g, "&");
+  if (!/\/ck\/a\?/i.test(raw)) return raw;
+  const match = raw.match(/[?&]u=a1([^&]+)/i);
+  if (!match) return raw;
+  try {
+    const base64 = match[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const decoded = Buffer.from(padded, "base64").toString("utf8");
+    return /^https?:\/\//i.test(decoded) ? decoded : raw;
+  } catch { return raw; }
+}
+
+/** Rough but dependency-free: drop the parts a reader never sees, then flatten the rest to one line. */
+export function htmlToText(html, { max = 20000 } = {}) {
+  const source = String(html ?? "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)));
+  return source.replace(/[ \t\u00a0]+/g, " ").replace(/\n\s*\n+/g, "\n").trim().slice(0, max);
+}
+
+/** Every anchor on a page, absolute and de-duplicated - the input the contact-page picker needs. */
+export function htmlLinks(html, baseUrl = "", { max = 400 } = {}) {
+  const source = String(html ?? "");
+  const out = [];
+  const pattern = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    const raw = String(match[1] ?? "").replace(/&amp;/g, "&").trim();
+    if (!raw || /^(javascript:|mailto:|tel:|#)/i.test(raw)) continue;
+    let absolute = raw;
+    try { absolute = new URL(raw, baseUrl).toString(); } catch { continue; }
+    if (!/^https?:/i.test(absolute)) continue;
+    const text = htmlToText(match[2]).slice(0, 80);
+    if (out.some((link) => link.href === absolute)) continue;
+    out.push({ href: absolute, text });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** One page snapshot, in the shape the collector's `visit` adapter promises. */
+export function pageFromHtml(html, url = "") {
+  const source = String(html ?? "");
+  const titleMatch = source.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return {
+    url,
+    title: titleMatch ? htmlToText(titleMatch[1]).slice(0, 200) : "",
+    text: htmlToText(source),
+    links: htmlLinks(source, url),
+  };
+}
