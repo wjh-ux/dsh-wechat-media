@@ -19,6 +19,7 @@ import {
   buildArgs,
   defaultLogPath,
   findUv4,
+  flashProgrammed,
   formatDiagnostic,
   inspectProject,
   keilSupport,
@@ -316,5 +317,34 @@ await test("the prefs block is the same shape /keil writes, and only an explicit
   assert.equal(normalizeKeilPrefs({ project: "C:\\a.uvprojx", dir: "C:\\work" }).dir, "C:\\work");
 });
 
+await test("a flash that wrote nothing is not a flash, whatever the exit code said", () => {
+  // The real case: UV4 -f on an STC project with no download driver exited 0 in 1.4s with a 0-byte log, and the first
+  // version of this tool printed "下载到芯片完成" for it. Nothing had touched the chip.
+  assert.equal(flashProgrammed(""), false);
+  assert.equal(flashProgrammed("   \r\n  "), false);
+  assert.equal(flashProgrammed("Build target 'Target 1'\n0 Error(s), 0 Warning(s)."), false);
+  // ARM/Keil download logs that really wrote something.
+  assert.equal(flashProgrammed("Erase Done.\nProgramming Done.\nVerify OK.\nApplication running ..."), true);
+  assert.equal(flashProgrammed('Flash Load finished at 19:16:22'), true);
+  // ... and the failures that also mention programming.
+  assert.equal(flashProgrammed("Programming Flash...\n*** Flash Download failed - Target DLL has been cancelled"), false);
+  assert.equal(flashProgrammed("No ULINK Device found"), false);
+});
+
+await test("the answer says UV4 did not flash, and points at the tool that can", () => {
+  const text = summarizeBuild(
+    { code: 0, ms: 1400, log: "", parsed: parseBuildLog("") },
+    { project: "C:\\work\\stc.uvproj", action: "flash" },
+  );
+  assert.match(text, /UV4 没有写芯片/);
+  assert.match(text, /没有配置下载驱动/);
+  assert.match(text, /stcgal/);
+});
+
+await test("a real download log still reads as success", () => {
+  const log = "Erase Done.\nProgramming Done.\nVerify OK.\nApplication running ...";
+  const text = summarizeBuild({ code: 0, ms: 2000, log, parsed: parseBuildLog(log) }, { action: "flash" });
+  assert.match(text, /下载到芯片完成/);
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

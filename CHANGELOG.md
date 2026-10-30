@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.16.5
+
+- **`action=flash` reported success on a chip that was never touched.** `UV4 -f` exits 0 and writes a 0-byte log when
+  the project has no download driver configured - and the first real test of this feature printed
+  "⚡ 下载到芯片完成" for exactly that, on an STC project whose flash had not been erased. The verdict now needs
+  evidence in the log (`Erase Done` / `Programming Done` / `Flash Load finished`, and none of `Flash Download failed` /
+  `No ULINK` / `cannot access target`); otherwise it says UV4 wrote nothing and names the tool that can - `stcgal` over
+  the serial ISP protocol, which is how the same board was actually programmed afterwards.
+- Verified end to end on a real STC8H1K08 project (`DS18B20_TM1650`): rebuild produced `code=3129`, `stcgal` wrote
+  3129 bytes to `COM3` (`Target UID F734C3FC31F408`), and the board then printed `TEMP:27.2C` on the same port.
 ## 1.16.4
 
 - **"Browse…" always opened in Documents, never where the project was.** The remembered value is a `.uvprojx`, and

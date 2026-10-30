@@ -309,11 +309,16 @@ export function runUv4({
 /** The sentence a person gets back: verdict, then the problems with file and line, then the size / hex if produced. */
 export function summarizeBuild(result, { project = "", action = "build" } = {}) {
   const { parsed } = result;
+  // A flash run is only a success if the log says something was written: `UV4 -f` exits 0 having programmed nothing
+  // when no download driver is configured, and a success message for that would be the worst kind of lie.
+  const programmed = action === "flash" ? flashProgrammed(result.log) : undefined;
   const head = parsed.ok
     ? action === "clean"
       ? "🧹 清理完成"
       : action === "flash"
-        ? "⚡ 下载到芯片完成"
+        ? programmed
+          ? "⚡ 下载到芯片完成"
+          : "⚠️ UV4 没有写芯片"
         : "✅ 编译通过"
     : "❌ 编译失败";
   const lines = [`${head}（${parsed.summary || `退出码 ${result.code}`}，${result.ms}ms）`];
@@ -330,9 +335,31 @@ export function summarizeBuild(result, { project = "", action = "build" } = {}) 
   if (parsed.notCreated) lines.push("（Target not created：没有产出可下载的文件）");
   if (UV4_EXIT[result.code] && result.code !== 0) lines.push(`UV4 退出码 ${result.code}：${UV4_EXIT[result.code]}`);
 
+  if (action === "flash" && !programmed && parsed.ok) {
+    lines.push("UV4 的日志里没有任何写芯片的记录（多半是空的）：这个工程没有配置下载驱动。");
+    lines.push("STC 这类 8051 芯片通常靠 STC-ISP 或 stcgal 走串口 ISP 烧，用 serial_flash(flasher=stcgal, chip=stc8g, port=COMx) 烧上面那个 hex。");
+  }
   const tail = result.log ? tailLines(result.log, parsed.errors.length ? 6 : 3) : "";
   if (tail) lines.push(`--- 日志末尾 ---\n${tail}`);
   return lines.join("\n");
+}
+
+/**
+ * Did this log describe a program that reached a chip?
+ *
+ * `UV4 -f` exits 0 having done nothing when the project has no download driver configured - the log is 0 bytes and
+ * Keil is happy. That is how the first real flash test produced "⚡ 下载到芯片完成" on a project whose chip had not
+ * been touched: the exit code is not the answer, the log is. STC parts in particular are normally programmed through
+ * STC-ISP or stcgal over the serial ISP protocol, not through uVision's own download.
+ */
+const FLASH_EVIDENCE = /(erase|programming|program\s|verify|flash load finished|application running|writing flash)/i;
+const FLASH_FAILURE = /(flash download failed|cannot access target|no ulink|not connected|error:)/i;
+
+export function flashProgrammed(log) {
+  const text = String(log ?? "");
+  if (!text.trim()) return false;
+  if (FLASH_FAILURE.test(text)) return false;
+  return FLASH_EVIDENCE.test(text);
 }
 
 /** Last `count` non-empty lines - UV4 pads its log with blanks and banner text. */
