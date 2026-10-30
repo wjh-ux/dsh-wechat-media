@@ -101,6 +101,7 @@ import * as ssh from "./ssh.js";
 import * as serial from "./serial.js";
 import * as scrapling from "./scrapling.js";
 import * as keil from "./keil.js";
+import * as firmware from "./firmware.js";
 import * as dialogs from "./dialogs.js";
 import * as tasks from "./tasks.js";
 import * as office from "./office.js";
@@ -2312,7 +2313,7 @@ export function apply(ctx, config = {}) {
   function prefsFields() {
     return [
       "requireAllowlist", "friendOnly", "interject", "retry", "desktopControl", "wizardDone", "clipboard",
-      "qq", "multiAgent", "scrapling", "serial", "keil", "ssh", "officeDir", "webhookUrl", "webhookSecret", "inboundToken",
+      "qq", "multiAgent", "scrapling", "serial", "keil", "build", "ssh", "officeDir", "webhookUrl", "webhookSecret", "inboundToken",
       "autoReply", "delivery", "format", "authorization", "tokenWindowDays", "taskGraceMinutes", "taskCommand", "inboxDir",
       ...Object.keys(FEISHU_PREF_FIELDS ?? {}), ...Object.keys(FEISHU_PREF_SWITCHES ?? {}),
       ...Object.keys(TAVILY_PREF_FIELDS ?? {}),
@@ -9896,10 +9897,129 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      // 面板的编译/烧录按钮走这条：同一个 execute，不经过模型。
-      keilRunTool = (args) => keilBuildTool.execute(args);
+      // 面板的编译/烧录按钮走这条：同一个 execute，不经过模型；三种工程按目录自动分流。
+      keilRunTool = (args) => projectBuildTool.execute(args);
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, keilBuildTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      // ── Firmware: one entry, three families ──────────────────────────────────
+      //
+      // Keil (C51 or MDK), ESP-IDF, and a plain CMake/Make project behind arm-none-eabi-gcc. Which one runs is decided
+      // from the folder; `toolchain` and `flasher` override that, because "let me choose" is the requirement and
+      // detection is only a default. Build gates are the same as Keil's: nothing runs until the feature is armed.
+      const firmwarePlan = async (args = {}) => {
+        const prefs = await state.loadPrefs();
+        const dir = String(args.dir ?? "").trim() || String(prefs?.keil?.dir ?? "").trim() || String(prefs?.build?.dir ?? "").trim();
+        if (!dir) return { error: "还没有工程目录：给 dir 参数，或用 /keil project <路径> 记住一个工程" };
+        const forced = String(args.toolchain ?? prefs?.build?.toolchain ?? "auto").trim().toLowerCase();
+        const detected = firmware.detectProject({ dir });
+        const kind = forced && forced !== "auto" ? forced : detected.kind;
+        const support = serial.serialSupport();
+        const idfPy = support.idf?.idfPy ?? "";
+        const openocd = serial.which("openocd", {}) || serial.which("openocd.exe", {}) || "";
+        const stflash = serial.which("st-flash", {}) || serial.which("st-flash.exe", {}) || "";
+        const project = detected.kind === "keil" ? detected.project : "";
+        const xml = project ? readFileSync(project, "utf8") : "";
+        return { prefs, dir, kind, detected, support, idfPy, openocd, stflash, project, xml };
+      };
+
+      const projectBuildTool = define({
+        name: "project_build",
+        description:
+          "Build or flash a firmware project, whichever family it belongs to: a Keil uVision project (.uvprojx - C51 through UV4, or MDK-ARM), an ESP-IDF project (sdkconfig -> idf.py build/flash), or a plain CMake/Make project built with arm-none-eabi-gcc and downloaded through openocd or st-flash. It detects the project from the folder and prints what it picked; toolchain=keil|idf|cmake|make and flasher=uv4|stcgal|idf|openocd|stflash override that. Off until /keil on.",
+        parameters: {
+          dir: { type: "string", description: "Project folder. Omit to use the one /keil project remembered." },
+          action: { type: "string", description: "build (default) | flash." },
+          toolchain: { type: "string", description: "keil | idf | cmake | make (default: detect from the folder)." },
+          flasher: { type: "string", description: "uv4 | stcgal | idf | openocd | stflash | esptool (default: by family)." },
+          file: { type: "string", description: "Firmware to download (.elf/.bin/.hex). Omit to use the newest one under build\\." },
+          target: { type: "string", description: "openocd target, e.g. stm32f4 (default stm32f1)." },
+          port: { type: "string", description: "Serial port for idf/esptool." },
+          timeoutMs: { type: "number", description: `How long to allow (default ${firmware.BUILD_TIMEOUT_MS}).` },
+        },
+        output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+        timeoutMs: 900000,
+        async execute(args) {
+          const action = String(args?.action ?? "build").trim() || "build";
+          try {
+            const prefs = await state.loadPrefs();
+            if (prefs?.keil?.enabled !== true) {
+              return "编译/烧录功能未开启——在聊天里发 /keil on 开启（默认关：会跑编译器，flash 会写芯片）";
+            }
+            const plan = await firmwarePlan(args);
+            if (plan.error) return `project_build 失败：${plan.error}`;
+            const { dir, kind, detected, idfPy, openocd, stflash, project, xml } = plan;
+
+            if (action === "build") {
+              const built = firmware.buildPlan({ kind, dir, project, idfPy });
+              const ran = await firmware.runPlan(built, {
+                timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
+              });
+              noteRoute("/project", { action: "build", kind, ok: ran.ok, code: ran.code });
+              const head = ran.ok ? "✅ 编译通过" : "❌ 编译失败";
+              return [
+                `${head}（${built.note ?? kind}，退出码 ${ran.code}，${ran.ms}ms）`,
+                `工程：${detected.project ?? dir}（识别为 ${detected.kind}${detected.evidence ? `，依据 ${detected.evidence}` : ""}）`,
+                built.error ? `原因：${built.error}` : "",
+                (ran.output || "").trim().split(/\r?\n/).slice(-14).join("\n"),
+              ].filter(Boolean).join("\n");
+            }
+
+            if (action !== "flash") return `未知动作：${action}（build / flash）`;
+
+            const stc = /^STC/i.test(firmware.keilFamily(xml));
+            const file = String(args?.file ?? "").trim() || (kind === "cmake" || kind === "make" ? firmware.findFirmware(dir) : "");
+            const planned = firmware.flashPlan({
+              kind,
+              flasher: String(args?.flasher ?? prefs?.build?.flasher ?? "auto"),
+              dir,
+              project,
+              file,
+              idfPy,
+              openocd,
+              stflash,
+              chip: String(args?.chip ?? "").trim(),
+              target: String(args?.target ?? "").trim() || "stm32f1",
+              port: String(args?.port ?? "").trim(),
+              stc,
+            });
+            if (planned.delegated) {
+              // stcgal has its own loopback-safe path in keil_build (port picking, ISP hints); do not reimplement it.
+              return await keilBuildTool.execute({ action: "flash", ...(args?.port ? { port: args.port } : {}) });
+            }
+            if (kind === "idf") {
+              const support = serial.serialSupport();
+              if (!support.ok) return `ESP-IDF 不可用：${support.reason}`;
+              const ports = await serialPortsNow();
+              const board = keil.pickBoardPort(ports);
+              const chosen = String(args?.port ?? "").trim() || board?.port || serial.resolvePort("", ports);
+              const result = await serial.flashFirmware({
+                support,
+                flasher: "idf",
+                port: chosen,
+                projectDir: dir,
+                timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : serial.FLASH_TIMEOUT_MS,
+              });
+              noteRoute("/project", { action: "flash", kind, tool: "idf.py", port: chosen, code: result.code });
+              const note = result.code === 0 ? `⚡ 烧录完成（idf.py，${chosen}）` : `❌ 烧录失败（idf.py，${chosen}）`;
+              return `${note}\n工程：${dir}\n${serialReport(result, "idf.py 输出")}`;
+            }
+            const ran = await firmware.runPlan(planned, {
+              timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
+            });
+            noteRoute("/project", { action: "flash", kind, tool: planned.tool, ok: ran.ok, code: ran.code });
+            return [
+              `${ran.ok ? "⚡ 烧录完成" : "❌ 烧录失败"}（${planned.note ?? planned.tool}，退出码 ${ran.code}，${ran.ms}ms）`,
+              planned.error ? `原因：${planned.error}` : "",
+              planned.tool ? `$ ${planned.tool} ${planned.args.join(" ")}` : "",
+              (ran.output || "").trim().split(/\r?\n/).slice(-14).join("\n"),
+            ].filter(Boolean).join("\n");
+          } catch (error) {
+            noteRoute("/project", { action, ok: false, error: String(error?.message ?? error) });
+            return `project_build 失败：${String(error?.message ?? error)}`;
+          }
+        },
+      });
+
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, keilBuildTool, projectBuildTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
@@ -11389,6 +11509,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
           // The Keil block, same reason as serial's: a switch that saved nothing looks identical to one that saved,
           // and the panel's checkbox would flip straight back.
+          if (body.build !== undefined) {
+            try {
+              patch.build = firmware.normalizeBuildPrefs(typeof body.build === "string" ? JSON.parse(body.build) : body.build);
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
+          }
           if (body.keil !== undefined) {
             try {
               patch.keil = keil.normalizeKeilPrefs(typeof body.keil === "string" ? JSON.parse(body.keil) : body.keil);

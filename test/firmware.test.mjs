@@ -1,0 +1,201 @@
+/**
+ * Tests for the firmware planner: which build system a folder is, and the exact argv each downloader needs.
+ *
+ * Nothing here compiles or flashes: the planners return arrays and `runPlan` takes an injected `exec`, so the only thing
+ * under test is the decision - which is where a wrong answer bricks a board ("flash the STM32 through UV4" on a machine
+ * whose Keil has no ARM compiler, or `st-flash write` without a 0x8000000).
+ *
+ * Run: node test/firmware.test.mjs
+ */
+import assert from "node:assert/strict";
+
+import {
+  FLASHERS,
+  OPENOCD_TARGETS,
+  TOOLCHAINS,
+  buildPlan,
+  detectProject,
+  findFirmware,
+  flashPlan,
+  keilFamily,
+  normalizeBuildPrefs,
+  runPlan,
+  toolchainReport,
+} from "../firmware.js";
+
+let passed = 0;
+let failed = 0;
+
+async function test(name, fn) {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`  ok   ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL ${name}`);
+    console.log(`       ${error?.message ?? error}`);
+  }
+}
+
+function fakeDir(files) {
+  return {
+    exists: (path) => Object.prototype.hasOwnProperty.call(files, path),
+    readdir: (path) => {
+      if (!Object.prototype.hasOwnProperty.call(files, path)) throw new Error(`ENOENT: ${path}`);
+      return files[path];
+    },
+  };
+}
+
+await test("the folder says what it is, and the evidence comes with the verdict", () => {
+  const cases = [
+    [{ "C:\\a": ["main.c", "blinky.uvprojx"] }, "keil", "blinky.uvprojx"],
+    [{ "C:\\a": ["sdkconfig", "CMakeLists.txt", "main"] }, "idf", "sdkconfig"],
+    [{ "C:\\a": ["CMakeLists.txt", "src"] }, "cmake", "CMakeLists.txt"],
+    [{ "C:\\a": ["Makefile", "src"] }, "make", "Makefile"],
+  ];
+  for (const [files, kind, evidence] of cases) {
+    const dir = Object.keys(files)[0];
+    const found = detectProject({ dir, ...fakeDir(files) });
+    assert.equal(found.kind, kind, `${dir} should be ${kind}`);
+    assert.equal(found.evidence, evidence);
+  }
+  // An empty folder is unknown, and says so with the reason rather than throwing.
+  const unknown = detectProject({ dir: "C:\\empty", ...fakeDir({ "C:\\empty": [] }) });
+  assert.equal(unknown.kind, "unknown");
+  assert.match(unknown.reason, /没有找到/);
+  // A directory that does not exist is the same answer, not an exception: detection runs before every build.
+  assert.equal(detectProject({ dir: "C:\\gone", ...fakeDir({}) }).kind, "unknown");
+});
+
+await test("an ESP-IDF project is not mistaken for a plain CMake one", () => {
+  // Both have CMakeLists.txt; the sdkconfig (or main/) is what makes it IDF.
+  const idf = detectProject({ dir: "C:\\p", ...fakeDir({ "C:\\p": ["CMakeLists.txt", "sdkconfig", "main"] }) });
+  assert.equal(idf.kind, "idf");
+  const cmake = detectProject({ dir: "C:\\p", ...fakeDir({ "C:\\p": ["CMakeLists.txt", "src"] }) });
+  assert.equal(cmake.kind, "cmake");
+});
+
+await test("a Keil project's family decides which flash tool can even work", () => {
+  assert.equal(keilFamily("<Vendor>STC</Vendor><Device>STC8H1K08 Series</Device>"), "c51");
+  assert.equal(keilFamily("<Vendor>STMicroelectronics</Vendor><Device>STM32F103C8</Device>"), "arm");
+  assert.equal(keilFamily("<Device>AT89C52</Device>"), "");
+});
+
+await test("every toolchain builds with the directory it was told to, not wherever the plugin happens to be", () => {
+  assert.deepEqual(buildPlan({ kind: "keil", project: "C:\\w\\b.uvprojx" }).args, ["-b", "C:\\w\\b.uvprojx", "-j0"]);
+  assert.deepEqual(buildPlan({ kind: "idf", dir: "C:\\w", idfPy: "idf.py" }).args, ["-C", "C:\\w", "build"]);
+  assert.deepEqual(buildPlan({ kind: "cmake", dir: "C:\\w" }).args, ["--build", "C:\\w\\build"]);
+  assert.deepEqual(buildPlan({ kind: "make", dir: "C:\\w" }).args, ["-C", "C:\\w", "-j"]);
+  // A missing tool is an error string, not a spawn of "undefined".
+  assert.match(buildPlan({ kind: "idf", dir: "C:\\w" }).error, /idf\.py/);
+  assert.match(buildPlan({ kind: "unknown" }).error, /不知道/);
+});
+
+await test("auto follows the family: STC→stcgal, other Keil→UV4, ELF→openocd", () => {
+  const stc = flashPlan({ kind: "keil", stc: true, file: "C:\\w\\o.hex", port: "COM3", chip: "stc8g" });
+  assert.equal(stc.tool, "stcgal");
+  assert.equal(stc.chip, "stc8g");
+
+  const arm = flashPlan({ kind: "keil", project: "C:\\w\\m.uvprojx" });
+  assert.equal(arm.tool, "uv4");
+  assert.deepEqual(arm.args, ["-f", "C:\\w\\m.uvprojx", "-j0"]);
+
+  const idf = flashPlan({ kind: "idf", idfPy: "idf.py", dir: "C:\\w", port: "COM3" });
+  assert.deepEqual(idf.args, ["-C", "C:\\w", "-p", "COM3", "flash"]);
+
+  const elf = flashPlan({ kind: "cmake", file: "C:\\w\\build\\app.elf", openocd: "openocd.exe", target: "stm32f4" });
+  assert.equal(elf.tool, "openocd.exe");
+  assert.deepEqual(elf.args, [
+    "-f",
+    "interface/stlink.cfg",
+    "-f",
+    OPENOCD_TARGETS.stm32f4,
+    "-c",
+    'program "C:\\w\\build\\app.elf" verify reset exit',
+  ]);
+  // Both spellings land on the same .cfg: people say `stm32f4x` because that is what the file is called.
+  assert.equal(flashPlan({ kind: "cmake", file: "a.elf", openocd: "o", target: "stm32f4x" }).args[3], OPENOCD_TARGETS.stm32f4);
+  // No openocd but st-flash present: the same intent, a different program.
+  const st = flashPlan({ kind: "cmake", file: "C:\\w\\build\\app.bin", stflash: "st-flash.exe" });
+  assert.equal(st.tool, "st-flash.exe");
+  assert.deepEqual(st.args, ["write", "C:\\w\\build\\app.bin", "0x8000000"]);
+});
+
+await test("the choice is overridable, because detection is a default and not a verdict", () => {
+  // Force uVision even for a CMake folder (someone may have a .uvprojx beside an IDF project).
+  const forced = flashPlan({ kind: "cmake", flasher: "uv4", project: "C:\\w\\a.uvprojx" });
+  assert.equal(forced.tool, "uv4");
+  // Force ESP-IDF esptool instead of idf.py.
+  const esptool = flashPlan({ kind: "idf", flasher: "esptool", port: "COM7", file: "app.bin" });
+  assert.deepEqual(esptool.args, ["-p", "COM7", "write_flash", "0x0", "app.bin"]);
+  // And a downloader that is not installed says which package to install instead of failing at spawn time.
+  assert.match(flashPlan({ kind: "cmake", file: "a.elf", openocd: "" }).error, /openocd/);
+  assert.match(flashPlan({ kind: "keil", stc: true }).error, /hex/);
+});
+
+await test("the newest ELF is the one it picks, not the first one it sees", () => {
+  const files = {
+    "C:\\w\\build": [{ name: "app.elf", isDirectory: () => false }, { name: "boot.bin", isDirectory: () => false }],
+  };
+  const picked = findFirmware("C:\\w", {
+    exists: () => true,
+    readdir: (path) => files[path] ?? [],
+    // The mtime is what decides: the newest artifact is the one this build produced.
+    stat: (path) => ({ mtimeMs: path.endsWith("app.elf") ? 2000 : 1000 }),
+  });
+  assert.match(picked, /app\.elf$/);
+  assert.equal(findFirmware("C:\\nothing", { exists: () => false, readdir: () => [] }), "");
+});
+
+await test("the machine is summarised honestly before anything is attempted", () => {
+  const text = toolchainReport({ keilC51: true, keilArm: false, idfPy: "D:\\Espressif\\idf.py" });
+  assert.match(text, /只有 C51/);
+  assert.match(text, /idf\.py/);
+  assert.match(text, /openocd 无/);
+});
+
+await test("a plan with no tool is reported, not spawned as undefined", async () => {
+  const result = await runPlan({ error: "没有 openocd" }, { exec: () => { throw new Error("must not spawn"); } });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, -1);
+  assert.match(result.output, /没有 openocd/);
+});
+
+await test("runPlan hands back the output and the exit code the caller must judge", async () => {
+  const seen = [];
+  const exec = (program, args, options, callback) => {
+    seen.push({ program, args });
+    callback(null, "Build complete", "");
+  };
+  const ok = await runPlan({ tool: "cmake", args: ["--build", "build"] }, { exec, cwd: "C:\\w" });
+  assert.equal(ok.ok, true);
+  assert.match(ok.output, /Build complete/);
+  assert.deepEqual(seen[0], { program: "cmake", args: ["--build", "build"] });
+
+  // A "successful" exit with `error:` in the output is how a CMake build that linked nothing still exits 0.
+  const lying = await runPlan({ tool: "cmake", args: [] }, {
+    exec: (program, args, options, callback) => callback(null, "undefined reference to `main'", ""),
+  });
+  assert.equal(lying.ok, false);
+});
+
+await test("the vocabularies are declared, so a typo is caught rather than passed through", () => {
+  assert.deepEqual(TOOLCHAINS, ["keil", "idf", "cmake", "make"]);
+  assert.deepEqual(FLASHERS, ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool"]);
+});
+
+await test("the override is stored only when it is a real choice", () => {
+  assert.deepEqual(normalizeBuildPrefs({}), { toolchain: "auto", flasher: "auto", dir: "" });
+  assert.deepEqual(normalizeBuildPrefs({ toolchain: "IDF", flasher: "openocd", dir: "C:\\w\\" }), {
+    toolchain: "idf",
+    flasher: "openocd",
+    dir: "C:\\w",
+  });
+  // A typo must not silently become "auto": `keil` is a choice, `keill` is a mistake and is dropped to auto.
+  assert.equal(normalizeBuildPrefs({ toolchain: "keill", flasher: "stlink" }).toolchain, "auto");
+  assert.equal(normalizeBuildPrefs({ flasher: "stlink" }).flasher, "auto");
+});
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed === 0 ? 0 : 1);

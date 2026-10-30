@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.17.0
+
+- **One entry for three families, and the choice is yours.** `project_build` reads the folder - `.uvprojx` is Keil,
+  `sdkconfig` is ESP-IDF, `CMakeLists.txt` / `Makefile` is the arm-gcc + ST-Link path - then builds and flashes with the
+  right tool for each. `toolchain=keil|idf|cmake|make` and `flasher=uv4|stcgal|idf|openocd|stflash|esptool` override it,
+  and a `build` prefs block stores those overrides for the panel and for scripts. The VS Code 编译/烧录 buttons go through
+  the same entry, so they do the right thing for whatever project is remembered.
+- **Both STM32 paths exist.** With Keil MDK installed, a `.uvprojx` project builds with `UV4 -b` and downloads through
+  its own ST-Link configuration (`UV4 -f`) - no changes needed. Without MDK, a CMake/Make project builds with
+  `cmake --build` / `make` and downloads through `openocd` (`program … verify reset exit`) or `st-flash write 0x8000000`.
+  The newest `.elf`/`.bin` under `build\` is picked automatically when no `file` is given.
+- Honest about this machine: ESP-IDF v4.4.8 is installed, Keil is **C51 only** (no `ARM/`), and `arm-none-eabi-gcc`,
+  `openocd`, `st-flash` are absent - the tool names what is missing instead of failing at spawn time.
 ## 1.16.10
 
 - **`Waiting for MCU, please cycle power` now says what to do.** stcgal prints that the moment it opens the port, because

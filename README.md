@@ -710,6 +710,32 @@ The flasher's verdict lives in its last lines ("Hash of data verified", "avrdude
 than capped from the start. Discovery is real: on this machine it found `D:\Espressif\frameworks\esp-idf-v4.4.8` with
 its `python_env` interpreter - and reported "no serial ports" when no board was plugged in, rather than inventing one.
 
+## Firmware: Keil, ESP-IDF or CMake — pick by folder, override when you disagree / 固件编译与烧录
+
+`project_build` is the one entry for three families. It reads what is actually in the folder and prints what it found;
+`toolchain` and `flasher` override the guess, because detection is a default and not a verdict.
+
+| Folder says | Build | Flash |
+|---|---|---|
+| `.uvprojx` + `<Vendor>STC</Vendor>` | `UV4 -b` | **stcgal** (serial ISP - uVision has no driver for it) |
+| `.uvprojx` + ARM (MDK installed) | `UV4 -b` | `UV4 -f` through the project's own ST-Link/J-Link |
+| `sdkconfig` (or `CMakeLists.txt` + `main/`) | `idf.py -C <dir> build` | `idf.py -C <dir> -p COMx flash` (builds first) |
+| `CMakeLists.txt` | `cmake --build build` | `openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program x.elf verify reset exit"` |
+| `Makefile` | `make -C <dir> -j` | same as CMake; `st-flash write x.bin 0x8000000` when stlink-tools is what is installed |
+
+```text
+project_build(dir="D:\\work\\my_f4", action="build")
+project_build(action="flash", flasher="openocd", target="stm32f4")
+project_build(dir="D:\\work\\my_esp32", action="flash", port="COM3")
+```
+
+`/prefs` takes a `build` block (`{"toolchain":"idf","flasher":"openocd","dir":"…"}`) and an unknown value is refused
+rather than silently stored as `auto`, so "which compiler does this use" has one answer a script can read.
+
+**What this machine can do right now** is part of the answer, not something to discover by failing: this box has
+ESP-IDF v4.4.8 and Keil **C51 only** (no `ARM/` folder), and no `arm-none-eabi-gcc`, `openocd` or `st-flash` - so an
+STM32 project needs one of those installed first, and the tool says which.
+
 ## Keil uVision5: build from the chat, and from uVision itself / Keil 编译
 
 `keil_build` drives the **UV4.exe already installed** - C51 or MDK - and reads the log it writes, because that log is
