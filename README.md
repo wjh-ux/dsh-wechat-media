@@ -970,6 +970,18 @@ transport's own ceilings fired on every call:
 
 Change them with `/collect step 12` in the chat, or in the control panel's 获客采集 block. `/collect` alone prints the
 effective values, and `/state` reports the same numbers the tool actually uses.
+### Two discovery sources / 两条发现路线
+
+| `sources` | Where the companies come from | Needs |
+|---|---|---|
+| `search` (default) | Tavily, queried with the market's own role words | nothing |
+| `maps` | OpenStreetMap places around a `city` - name, website, phone, address | a city name |
+| `both` | the two lists merged, de-duplicated on the same two axes | a city name |
+
+They find different companies. A search asks "who writes about outdoor furniture in German"; a map asks "who sells it
+at an address". Measured on Munich: 119 places, 73 with a website, from one Overpass query - shops that never rank for
+the query. No geocoder is involved: Nominatim is unreachable from this network (`UND_ERR_CONNECT_TIMEOUT`), while
+Overpass resolves the city itself with `area["name"="München"]`.
 ### Buyer or competitor? / 买家还是同行
 
 Every lead carries a **role verdict** - `buyer` / `seller` / `unclear` - read from the company's own words, in both

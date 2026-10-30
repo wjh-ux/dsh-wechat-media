@@ -8262,7 +8262,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           goal: { type: "string", required: true, description: "What you are looking for, e.g. 户外家具 进口商 or outdoor furniture importer." },
           market: { type: "string", description: "de / uk / us / fr / es / it / nl / ru / ae, or 德国 / 英国 … - decides which local role words are searched and how a matching domain is scored." },
           limit: { type: "number", description: "How many companies to keep (default 10, max 50). Each one costs up to two page loads." },
-          sources: { type: "string", description: "search (default). maps is accepted once the Maps source lands." },
+          sources: { type: "string", description: "search (default) | maps | both. maps reads OpenStreetMap places for a city, which finds shops that never rank in a search." },
+          city: { type: "string", description: "Required for sources=maps/both: the city to look around, e.g. München." },
           engine: { type: "string", description: "bing (default) or ddg. Bing carries no captcha for a handful of queries; ddg is the fallback." },
           queries: { type: "string", description: "Explicit search terms (JSON array or comma separated) instead of the generated ones." },
           save: { type: "string", description: "Where to write the CSV (same rules as browser_flow save: a path, a folder, or a bare file name)." },
@@ -8295,9 +8296,6 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const market = String(args?.market ?? "").trim();
           if (!goal) return "需要一个目标，例如 goal=\"户外家具 进口商\"。";
           const sources = String(args?.sources ?? "search").toLowerCase();
-          if (sources.includes("maps")) {
-            return "maps 源还没接上（下一步做）。现在用 sources=search，或先用 browser_maps_places 把地图结果单独采出来。";
-          }
           const engine = String(args?.engine ?? "bing").toLowerCase() === "ddg" ? "ddg" : "bing";
           // Preference first, argument second: a person who set "12 seconds" in the panel means it, and passing a
           // limit on every call would just be noise in every call.
@@ -8403,7 +8401,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             },
           };
 
-          const result = await collect.collectLeads({
+          const result = sources === "maps" ? { goal, market, queries: [], searches: 0, candidates: 0, leads: [], merged: 0, stopped: "", elapsedMs: 0, skipped: [], store } : await collect.collectLeads({
             goal,
             market,
             limit,
@@ -8449,11 +8447,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (buyers || sellers) lines.push(`角色核验：像买家 ${buyers} · 像卖家/同行 ${sellers} · 不明 ${result.leads.length - buyers - sellers}`);
           if (result.skipped.length) lines.push(`跳过的目录/社交站：${result.skipped.slice(0, 6).join("、")}`);
           if (result.stopped === "deadline") lines.push(`时间预算到了（${Math.round(result.elapsedMs / 1000)}s），先停在这里；再调一次会接着往库里合并，不会重复。`);
-          if (!rows.length) {
-            lines.push("");
-            lines.push(`一条都没采到。${args?.buyerOnly ? "开了 buyerOnly，可能候选全是卖家公司——去掉它再看一遍。" : "常见原因：搜索没结果、目标词太窄，或所有站点都抓不动。"}`);
-            return lines.join("\n");
-          }
+          const searchEmpty = !rows.length;
           lines.push("", "公司 | 角色 | 邮箱 | 分数");
           for (const row of rows.slice(0, 20)) {
             lines.push(`${row["公司"] || "?"} | ${row["邮箱"] || "—"} | ${row["电话"] || "—"} | ${row["分数"]}`);
@@ -8462,6 +8456,83 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const reasons = rows.slice(0, 5).map((row) => `· ${row["公司"]}：${row["理由"]}`).join("\n");
           if (reasons) lines.push("", "打分依据（前 5 条）：", reasons);
 
+          // ── The map source ───────────────────────────────────────────────────────────────────────────────
+          //
+          // Named places, not ranked pages: a search finds who writes about the product, a map finds who sells it at
+          // an address. Overpass is a documented API and needs no browser, so this half keeps working when the
+          // extension bridge does not.
+          const rowsMaps = [];
+          if (sources === "maps" || sources === "both") {
+            const city = String(args?.city ?? "").trim();
+            if (!city) {
+              lines.push("", "地图源需要一个城市：再调一次带上 city（例如 city=\"München\"）。");
+            } else {
+              const mapsStarted = Date.now();
+              try {
+                // No geocoder: Nominatim is unreachable from this network (measured, 10 s connect timeout), while
+                // Overpass resolves the city itself with `area["name"=...]`. One fewer service to be blocked.
+                const categories = collect.osmCategoriesFor(goal);
+                const query = collect.overpassQuery({ city, categories, limit: 120 });
+                const payload = await withTimeout(
+                  fetch("https://overpass-api.de/api/interpreter", {
+                    method: "POST",
+                    body: `data=${encodeURIComponent(query)}`,
+                    headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "dsh-wechat-media/1.0" },
+                    signal: AbortSignal.timeout(Math.max(30000, settings.deadlineMs)),
+                  }).then((response) => response.json()),
+                  Math.max(30000, settings.deadlineMs),
+                  "地图检索",
+                );
+                const places = collect.parseOverpass(payload);
+
+                for (const place of places) {
+                  if (rowsMaps.length >= limit) break;
+                  if (Date.now() - mapsStarted > settings.deadlineMs) break;
+                  let text = place.company;
+                  let contactPage = "";
+                  let emails = [];
+                  let phones = place.phone ? [place.phone] : [];
+                  let socials = [];
+                  if (place.url) {
+                    try {
+                      const html = await withTimeout(fetchPage(place.url), visitTimeoutMs, "打开站点");
+                      const page = collect.pageFromHtml(html, place.url);
+                      text += ` ${page.title} ${page.text}`;
+                      emails = collect.extractEmails(page.text);
+                      phones = [...new Set([...phones, ...collect.extractPhones(page.text)])].slice(0, 4);
+                      socials = collect.extractSocials(page.text);
+                      contactPage = collect.contactLinks(page.links)[0] ?? "";
+                    } catch { /* the tags still carry a name and often a phone */ }
+                  }
+                  const scored = collect.scoreLead({ url: place.url, title: place.company, text, emails, phones, socials, contactPage }, { goal, market });
+                  if (minScore && scored.score < minScore) continue;
+                  const lead = {
+                    company: place.company, url: place.url, market, title: place.company,
+                    emails, phones, socials, contactPage,
+                    role: scored.role, roleEvidence: scored.roleEvidence,
+                    address: place.address, source: "maps", query: `maps:${city}`, at: new Date().toISOString(),
+                    score: scored.score, reasons: scored.reasons,
+                  };
+                  const merged = collect.mergeLead(result.store, lead);
+                  result.store = merged.store;
+                  if (merged.added) rowsMaps.push(lead);
+                }
+                lines.push(`地图源（${city} · ${categories.join("/")}）：${places.length} 个地点，新增 ${rowsMaps.length} 条`);
+                for (const lead of rowsMaps.slice(0, 10)) {
+                  const roleLabel = lead.role === "buyer" ? "买家" : lead.role === "seller" ? "卖家/同行" : "不明";
+                  lines.push(`  ${lead.company} | ${roleLabel} | ${lead.emails[0] ?? "—"} | ${lead.score}`);
+                }
+              } catch (error) {
+                lines.push(`地图源失败：${error?.message ?? error}`);
+              }
+            }
+          }
+
+          if (searchEmpty && !rowsMaps.length) {
+            lines.push("");
+            lines.push(`一条都没采到。${args?.buyerOnly ? "开了 buyerOnly，可能候选全是卖家公司——去掉它再看一遍。" : "常见原因：搜索没结果、目标词太窄，或所有站点都抓不动。"}`);
+            return lines.join("\n");
+          }
           const target = String(args?.save ?? "").trim();
           if (target) {
             const saved = await saveFlowRows(target, rows, { name: "leads" });

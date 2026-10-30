@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.12.0
+
+- **A third of the market was invisible: shops that never rank for a query but sell the product at an address.** The
+  map source is now real: `sources: "maps"` (or `"both"`) with a `city` reads OpenStreetMap places - name,
+  website, phone, address - and runs them through the same contact extraction, role check and scoring as search hits.
+- **No geocoder, and no browser.** The obvious route (Nominatim: city -> bounding box) is unreachable from this
+  network - measured, `UND_ERR_CONNECT_TIMEOUT` after 10 s - while Overpass resolves the city itself with
+  `area["name"="München"]`. One fewer service to be blocked, and the map half keeps working when the extension
+  bridge does not.
+- Measured on Munich: **119 places, 73 with a website**, in one query - companies a search for "outdoor furniture
+  importeur" never surfaces.
+- 48 suites / 766 cases.
 ## 1.11.1
 
 - **Two kinds of junk still reached the list.** A run for German outdoor furniture returned "Top Global B2B

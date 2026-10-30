@@ -14,6 +14,8 @@ import {
   leadQueries,
   mergeLead,
   normalizeCompany,
+  overpassQuery,
+  parseOverpass,
   resolveMarket,
   classifyRole,
   scoreLead,
@@ -200,6 +202,30 @@ await testAsync("leads below the floor never reach the store", async () => {
   const result = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, minScore: 20 });
   assert.equal(result.leads.length, 1);
   assert.match(result.leads[0].url, /real\.de/);
+});
+test("the map query asks by city, not by coordinates", () => {
+  const query = overpassQuery({ city: "München", categories: ["furniture"] });
+  assert.match(query, /area\["name"="München"\]/);
+  assert.match(query, /nwr\["shop"~"\^\(furniture\)\$"\]\(area\.a\)/);
+  assert.doesNotMatch(query, /nominatim/i);
+});
+
+test("a city name cannot break out of the Overpass string", () => {
+  const query = overpassQuery({ city: 'X"];out;area["name"="Y' });
+  assert.match(query, /\\"/, "quotes are escaped rather than ending the string");
+  assert.equal((query.match(/area\["name"/g) ?? []).length, 1);
+});
+
+test("OSM tags become leads, and a place without a website is still a place", () => {
+  const rows = parseOverpass({ elements: [
+    { tags: { name: "SIT Outdoor", shop: "furniture", website: "sitoutdoor.com", "contact:phone": "+49 89 1234567", "addr:city": "München" } },
+    { tags: { name: "Ohne Website", shop: "garden_centre" } },
+    { tags: {} },
+  ] });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].url, "https://sitoutdoor.com");
+  assert.equal(rows[0].phone, "+49 89 1234567");
+  assert.equal(rows[1].url, "");
 });
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);

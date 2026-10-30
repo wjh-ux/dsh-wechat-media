@@ -633,3 +633,83 @@ export function pageFromHtml(html, url = "") {
     links: htmlLinks(source, url),
   };
 }
+/**
+ * Local businesses from OpenStreetMap, as a second discovery source.
+ *
+ * Maps and search find different companies: a search asks "who writes about outdoor furniture in German", a map asks
+ * "who is *at* this address selling it". Measured on Munich: 60 furniture/garden shops in one bounding box, 29 of them
+ * with a website - companies that never rank for the query but sit exactly where the product is sold.
+ *
+ * Overpass is used rather than scraping Google Maps because it is a documented API, needs no browser (the extension
+ * bridge being down used to make maps impossible), and returns tags - name, website, phone, address - instead of the
+ * rendered card.
+ */
+export const OSM_CATEGORIES = Object.freeze({
+  furniture: ["furniture", "garden_centre", "interior_decoration", "kitchen"],
+  garden: ["garden_centre", "furniture", "florist"],
+  hardware: ["hardware", "doityourself", "trade"],
+  fashion: ["clothes", "shoes", "bags"],
+  food: ["supermarket", "convenience", "deli", "butcher", "greengrocer"],
+  default: ["furniture", "doityourself", "hardware", "trade"],
+});
+
+/** Which OSM shop categories a goal is about - a hint, not a classifier: the default set is deliberately broad. */
+export function osmCategoriesFor(goal) {
+  const text = String(goal ?? "").toLowerCase();
+  if (/家具|furniture|sofa|table|chair|gartenmöbel|outdoor/.test(text)) return OSM_CATEGORIES.furniture;
+  if (/garden|garten|植物|园艺/.test(text)) return OSM_CATEGORIES.garden;
+  if (/五金|hardware|工具|tool|建材|building material/.test(text)) return OSM_CATEGORIES.hardware;
+  if (/服|clothes|fashion|鞋|shoe|包|bag/.test(text)) return OSM_CATEGORIES.fashion;
+  if (/食品|food|零食|超市|snack/.test(text)) return OSM_CATEGORIES.food;
+  return OSM_CATEGORIES.default;
+}
+
+/**
+ * The Overpass QL for "these shop kinds in this city".
+ *
+ * By *area name*, not by coordinates: the obvious route was Nominatim (city -> bounding box), and on this network it
+ * is unreachable (`UND_ERR_CONNECT_TIMEOUT` after 10 s), while Overpass answers the same question directly -
+ * `area["name"="München"]` returned 30 furniture shops. One fewer service, one fewer thing to be blocked.
+ *
+ * A bounding box is still accepted for a caller that already has coordinates.
+ */
+export function overpassQuery({ city = "", bbox = [], categories = OSM_CATEGORIES.default, limit = 120 } = {}) {
+  const wanted = (Array.isArray(categories) ? categories : OSM_CATEGORIES.default).join("|");
+  const cap = Math.max(1, Math.min(300, Number(limit) || 120));
+  const shops = (scope) => `  nwr["shop"~"^(${wanted})$"](${scope});\n  nwr["office"~"^(company|wholesale)$"](${scope});`;
+
+  const name = String(city ?? "").trim();
+  if (name) {
+    const quoted = name.replace(/"/g, '\\"');
+    return `[out:json][timeout:30];\narea["name"="${quoted}"]["boundary"="administrative"]->.a;\n(\n${shops("area.a")}\n);\nout center tags ${cap};`;
+  }
+
+  const [south, west, north, east] = (Array.isArray(bbox) ? bbox : []).map(Number);
+  if (![south, west, north, east].every((value) => Number.isFinite(value))) throw new Error("地图源需要城市名，或一个 [南,西,北,东] 包围盒");
+  const span = Math.max(Math.abs(north - south), Math.abs(east - west));
+  if (span > 1.5) throw new Error(`包围盒太大（${span.toFixed(2)}°），地图源一次只查一个城市范围`);
+  return `[out:json][timeout:30];\n(\n${shops(`${south},${west},${north},${east}`)}\n);\nout center tags ${cap};`;
+}
+
+/** Overpass JSON -> the rows this collector understands. */
+export function parseOverpass(payload) {
+  const rows = Array.isArray(payload?.elements) ? payload.elements : [];
+  const out = [];
+  for (const row of rows) {
+    const tags = row?.tags ?? {};
+    const name = String(tags.name ?? tags["name:de"] ?? tags["name:en"] ?? "").trim();
+    if (!name) continue;
+    const website = String(tags.website ?? tags["contact:website"] ?? tags.url ?? "").trim();
+    const phone = String(tags.phone ?? tags["contact:phone"] ?? tags["contact:mobile"] ?? "").trim();
+    const address = [tags["addr:street"], tags["addr:housenumber"], tags["addr:postcode"], tags["addr:city"]]
+      .filter(Boolean).join(" ");
+    out.push({
+      company: name,
+      url: /^https?:\/\//i.test(website) ? website : website ? `https://${website}` : "",
+      phone,
+      address,
+      kind: String(tags.shop ?? tags.office ?? ""),
+    });
+  }
+  return out;
+}
