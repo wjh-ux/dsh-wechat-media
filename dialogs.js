@@ -112,6 +112,6 @@ export async function pickFolder({ title = "选择文件夹", initial = "", run 
 }
 
 export async function pickFile({ title = "选择文件", initial = "", filter = "", run = runDialogScript } = {}) {
-  const answer = await run(fileDialogScript({ title, initial }));
+  const answer = await run(fileDialogScript({ title, initial, filter }));
   return { path: String(answer?.path ?? "").trim() };
 }

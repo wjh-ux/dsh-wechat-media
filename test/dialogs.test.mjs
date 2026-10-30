@@ -80,6 +80,24 @@ await test("the panel can browse for the export directory, and the host opens th
   assert.match(panel, /t\("browse", "浏览…"\)/, "the button is labelled 浏览…");
 });
 
+await test("a file filter reaches the dialog, because a list of every file is not a chooser", async () => {
+  // The first version took `filter` as a parameter and never passed it to the script: the option existed, the dialog
+  // showed every file, and nothing failed. A test on the generated script is the only way that stays fixed.
+  const script = fileDialogScript({ title: "选择 Keil 工程", filter: "Keil 工程 (*.uvprojx;*.uvproj)|*.uvprojx;*.uvproj" });
+  assert.match(script, /\$d\.Filter = 'Keil 工程 \(\*\.uvprojx;\*\.uvproj\)\|\*\.uvprojx;\*\.uvproj'/);
+  // No filter asked for, no Filter line: an empty filter is not an empty dropdown.
+  assert.ok(!fileDialogScript({ title: "x" }).includes("$d.Filter"), "no filter means no Filter line");
+
+  // And it has to survive pickFile, which is what the route actually calls.
+  let seen = "";
+  const run = async (text) => {
+    seen = text;
+    return { ok: true, path: "C:\\work\\blinky.uvprojx" };
+  };
+  const picked = await pickFile({ title: "选择 Keil 工程", filter: "Keil 工程 (*.uvprojx)|*.uvprojx", run });
+  assert.equal(picked.path, "C:\\work\\blinky.uvprojx");
+  assert.match(seen, /\$d\.Filter/, "pickFile forwards the filter it was given");
+});
 await test("dialogs.js is shipped with the package", () => {
   const pkg = JSON.parse(readFileSync(joinPath(pluginDir, "package.json"), "utf8"));
   assert.ok(pkg.files.includes("dialogs.js"), "dialogs.js is in the published files");

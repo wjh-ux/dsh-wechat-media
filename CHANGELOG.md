@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.2
+
+- **The file picker kept listing every file, and the Target box said "(project default)" in a Chinese panel.**
+  `pickFile` accepted a `filter` and never passed it to the generated script, so the option existed and did nothing -
+  the dialog is WinForms, so "no filter" means every file in the folder looks like a candidate project. It now forwards
+  it, and a test asserts the `$d.Filter` line rather than the parameter, because the parameter was already right.
+- The Keil labels were inserted into both dictionaries and then inserted again with the other language's values, so
+  each key existed twice and the last one won: English in a Chinese panel. One pair per dictionary now.
 ## 1.16.1
 
 - **The path field still cut off the path, and the picker listed everything.** Four controls on one row meant an
