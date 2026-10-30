@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.7
+
+- **Every build left a `.build.log` in the project folder, next to `main.c`.** Nobody asked for that file to be there -
+  `Objects\` is Keil's and the folder beside the sources is the person's, so the tool now writes its own evidence to
+  `<project>\.dsh-logs\<output>.<action>.log`. The folder is created by `runUv4` itself (UV4 does not create the folder
+  it is told to write into, the same trap `Compress-Archive` set for the extension installer), so both the chat tool and
+  the Keil-side CLI get it for free. The two logs the old version left in a real project were moved and the empty one
+  deleted.
 ## 1.16.6
 
 - **`action=flash` on an STC project now flashes instead of quietly doing nothing.** v1.16.5 taught the tool to admit

@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.16.6** · 50 test suites / 807 cases · every capability below has been exercised against a real
+**Current release: v1.16.7** · 50 test suites / 807 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -770,7 +770,7 @@ writes exactly that, so it is idempotent and reversible: it exports the key to a
 
 The arguments are `cmd.exe /c "<plugin>\scripts\keil\dsh-keil.cmd" "#P"` - `#P` is uVision's own substitution for the
 open project, so one menu item works on every project without per-project setup. Exit codes are meant for scripts:
-`0` built (warnings fine), `2` build failed, `3` could not run at all.
+`0` built (warnings fine), `2` build failed, `3` could not run at all. The log of each run goes to `<project folder>\.dsh-logs\<output>.<action>.log`: `Objects\` belongs to Keil and the folder beside `main.c` belongs to you, so the tool keeps its own evidence somewhere it can be found without pretending to be part of the build.
 
 **What was actually verified.** Against a copy of Keil's own `BLINKY` example (`MCBx51: 8xC51Rx`, C51 V9.61): the chat
 tool ran `UV4 -b` and got `Program Size: data=9.0 xdata=0 code=82` in 3.8s, and the same build through

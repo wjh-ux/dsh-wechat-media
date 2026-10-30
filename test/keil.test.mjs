@@ -289,9 +289,11 @@ await test("the answer names the file and the line, then the size", () => {
   assert.match(text, /C:\\work\\blinky\.uvprojx/);
 });
 
-await test("the log lands next to the project, named by action", () => {
-  assert.equal(defaultLogPath("C:\\work\\blinky.uvprojx", "build"), "C:\\work\\blinky.build.log");
-  assert.equal(defaultLogPath("C:\\work\\blinky.uvproj", "flash"), "C:\\work\\blinky.flash.log");
+await test("the log lands in .dsh-logs, named by action - not scattered among the sources", () => {
+  // `Objects\` belongs to Keil and the folder next to main.c belongs to the person; a tool's own log is neither.
+  assert.equal(defaultLogPath("C:\\work\\blinky.uvprojx", "build"), "C:\\work\\.dsh-logs\\blinky.build.log");
+  assert.equal(defaultLogPath("C:\\work\\blinky.uvproj", "flash"), "C:\\work\\.dsh-logs\\blinky.flash.log");
+  assert.equal(defaultLogPath("C:\\a b\\c.d\\proj.uvprojx", "rebuild"), "C:\\a b\\c.d\\.dsh-logs\\proj.rebuild.log");
   assert.equal(tailLines("a\n\nb\nc\n", 2), "b\nc");
 });
 

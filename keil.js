@@ -15,6 +15,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 /** A cold C51 build of a real project takes seconds; ARM with packs can take a minute. 5 minutes is "something hung". */
@@ -333,7 +334,10 @@ export function runUv4({
 } = {}) {
   const args = buildArgs({ action, project, target, log: logPath });
   const started = Date.now();
-  return new Promise((resolvePromise) => {
+  // UV4 does not create the folder it is told to write the log into: without this the log silently never appears and
+  // every "why did the build fail" answer loses its evidence. Both callers (the tool and the CLI) get it here.
+  const ready = logPath ? mkdir(dirname(logPath), { recursive: true }).catch(() => {}) : Promise.resolve();
+  return ready.then(() => new Promise((resolvePromise) => {
     exec(uv4, args, { windowsHide: true, timeout: timeoutMs, env }, (error, stdout, stderr) => {
       const code = error?.code ?? 0;
       let log = "";
@@ -356,7 +360,7 @@ export function runUv4({
         parsed: parseBuildLog(text),
       });
     });
-  });
+  }));
 }
 
 /** The sentence a person gets back: verdict, then the problems with file and line, then the size / hex if produced. */
@@ -424,10 +428,17 @@ export function tailLines(text, count = 6) {
   return lines.slice(-count).join("\n");
 }
 
-/** Where the log for a run goes: next to the project by default, so a person can open it after the chat is gone. */
+/**
+ * Where the log for a run goes.
+ *
+ * Beside the project but in its own folder: a build drops `.obj`/`.hex` into `Objects\` and Keil owns that directory,
+ * so a `.build.log` next to `main.c` is clutter a person did not ask for. `.dsh-logs\` keeps it findable after the chat
+ * is gone without pretending to be part of the build.
+ */
 export function defaultLogPath(project, action = "build") {
-  const stem = project.replace(/\.uvprojx?$/i, "");
-  return `${stem}.${action}.log`;
+  const dir = String(project).replace(/[\\/][^\\/]+$/, "");
+  const stem = String(project).replace(/^.*[\\/]/, "").replace(/\.uvprojx?$/i, "");
+  return `${dir}\\.dsh-logs\\${stem}.${action}.log`;
 }
 
 /** `/keil` and the `/prefs` route agree on this shape: one switch, one project, one optional target. */
