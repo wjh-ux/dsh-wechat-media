@@ -181,6 +181,22 @@ export function flashPlan({ project, xml = "", exists = () => false } = {}) {
   return { via: "stcgal", vendor, device, chip: stcProtocolFor(device), hex, candidates };
 }
 
+/**
+ * Which port a dev board is on, when the machine also has Bluetooth modems pretending to be serial ports.
+ *
+ * `serial.resolvePort("", ports)` correctly refuses to guess between three ports - but two of them here are
+ * "蓝牙链接上的标准串行", and refusing to flash because a laptop has Bluetooth is not a useful answer. A USB-serial
+ * bridge (CH340, CP210x, FTDI) is what a board actually is, so when exactly one port looks like one it is chosen and
+ * the choice is reported; anything else keeps the original "tell me which" behaviour.
+ */
+export function pickBoardPort(ports = []) {
+  const rows = Array.isArray(ports) ? ports.filter((row) => row?.port) : [];
+  const looksUsb = (row) => /USB|CH34|CH910|CP21|FTDI|Silicon\s*Labs|ACM/i.test(String(row?.name ?? ""));
+  const usb = rows.filter(looksUsb);
+  if (usb.length === 1) return { port: usb[0].port, name: String(usb[0].name ?? ""), reason: "唯一一个 USB 串口" };
+  return null;
+}
+
 /** A project path is only usable if it is a file and looks like a uVision project - checked before any process runs. */
 export function assertProject(project, { exists = existsSync } = {}) {
   const file = String(project ?? "").trim().replace(/^"|"$/g, "");

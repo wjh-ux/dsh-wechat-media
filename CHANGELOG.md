@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.16.9
+
+- **The panel's Compile button answered `keilBuildTool is not defined`.** The `/keil-run` route was written in a scope
+  that cannot see the `const` the tool is defined in, so the button failed with a 400 the moment it was pressed - a
+  button that never worked, dressed as a feature. The tool is now registered into a module-level holder where it is
+  defined, and the route calls that; a missing registration answers 503 with "restart DSH" instead of a stack-trace word.
+- **Flash stopped asking which of three ports, when only one of them was a board.** This machine has two Bluetooth
+  modems (`蓝牙链接上的标准串行`, COM4/COM5) and the CH340 (COM3); refusing to flash because a laptop has Bluetooth is
+  not an answer. `pickBoardPort` chooses the single USB-bridge candidate and says which it picked; two candidates still
+  ask, because flashing the wrong one is worse than a question.
 ## 1.16.8
 
 - **The VS Code panel was unusable in the sidebar it lives in.** A textarea, `项目`, `＋文件` and `发送` shared one row in

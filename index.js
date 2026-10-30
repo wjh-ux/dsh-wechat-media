@@ -1497,6 +1497,15 @@ export function sessionIdFor(accountId, chatId, generation = 0) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The tool the VS Code panel's Compile/Flash buttons call.
+ *
+ * Set where `keil_build` is defined; the `/keil-run` route lives in a different nested scope and cannot close over a
+ * `const` that is not in scope there - the first version of that route answered `keilBuildTool is not defined` with a
+ * 400, which is what a button that never worked looks like from the outside.
+ */
+let keilRunTool = null;
+
 export function apply(ctx, config = {}) {
   const dshHome = config.dshHome || process.env.DSH_HOME || join(homedir(), ".dsh");
   const stateRoot = config.stateDir || defaultStateRoot(dshHome);
@@ -9838,7 +9847,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 const support = serial.serialSupport();
                 if (!support.ok) return `stcgal 不可用：${support.reason}`;
                 const ports = await serialPortsNow();
-                const port = serial.resolvePort(args?.port ?? serialPrefs.port, ports);
+                // A board is on a USB bridge; two Bluetooth modems should not stop a flash. One USB candidate is
+                // chosen and reported, anything else still asks.
+                const wantedPort = String(args?.port ?? serialPrefs.port ?? "").trim();
+                const board = wantedPort ? null : keil.pickBoardPort(ports);
+                const port = board ? board.port : serial.resolvePort(wantedPort, ports);
+                const portNote = board ? `（自动选了 ${board.port}：${board.name}）` : "";
                 const result = await serial.flashFirmware({
                   support,
                   flasher: "stcgal",
@@ -9851,7 +9865,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 const note = result.code === 0
                   ? `⚡ 烧录完成（stcgal，${port}，${plan.device || plan.vendor}）`
                   : `❌ 烧录失败（stcgal，${port}）`;
-                return `${note}\nHEX：${plan.hex}\n${serialReport(result, "stcgal 输出")}`;
+                return `${note}${portNote}\nHEX：${plan.hex}\n${serialReport(result, "stcgal 输出")}`;
               }
             }
             const chosen = String(args?.target ?? "").trim() || String(prefs.target ?? "").trim();
@@ -9880,6 +9894,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           }
         },
       });
+
+      // 面板的编译/烧录按钮走这条：同一个 execute，不经过模型。
+      keilRunTool = (args) => keilBuildTool.execute(args);
 
       for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, outreachPlanTool, outreachSendTool, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, keilBuildTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
@@ -10751,9 +10768,12 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           if (req.method !== "POST") return json(res, 405, { error: "POST only" });
           const body = await readArgs(req);
           const action = String(body.action ?? "build").trim() || "build";
+          if (typeof keilRunTool !== "function") {
+            return json(res, 503, { ok: false, action, text: "插件还没注册 keil_build（重启 DSH 后再试）" });
+          }
           try {
             const requestedPort = String(body.port ?? "").trim();
-            const text = String(await keilBuildTool.execute(requestedPort ? { action, port: requestedPort } : { action }));
+            const text = String(await keilRunTool(requestedPort ? { action, port: requestedPort } : { action }));
             // The tool answers in prose; the first character is its verdict, which is the one thing a button needs.
             const ok = /^[✅⚡🧹]/u.test(text);
             json(res, 200, { ok, action, text });

@@ -28,6 +28,7 @@ import {
   inspectProject,
   keilSupport,
   normalizeKeilPrefs,
+  pickBoardPort,
   parseBuildLog,
   parseToolsIni,
   runUv4,
@@ -350,6 +351,23 @@ await test("an STC project is not a UV4 download, and the plan says so before a 
   // Anything that is not an STC part keeps the uVision path.
   const arm = flashPlan({ project: "C:\\work\\m.uvprojx", xml: "<Device>STM32F407VG</Device><Vendor>STMicroelectronics</Vendor>" });
   assert.equal(arm.via, "uv4");
+});
+await test("the board is the USB port, not the Bluetooth modem next to it", () => {
+  // The real machine: COM4/COM5 are "蓝牙链接上的标准串行", COM3 is the CH340 the board is on.
+  const ports = [
+    { port: "COM4", name: "蓝牙链接上的标准串行 (COM4)" },
+    { port: "COM5", name: "蓝牙链接上的标准串行 (COM5)" },
+    { port: "COM3", name: "USB-SERIAL CH340 (COM3)" },
+  ];
+  const picked = pickBoardPort(ports);
+  assert.equal(picked?.port, "COM3");
+  assert.match(picked.name, /CH340/);
+
+  // Two USB candidates is still ambiguous: asking beats flashing the wrong one.
+  assert.equal(pickBoardPort([...ports, { port: "COM6", name: "Silicon Labs CP210x (COM6)" }]), null);
+  // Nothing that looks like a bridge: fall back to the existing "tell me which" behaviour.
+  assert.equal(pickBoardPort([{ port: "COM4", name: "蓝牙链接上的标准串行" }]), null);
+  assert.equal(pickBoardPort([]), null);
 });
 await test("a flash that wrote nothing is not a flash, whatever the exit code said", () => {
   // The real case: UV4 -f on an STC project with no download driver exited 0 in 1.4s with a 0-byte log, and the first
