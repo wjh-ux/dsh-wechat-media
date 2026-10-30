@@ -10717,7 +10717,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           const prefs = await state.loadPrefs();
           const current = prefs?.keil && typeof prefs.keil === "object" ? prefs.keil : {};
           try {
-            const picked = await dialogs.pickFile({ title: "选择 Keil 工程", initial: String(current.project ?? ""), filter: "Keil 工程 (*.uvprojx;*.uvproj)|*.uvprojx;*.uvproj|所有文件 (*.*)|*.*" });
+                        // InitialDirectory takes a *folder*: handing it the remembered .uvprojx made WinForms ignore it and open
+            // in Documents, so the picker always started where the project was not. Its folder is what it wanted.
+            const remembered = String(current.project ?? "").trim();
+            const picked = await dialogs.pickFile({
+              title: "选择 Keil 工程",
+              initial: remembered ? dirname(remembered) : "",
+              filter: "Keil 工程 (*.uvprojx;*.uvproj)|*.uvprojx;*.uvproj|所有文件 (*.*)|*.*",
+            });
             if (!picked.path) return json(res, 200, { ok: true, cancelled: true, project: String(current.project ?? "") });
             const info = keil.inspectProject(picked.path);
             await state.savePrefs({ keil: { ...current, project: info.file, dir: info.dir } });

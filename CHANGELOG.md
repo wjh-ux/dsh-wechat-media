@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.16.4
+
+- **"Browse…" always opened in Documents, never where the project was.** The remembered value is a `.uvprojx`, and
+  `OpenFileDialog.InitialDirectory` takes a folder: handed a file path it silently falls back - so the picker started
+  in the wrong place for every project, which is the one thing a picker exists to avoid. It now passes
+  `dirname(remembered)`, and the filter stays as it was.
 ## 1.16.3
 
 - **One inbound test was a bet on how fast the machine is, and a shared CI runner lost that bet.** "The same message
