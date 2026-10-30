@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.17.1
+
+- **The portable toolchain is found without a PATH change.** A long-running DSH never re-reads PATH, so `openocd`,
+  `cmake`, `ninja` and `arm-none-eabi-gcc` installed into `%USERPROFILE%\tools\<pkg>\bin` were invisible to it even
+  though the shell could see them. `which()` now scans that layout (the same way it already scanned winget's package
+  folder), and `buildPlan` takes the resolved paths instead of bare names, because spawning "cmake" is only reliable if
+  PATH happens to be right.
+- Verified on this machine: openocd 0.12.0, cmake 3.31.9, ninja 1.13.1, arm-none-eabi-gcc 15.2.1, and a minimal
+  STM32F103C8T6 project built to `text 212 B` with `.elf` / `.bin` / `.hex` beside it.
 ## 1.17.0
 
 - **One entry for three families, and the choice is yours.** `project_build` reads the folder - `.uvprojx` is Keil,

@@ -87,7 +87,9 @@ export function keilFamily(xml) {
  * `idf` builds through `idf.py -C <dir> build` - the same -C discipline as flashing, because building "the project in
  * whatever directory the plugin happens to be" is how a green build belongs to something else.
  */
-export function buildPlan({ kind, dir = "", project = "", idfPy = "", target = "" } = {}) {
+export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", target = "" } = {}) {
+  // Every tool path comes in resolved where possible: a long-running process never re-reads PATH, so `cmake` installed
+  // while DSH was running would spawn-fail even though the folder has it (which() is what found it).
   if (kind === "keil") return { tool: "uv4", args: ["-b", project, "-j0"], note: "UV4 编译" };
   if (kind === "idf") {
     if (!idfPy) return { error: "没找到 idf.py —— 设置 IDF_PATH 或装 ESP-IDF" };
@@ -96,8 +98,14 @@ export function buildPlan({ kind, dir = "", project = "", idfPy = "", target = "
     args.push("build");
     return { tool: idfPy, args, note: "idf.py build" };
   }
-  if (kind === "cmake") return { tool: "cmake", args: ["--build", join(dir, "build")], note: "cmake --build build" };
-  if (kind === "make") return { tool: "make", args: ["-C", dir, "-j"], note: "make -j" };
+  if (kind === "cmake") {
+    if (!cmake) return { error: "没找到 cmake —— 装上 cmake（或改用 make）" };
+    return { tool: cmake, args: ["--build", join(dir, "build")], note: "cmake --build build" };
+  }
+  if (kind === "make") {
+    if (!make) return { error: "没找到 make —— 装上 make/gmake（或改用 cmake）" };
+    return { tool: make, args: ["-C", dir, "-j"], note: "make -j" };
+  }
   return { error: `不知道这个工程怎么编译（${kind}）` };
 }
 

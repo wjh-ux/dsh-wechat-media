@@ -9949,7 +9949,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const { dir, kind, detected, idfPy, openocd, stflash, project, xml } = plan;
 
             if (action === "build") {
-              const built = firmware.buildPlan({ kind, dir, project, idfPy });
+              const cmake = serial.which("cmake", {}) || "";
+              const make = serial.which("make", {}) || serial.which("gmake", {}) || "";
+              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make });
               const ran = await firmware.runPlan(built, {
                 timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
               });

@@ -86,8 +86,9 @@ await test("a Keil project's family decides which flash tool can even work", () 
 await test("every toolchain builds with the directory it was told to, not wherever the plugin happens to be", () => {
   assert.deepEqual(buildPlan({ kind: "keil", project: "C:\\w\\b.uvprojx" }).args, ["-b", "C:\\w\\b.uvprojx", "-j0"]);
   assert.deepEqual(buildPlan({ kind: "idf", dir: "C:\\w", idfPy: "idf.py" }).args, ["-C", "C:\\w", "build"]);
-  assert.deepEqual(buildPlan({ kind: "cmake", dir: "C:\\w" }).args, ["--build", "C:\\w\\build"]);
-  assert.deepEqual(buildPlan({ kind: "make", dir: "C:\\w" }).args, ["-C", "C:\\w", "-j"]);
+  assert.deepEqual(buildPlan({ kind: "cmake", dir: "C:\\w", cmake: "cmake.exe" }).args, ["--build", "C:\\w\\build"]);
+  assert.match(buildPlan({ kind: "cmake", dir: "C:\\w" }).error, /cmake/);
+  assert.deepEqual(buildPlan({ kind: "make", dir: "C:\\w", make: "make.exe" }).args, ["-C", "C:\\w", "-j"]);
   // A missing tool is an error string, not a spawn of "undefined".
   assert.match(buildPlan({ kind: "idf", dir: "C:\\w" }).error, /idf\.py/);
   assert.match(buildPlan({ kind: "unknown" }).error, /不知道/);

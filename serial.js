@@ -62,6 +62,26 @@ export function which(name, { env = process.env, exists = existsSync, readdir = 
       }
     }
   }
+  // A portable install: `~/tools/<package>/bin`, which is where the ARM toolchain from this plugin's own instructions
+  // lands. A long-running DSH never re-reads PATH, so a tool installed while it was running has to be found by path.
+  const portableRoot = join(env.USERPROFILE ?? env.HOME ?? "", "tools");
+  if (portableRoot && exists(portableRoot)) {
+    let packages = [];
+    try {
+      packages = readdir(portableRoot);
+    } catch {
+      packages = [];
+    }
+    for (const entry of packages) {
+      for (const directory of [join(portableRoot, entry, "bin"), join(portableRoot, entry)]) {
+        for (const extension of extensions) {
+          const suffix = extension && !name.toLowerCase().endsWith(extension.toLowerCase()) ? extension : "";
+          const candidate = join(directory, `${name}${suffix}`);
+          if (exists(candidate)) return candidate;
+        }
+      }
+    }
+  }
   return "";
 }
 
