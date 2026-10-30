@@ -2303,7 +2303,7 @@ export function apply(ctx, config = {}) {
   function prefsFields() {
     return [
       "requireAllowlist", "friendOnly", "interject", "retry", "desktopControl", "wizardDone", "clipboard",
-      "qq", "multiAgent", "scrapling", "serial", "ssh", "officeDir", "webhookUrl", "webhookSecret", "inboundToken",
+      "qq", "multiAgent", "scrapling", "serial", "keil", "ssh", "officeDir", "webhookUrl", "webhookSecret", "inboundToken",
       "autoReply", "delivery", "format", "authorization", "tokenWindowDays", "taskGraceMinutes", "taskCommand", "inboxDir",
       ...Object.keys(FEISHU_PREF_FIELDS ?? {}), ...Object.keys(FEISHU_PREF_SWITCHES ?? {}),
       ...Object.keys(TAVILY_PREF_FIELDS ?? {}),
@@ -11248,6 +11248,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               cloudflare: prefsBoolean(source?.cloudflare, "scrapling.cloudflare") === true,
               ...(String(source?.exe ?? "").trim() ? { exe: String(source.exe).trim() } : {}),
             };
+          }
+          // The Keil block, same reason as serial's: a switch that saved nothing looks identical to one that saved,
+          // and the panel's checkbox would flip straight back.
+          if (body.keil !== undefined) {
+            try {
+              patch.keil = keil.normalizeKeilPrefs(typeof body.keil === "string" ? JSON.parse(body.keil) : body.keil);
+            } catch (error) {
+              return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+            }
           }
           // The serial block: one validated object, so a half-written preference cannot land in prefs. Without this
           // the route answered 200 and dropped the value - the card's checkbox flipped straight back.

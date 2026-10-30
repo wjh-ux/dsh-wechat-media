@@ -22,6 +22,7 @@ import {
   formatDiagnostic,
   inspectProject,
   keilSupport,
+  normalizeKeilPrefs,
   parseBuildLog,
   parseToolsIni,
   runUv4,
@@ -296,6 +297,23 @@ await test("inspectProject answers the two questions /keil needs: which targets,
   const info = inspectProject("C:\\work\\blinky.uvprojx", fs);
   assert.equal(info.dir, "C:\\work");
   assert.deepEqual(info.targets, ["Debug"]);
+});
+
+await test("the prefs block is the same shape /keil writes, and only an explicit true arms it", () => {
+  assert.deepEqual(normalizeKeilPrefs(), { enabled: false, project: "", target: "" });
+  assert.deepEqual(normalizeKeilPrefs({ enabled: "true", project: "  C:\\a.uvprojx  " }), {
+    enabled: false,
+    project: "C:\\a.uvprojx",
+    target: "",
+  });
+  assert.deepEqual(normalizeKeilPrefs({ enabled: true, project: "C:\\a.uvprojx", target: "Debug" }), {
+    enabled: true,
+    project: "C:\\a.uvprojx",
+    target: "Debug",
+  });
+  // A folder without a project is dropped, so a stale one cannot outlive the project it described.
+  assert.equal(normalizeKeilPrefs({ project: "", dir: "C:\\work" }).dir, undefined);
+  assert.equal(normalizeKeilPrefs({ project: "C:\\a.uvprojx", dir: "C:\\work" }).dir, "C:\\work");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -350,6 +350,16 @@ export function defaultLogPath(project, action = "build") {
   return `${stem}.${action}.log`;
 }
 
+/** `/keil` and the `/prefs` route agree on this shape: one switch, one project, one optional target. */
+export function normalizeKeilPrefs(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  const text = (field) => (typeof source[field] === "string" ? source[field].trim() : "");
+  const next = { enabled: source.enabled === true, project: text("project"), target: text("target") };
+  // `dir` is derived when a project is set, and dropped with it - a stale folder must not outlive its project.
+  if (next.project && source.dir) next.dir = String(source.dir);
+  return next;
+}
+
 /** Everything the tool needs to know about this machine's Keil, in one object - also what `/keil` prints. */
 export function keilSupport({ env = process.env, exists = existsSync, readFile = readFileSync, platform = process.platform } = {}) {
   const uv4 = findUv4({ env, exists, readFile, platform });

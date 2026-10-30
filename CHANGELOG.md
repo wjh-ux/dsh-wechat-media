@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.1
+
+- **`/keil on` was the only way to arm the feature, and the panel and `/prefs` route could not save the switch.** Every
+  other switch in this plugin is reachable both ways, so a build tool whose state only existed if you typed a command
+  was the odd one out - and `POST /dsh-wechat-media/prefs` answered `{"keil": ...}` by silently ignoring it. The block
+  is now a first-class preference (`keil.enabled` / `project` / `target`, validated by `normalizeKeilPrefs`), so the
+  panel, a script and `/keil on` all write the same thing.
 ## 1.15.0
 
 - **The plugin could flash a 51 board but could not build the program it flashed.** Keil uVision5 is where that program
