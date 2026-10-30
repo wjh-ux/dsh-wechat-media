@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.4.4** · 44 test suites / 692 cases · every capability below has been exercised against a real
+**Current release: v1.14.1** · 49 test suites / 781 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -26,6 +26,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Editor bridge | A VS Code extension: ask from the panel, stream the answer, let the **AI edit the folder you have open** (`/dsh-vscode/*`, with a 可写 switch) - and **flash the board from the editor**, because the turn runs in that folder and the serial tools take it from there. |
 | Automation tools | Browser automation over the DevTools protocol (own profile, your Chrome, or the extension), Office read/write/convert, desktop control, **clipboard**, **SSH**, **serial flashing** (ESP-IDF / esptool / avrdude / STC via stcgal), web search, scheduled tasks, and an RPA-style flow runner. |
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
+| Lead collection & outreach | **`collect_leads`** turns a goal and a market (`de`, `us`, `ae`…) into a scored, de-duplicated list with contacts, reading the page rather than trusting the search snippet, and telling a buyer from a seller. **`outreach_plan` / `outreach_send`** turn that list into messages over email, WeChat or WeCom - with a cooldown per address, a human confirmation slot, and a stop at the first hard channel failure. |
 | Multi-agent | With one switch, **each conversation can mount its own agent preset** - its own prompt, tools and model wiring - instead of every chat sharing the host default. Off by default; `/multiagent on`, then `/agent <preset>` per chat. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
@@ -470,7 +471,9 @@ separate from prefs; a task that has run once never fires again for the same win
 itself off afterwards.
 
 Ask for one in a chat - "每天 8 点提醒我喝水" - and the agent creates it with `task_add`, targeting the chat that
-asked; `/state` reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed, items }`.
+asked. The three tools are the same three operations the `/task` commands type: `task_add` (trigger + action + text),
+`task_list` (next run time and last result), `task_remove` (add `disableOnly` to pause instead of delete); `/state`
+reports `tasks: { count, enabled, nextAt, commandEnabled, ran, failed, items }`.
 
 ### What people actually schedule / 实际用法
 
@@ -1353,7 +1356,7 @@ came back. Anything not on this list is covered by tests but not by a real devic
 
 ## Release history / 版本历程
 
-`0.1.0` to `1.1.4` is **198 releases** - this plugin was built in public, one verified change at a time. Grouped by what
+`0.1.0` to `1.14.1` is **260 releases** - this plugin was built in public, one verified change at a time. Grouped by what
 each era added, with the releases that mattered most:
 
 | Era | What it added |
@@ -1371,6 +1374,14 @@ each era added, with the releases that mattered most:
 | 0.72 | Scrapling, including a real-browser mode that drives the Chrome you already have |
 | 1.0 | The stability statement: same features, winget-installed tools found, `projectDir` reaching `idf.py`, and the README's verification table |
 | 1.1 | QQ bot over the open platform's WebSocket gateway - private chats and group @, verified against a live bot |
+| 1.2 | Every secret sealed at rest, including the two that arrived late |
+| 1.3 – 1.4 | Multi-agent: a preset per conversation, and a model per conversation when you ask for one |
+| 1.5 | `/help` as groups instead of 26 flat lines, and a security pass over the whole access-control surface |
+| 1.6 | A fourth channel: email (IMAP in, SMTP out), on the card and in the dashboard, with a CA override for this machine's TLS |
+| 1.7 – 1.8 | Feishu as you: knowledge bases, docs/sheets/bitable tools, and the official CLI's 200+ commands - an app is a member of nothing |
+| 1.9 – 1.12 | Lead collection: a sentence into a scored list, buyers told apart from sellers, budgets as preferences, shops that never rank (maps), and a `market` that constrains the search instead of only scoring it |
+| 1.13 | Outreach: `outreach_plan` / `outreach_send` over three channels, with cooldown, a confirmation step, and a stop at the first hard failure |
+| 1.14 | Lead quality: a company name from the domain when the headline is a sentence, a twenty-country phone prefix table, and one human confirmation slot before a cold email leaves |
 
 Each era ended with the same discipline: a release only goes out after the suite passes, and a claim only goes in the README
 after something real produced the number.
