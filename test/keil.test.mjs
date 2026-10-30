@@ -19,6 +19,10 @@ import {
   buildArgs,
   defaultLogPath,
   findUv4,
+  flashPlan,
+  projectOutput,
+  projectVendor,
+  stcProtocolFor,
   flashProgrammed,
   formatDiagnostic,
   inspectProject,
@@ -317,6 +321,34 @@ await test("the prefs block is the same shape /keil writes, and only an explicit
   assert.equal(normalizeKeilPrefs({ project: "C:\\a.uvprojx", dir: "C:\\work" }).dir, "C:\\work");
 });
 
+await test("an STC project is not a UV4 download, and the plan says so before a port is opened", () => {
+  const stcXml = `<Project><Targets><Target><TargetName>Target 1</TargetName><TargetOption>
+    <TargetCommonOption><Device>STC8H1K08 Series</Device><Vendor>STC</Vendor>
+    <OutputName>DS18B20_TM1650</OutputName><OutputDirectory>.\\Objects\\</OutputDirectory></TargetCommonOption>
+    </TargetOption></Target></Targets></Project>`;
+  assert.equal(projectVendor(stcXml), "STC");
+  assert.deepEqual(projectOutput(stcXml), { name: "DS18B20_TM1650", dir: "Objects" });
+  assert.equal(stcProtocolFor("STC8H1K08 Series"), "stc8g");
+  assert.equal(stcProtocolFor("STC15F104W"), "stc15");
+  assert.equal(stcProtocolFor("STC89C52RC"), "stc89");
+  assert.equal(stcProtocolFor("STM32F103"), "");
+
+  const hex = "C:\\work\\ds\\Objects\\DS18B20_TM1650.hex";
+  const plan = flashPlan({ project: "C:\\work\\ds\\DS18B20_TM1650.uvproj", xml: stcXml, exists: (path) => path === hex });
+  assert.equal(plan.via, "stcgal");
+  assert.equal(plan.hex, hex);
+  assert.equal(plan.chip, "stc8g");
+  assert.equal(plan.device, "STC8H1K08 Series");
+
+  // A hex that is not there yet is named, not silently flashed as nothing.
+  const missing = flashPlan({ project: "C:\\work\\ds\\p.uvproj", xml: stcXml, exists: () => false });
+  assert.equal(missing.hex, "");
+  assert.ok(missing.candidates.length >= 2, "it says which paths it looked at");
+
+  // Anything that is not an STC part keeps the uVision path.
+  const arm = flashPlan({ project: "C:\\work\\m.uvprojx", xml: "<Device>STM32F407VG</Device><Vendor>STMicroelectronics</Vendor>" });
+  assert.equal(arm.via, "uv4");
+});
 await test("a flash that wrote nothing is not a flash, whatever the exit code said", () => {
   // The real case: UV4 -f on an STC project with no download driver exited 0 in 1.4s with a 0-byte log, and the first
   // version of this tool printed "下载到芯片完成" for it. Nothing had touched the chip.

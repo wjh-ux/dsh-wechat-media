@@ -24,7 +24,7 @@
 import { homedir } from "node:os";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9801,12 +9801,14 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
       const keilBuildTool = define({
         name: "keil_build",
         description:
-          "Build a Keil uVision5 project with the machine's own UV4.exe (C51 or MDK): action=build | rebuild | clean | flash. It returns the verdict with every error as `file(line): error C141: message`, the Program Size line, and the .hex it produced - so a failing build answers 'where' instead of 'it failed'. action=flash downloads through the project's own debugger settings (UV4 -f), which writes the chip. The project path is remembered by /keil project, and the target by /keil target. Off until /keil on.",
+          "Build a Keil uVision5 project with the machine's own UV4.exe (C51 or MDK): action=build | rebuild | clean | flash. It returns the verdict with every error as `file(line): error C141: message`, the Program Size line, and the .hex it produced - so a failing build answers 'where' instead of 'it failed'. action=flash writes the chip: for a part uVision has a driver for it is `UV4 -f`, and for an STC project (detected from the project's <Vendor>STC</Vendor>) it automatically becomes stcgal over the serial ISP protocol, because UV4 -f on an STC part exits 0 having programmed nothing. The project path is remembered by /keil project, and the target by /keil target. Off until /keil on.",
         parameters: {
           project: { type: "string", description: "Path to the .uvprojx (or .uvproj). Omit to use the one /keil project remembered." },
           action: { type: "string", description: "build (default) | rebuild | clean | flash." },
           target: { type: "string", description: "Target name inside the project (UV4 -t). Omit for the project's default." },
           timeoutMs: { type: "number", description: `How long to allow (default ${keil.KEIL_TIMEOUT_MS}, max 900000).` },
+          port: { type: "string", description: "action=flash on an STC project: COM port for stcgal. Omit when exactly one serial port exists." },
+          chip: { type: "string", description: "action=flash on an STC project: stcgal ISP protocol (stc8g/stc15/stc12/stc89). Defaults to the one the device name implies." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 900000,
@@ -9820,6 +9822,38 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const file = keil.assertProject(wanted);
             const support = keil.keilSupport();
             if (!support.ok) return `keil_build 失败：${support.reason}`;
+            // STC parts have no uVision download driver, so `UV4 -f` exits 0 having programmed nothing. Ask the
+            // project what it is first, and hand an STC part to stcgal - the tool that speaks its ISP protocol.
+            if (action === "flash") {
+              const xml = readFileSync(file, "utf8");
+              const plan = keil.flashPlan({ project: file, xml, exists: existsSync });
+              if (plan.via === "stcgal") {
+                if (!plan.hex) {
+                  return `这个工程是 ${plan.device || plan.vendor || "STC"}，该用 stcgal 烧，但没找到 hex：先跑一次 keil_build(action=build) 生成 ${plan.candidates?.join(" 或 ") || "hex"}。`;
+                }
+                const serialPrefs = (await state.loadPrefs())?.serial ?? {};
+                if (serialPrefs.enabled !== true) {
+                  return `这个工程是 ${plan.device}（STC），烧录走 stcgal 串口 ISP，但串口功能没开：先发 /serial on。`;
+                }
+                const support = serial.serialSupport();
+                if (!support.ok) return `stcgal 不可用：${support.reason}`;
+                const ports = await serialPortsNow();
+                const port = serial.resolvePort(args?.port ?? serialPrefs.port, ports);
+                const result = await serial.flashFirmware({
+                  support,
+                  flasher: "stcgal",
+                  port,
+                  file: plan.hex,
+                  chip: String(args?.chip ?? "").trim() || plan.chip,
+                  timeoutMs: Math.min(Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : serial.FLASH_TIMEOUT_MS, 900000),
+                });
+                noteRoute("/keil", { action: "flash", via: "stcgal", port, code: result.code });
+                const note = result.code === 0
+                  ? `⚡ 烧录完成（stcgal，${port}，${plan.device || plan.vendor}）`
+                  : `❌ 烧录失败（stcgal，${port}）`;
+                return `${note}\nHEX：${plan.hex}\n${serialReport(result, "stcgal 输出")}`;
+              }
+            }
             const chosen = String(args?.target ?? "").trim() || String(prefs.target ?? "").trim();
             const limit = Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : keil.KEIL_TIMEOUT_MS;
             const logPath = keil.defaultLogPath(file, action);

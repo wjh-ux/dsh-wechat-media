@@ -127,6 +127,59 @@ export function targetsFromProject(xml) {
   return found;
 }
 
+/** `<Vendor>STC</Vendor>` - the one fact that decides whether `UV4 -f` is even the right tool. */
+export function projectVendor(xml) {
+  const match = String(xml ?? "").match(/<Vendor>([^<]+)<\/Vendor>/i);
+  return match ? match[1].trim() : "";
+}
+
+/** `<OutputName>X</OutputName>` + `<OutputDirectory>.\Objects\</OutputDirectory>`: where the .hex will be. */
+export function projectOutput(xml) {
+  const text = String(xml ?? "");
+  const name = (text.match(/<OutputName>([^<]+)<\/OutputName>/i)?.[1] ?? "").trim();
+  const dir = (text.match(/<OutputDirectory>([^<]+)<\/OutputDirectory>/i)?.[1] ?? "").trim();
+  // Keil writes `.\Objects\`; strip both the leading `.\` and the trailing slash so the path we build is clean.
+  return { name, dir: dir.replace(/^[.][\\/]/, "").replace(/\\+$/, "") };
+}
+
+/**
+ * STC parts are programmed over the serial ISP protocol, not through uVision's download driver - which is why
+ * `UV4 -f` on an STC project exits 0 having done nothing. stcgal names its protocols per family; picking one from the
+ * device name is what the `chip` argument of `serial_flash` wants.
+ */
+export function stcProtocolFor(device) {
+  const name = String(device ?? "").toUpperCase();
+  if (!name.startsWith("STC")) return "";
+  // STC89 first: "STC89C52" also starts with "STC8", and picking stc8g for an STC89 would fail at the ISP handshake.
+  if (name.startsWith("STC89")) return "stc89";
+  if (name.startsWith("STC8")) return "stc8g";
+  if (name.startsWith("STC15")) return "stc15";
+  if (name.startsWith("STC12")) return "stc12";
+  return "auto";
+}
+
+/**
+ * Which tool can actually put this project's .hex on the chip.
+ *
+ * `{ via: "uv4" }` - a part uVision has a download driver for (ARM, or a 51 board with a monitor).
+ * `{ via: "stcgal", hex, chip }` - an STC part, where `UV4 -f` is a no-op; the hex is looked for where the project says
+ * it writes it, then in the usual places, because a flash that cannot find its input should say so before opening a port.
+ */
+export function flashPlan({ project, xml = "", exists = () => false } = {}) {
+  const vendor = projectVendor(xml);
+  const device = (String(xml ?? "").match(/<Device>([^<]+)<\/Device>/i)?.[1] ?? "").trim();
+  if (!/^STC/i.test(vendor) && !/^STC/i.test(device)) return { via: "uv4", vendor, device };
+  const dir = String(project).replace(/[\\/][^\\/]+$/, "");
+  const output = projectOutput(xml);
+  const candidates = [
+    output.dir && output.name ? `${dir}\\${output.dir}\\${output.name}.hex` : "",
+    output.name ? `${dir}\\Objects\\${output.name}.hex` : "",
+    output.name ? `${dir}\\${output.name}.hex` : "",
+  ].filter(Boolean);
+  const hex = candidates.find((candidate) => exists(candidate)) ?? "";
+  return { via: "stcgal", vendor, device, chip: stcProtocolFor(device), hex, candidates };
+}
+
 /** A project path is only usable if it is a file and looks like a uVision project - checked before any process runs. */
 export function assertProject(project, { exists = existsSync } = {}) {
   const file = String(project ?? "").trim().replace(/^"|"$/g, "");

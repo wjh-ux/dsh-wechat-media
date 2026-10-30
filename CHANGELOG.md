@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.16.6
+
+- **`action=flash` on an STC project now flashes instead of quietly doing nothing.** v1.16.5 taught the tool to admit
+  `UV4 -f` had written nothing; this release stops asking the wrong tool. When the project says `<Vendor>STC</Vendor>`,
+  the flash goes straight to `stcgal` over the serial ISP protocol, with the protocol picked from the device name
+  (`STC8H1K08` → `stc8g`, and `STC89` is checked before `STC8` because an STC89 starts with "STC8" and would otherwise
+  get the wrong protocol). The hex is found where the project says it writes it, then in `Objects\`, then beside the
+  project - and if none exists the answer names those paths instead of opening a port. Everything else still uses
+  uVision's download. Verified on the real STC8H1K08 board: `action=flash` built nothing new and still wrote 3129 bytes
+  to COM3, then the board printed `TEMP:27.2C`.
 ## 1.16.5
 
 - **`action=flash` reported success on a chip that was never touched.** `UV4 -f` exits 0 and writes a 0-byte log when

@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.16.5** · 50 test suites / 802 cases · every capability below has been exercised against a real
+**Current release: v1.16.6** · 50 test suites / 807 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -778,6 +778,17 @@ tool ran `UV4 -b` and got `Program Size: data=9.0 xdata=0 code=82` in 3.8s, and 
 `BLINKY.C(38): error C141: syntax error near '{', expected 'bit'` and exit code 2 on both paths, with
 `Target not created` reported as a failure. Pointing the CLI at a `.c` file instead of a project exited 3 with
 `不是 uVision 工程文件`. The Tools-menu entries were written to the registry and read back intact.
+
+**`action=flash` picks the tool the chip actually needs.** For an STC part - detected from the project's
+`<Vendor>STC</Vendor>`, which is the only thing that decides it - `UV4 -f` is skipped entirely and the same hex is
+written by `stcgal` over the serial ISP protocol (the protocol comes from the device name: `STC8x` → `stc8g`,
+`STC89` → `stc89`, and so on). Anything else still goes through uVision's own download. In one session:
+
+```text
+keil_build(action=build)   → code=3129, 0 Error(s), hex beside the project
+keil_build(action=flash)   → stcgal, COM3, 3129 bytes, UID F734C3FC31F408
+serial_monitor(port=COM3)  → TEMP:27.2C
+```
 
 **`action=flash` is honest about doing nothing.** `UV4 -f` exits 0 having programmed nothing when the project has no
 download driver configured - the log is 0 bytes and Keil is content. That is exactly what happened on a real STC
