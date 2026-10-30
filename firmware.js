@@ -87,10 +87,15 @@ export function keilFamily(xml) {
  * `idf` builds through `idf.py -C <dir> build` - the same -C discipline as flashing, because building "the project in
  * whatever directory the plugin happens to be" is how a green build belongs to something else.
  */
-export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", target = "" } = {}) {
+export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", uv4 = "", target = "" } = {}) {
   // Every tool path comes in resolved where possible: a long-running process never re-reads PATH, so `cmake` installed
   // while DSH was running would spawn-fail even though the folder has it (which() is what found it).
-  if (kind === "keil") return { tool: "uv4", args: ["-b", project, "-j0"], note: "UV4 编译" };
+  if (kind === "keil") {
+    // Not the string "uv4": that would be spawned as a program name and fail in 3 ms. The caller resolves the
+    // installed UV4.exe (keil.keilSupport) and hands the path in.
+    if (!uv4) return { error: "没找到 UV4.exe —— 装了 Keil 之后用 KEIL_UV4 指一下，或装到默认位置" };
+    return { tool: uv4, args: ["-b", project, "-j0"], note: "UV4 编译" };
+  }
   if (kind === "idf") {
     if (!idfPy) return { error: "没找到 idf.py —— 设置 IDF_PATH 或装 ESP-IDF" };
     const args = ["-C", dir];
@@ -123,6 +128,7 @@ export function flashPlan({
   project = "",
   file = "",
   idfPy = "",
+  uv4 = "",
   openocd = "",
   stflash = "",
   chip = "",
@@ -146,7 +152,10 @@ export function flashPlan({
                 ? "stflash"
                 : "";
 
-  if (resolved === "uv4") return { tool: "uv4", args: ["-f", project, "-j0"], note: "UV4 -f（工程里配的调试器）" };
+  if (resolved === "uv4") {
+    if (!uv4) return { error: "没找到 UV4.exe —— 装上 Keil（MDK-ARM）或设置 KEIL_UV4" };
+    return { tool: uv4, args: ["-f", project, "-j0"], note: "UV4 -f（工程里配的调试器）" };
+  }
   if (resolved === "stcgal") {
     if (!file) return { error: "没有 hex 文件：先编译，或指定 file" };
     return { tool: "stcgal", args: [], note: "stcgal 串口 ISP", chip, port, file, delegated: true };

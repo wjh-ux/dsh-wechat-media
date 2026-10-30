@@ -9951,7 +9951,10 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (action === "build") {
               const cmake = serial.which("cmake", {}) || "";
               const make = serial.which("make", {}) || serial.which("gmake", {}) || "";
-              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make });
+              // UV4 has to be a real path: `spawn("uv4")` fails in milliseconds and looks like a build failure.
+              const keilEnv = keil.keilSupport();
+              const uv4 = keilEnv.ok ? keilEnv.uv4.program : "";
+              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make, uv4 });
               const ran = await firmware.runPlan(built, {
                 timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
               });
@@ -9976,6 +9979,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               project,
               file,
               idfPy,
+              uv4,
               openocd,
               stflash,
               chip: String(args?.chip ?? "").trim(),

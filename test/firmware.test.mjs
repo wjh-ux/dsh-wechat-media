@@ -84,7 +84,9 @@ await test("a Keil project's family decides which flash tool can even work", () 
 });
 
 await test("every toolchain builds with the directory it was told to, not wherever the plugin happens to be", () => {
-  assert.deepEqual(buildPlan({ kind: "keil", project: "C:\\w\\b.uvprojx" }).args, ["-b", "C:\\w\\b.uvprojx", "-j0"]);
+  assert.deepEqual(buildPlan({ kind: "keil", project: "C:\\w\\b.uvprojx", uv4: "UV4.exe" }).args, ["-b", "C:\\w\\b.uvprojx", "-j0"]);
+  // A placeholder instead of a path is how the first version failed in 3 ms.
+  assert.match(buildPlan({ kind: "keil", project: "C:\\w\\b.uvprojx" }).error, /UV4/);
   assert.deepEqual(buildPlan({ kind: "idf", dir: "C:\\w", idfPy: "idf.py" }).args, ["-C", "C:\\w", "build"]);
   assert.deepEqual(buildPlan({ kind: "cmake", dir: "C:\\w", cmake: "cmake.exe" }).args, ["--build", "C:\\w\\build"]);
   assert.match(buildPlan({ kind: "cmake", dir: "C:\\w" }).error, /cmake/);
@@ -99,9 +101,10 @@ await test("auto follows the family: STC→stcgal, other Keil→UV4, ELF→openo
   assert.equal(stc.tool, "stcgal");
   assert.equal(stc.chip, "stc8g");
 
-  const arm = flashPlan({ kind: "keil", project: "C:\\w\\m.uvprojx" });
-  assert.equal(arm.tool, "uv4");
+  const arm = flashPlan({ kind: "keil", project: "C:\\w\\m.uvprojx", uv4: "UV4.exe" });
+  assert.equal(arm.tool, "UV4.exe", "the resolved path, not a placeholder");
   assert.deepEqual(arm.args, ["-f", "C:\\w\\m.uvprojx", "-j0"]);
+  assert.match(flashPlan({ kind: "keil", project: "C:\\w\\m.uvprojx" }).error, /UV4/);
 
   const idf = flashPlan({ kind: "idf", idfPy: "idf.py", dir: "C:\\w", port: "COM3" });
   assert.deepEqual(idf.args, ["-C", "C:\\w", "-p", "COM3", "flash"]);
@@ -126,8 +129,8 @@ await test("auto follows the family: STC→stcgal, other Keil→UV4, ELF→openo
 
 await test("the choice is overridable, because detection is a default and not a verdict", () => {
   // Force uVision even for a CMake folder (someone may have a .uvprojx beside an IDF project).
-  const forced = flashPlan({ kind: "cmake", flasher: "uv4", project: "C:\\w\\a.uvprojx" });
-  assert.equal(forced.tool, "uv4");
+  const forced = flashPlan({ kind: "cmake", flasher: "uv4", project: "C:\\w\\a.uvprojx", uv4: "UV4.exe" });
+  assert.equal(forced.tool, "UV4.exe");
   // Force ESP-IDF esptool instead of idf.py.
   const esptool = flashPlan({ kind: "idf", flasher: "esptool", port: "COM7", file: "app.bin" });
   assert.deepEqual(esptool.args, ["-p", "COM7", "write_flash", "0x0", "app.bin"]);

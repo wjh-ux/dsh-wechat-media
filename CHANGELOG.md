@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.17.2
+
+- **`project_build` on a Keil project failed in 3 ms, because "uv4" is not a program.** The build and flash plans
+  returned the literal string `uv4` as the executable, so `spawn("uv4")` hit ENOENT and the tool reported a build
+  failure that had never started. `keil.keilSupport()` resolves the installed `UV4.exe` and that path is passed in; a
+  missing UV4 is now a sentence ("装了 Keil 之后用 KEIL_UV4 指一下"), not a millisecond-long failure. Found by calling
+  the tool on an ARM-flavoured project instead of trusting that the branch was wired.
 ## 1.17.1
 
 - **The portable toolchain is found without a PATH change.** A long-running DSH never re-reads PATH, so `openocd`,
