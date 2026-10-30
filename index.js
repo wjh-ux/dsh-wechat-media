@@ -9948,6 +9948,20 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (plan.error) return `project_build 失败：${plan.error}`;
             const { dir, kind, detected, idfPy, openocd, stflash, project, xml } = plan;
 
+            // A Keil project goes to keil_build, always: it passes `-o` and parses the log, and without that a bare
+            // `UV4 -b` exits 0 with an empty console - which is indistinguishable from a successful build. One
+            // implementation of "build a Keil project" is also why the Program Size and file(line) errors come free.
+            if (kind === "keil") {
+              if (!project) return `project_build 失败：识别为 Keil 工程，但没找到 .uvprojx（${detected.evidence ?? ""}）`;
+              return await keilBuildTool.execute({
+                project,
+                action: action === "flash" ? "flash" : String(args?.action ?? "build") === "rebuild" ? "rebuild" : "build",
+                ...(args?.target ? { target: args.target } : {}),
+                ...(args?.port ? { port: args.port } : {}),
+                ...(args?.timeoutMs ? { timeoutMs: args.timeoutMs } : {}),
+              });
+            }
+
             if (action === "build") {
               const cmake = serial.which("cmake", {}) || "";
               const make = serial.which("make", {}) || serial.which("gmake", {}) || "";

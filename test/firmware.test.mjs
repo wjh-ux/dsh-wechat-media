@@ -178,6 +178,11 @@ await test("runPlan hands back the output and the exit code the caller must judg
   assert.match(ok.output, /Build complete/);
   assert.deepEqual(seen[0], { program: "cmake", args: ["--build", "build"] });
 
+  // Exit 0 with nothing printed is a program that refused to start, not a build.
+  const silent = await runPlan({ tool: "UV4.exe", args: ["-b", "x"] }, {
+    exec: (program, args, options, callback) => callback(null, "", ""),
+  });
+  assert.equal(silent.ok, false);
   // A "successful" exit with `error:` in the output is how a CMake build that linked nothing still exits 0.
   const lying = await runPlan({ tool: "cmake", args: [] }, {
     exec: (program, args, options, callback) => callback(null, "undefined reference to `main'", ""),

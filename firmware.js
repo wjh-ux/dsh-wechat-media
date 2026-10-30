@@ -263,8 +263,11 @@ export function runPlan(plan, { exec = execFile, timeoutMs = BUILD_TIMEOUT_MS, e
     }
     exec(plan.tool, plan.args, { windowsHide: true, timeout: timeoutMs, env, cwd }, (error, stdout, stderr) => {
       const output = [String(stdout ?? ""), String(stderr ?? "")].filter(Boolean).join("\n");
+      // An empty console with exit 0 is how a GUI program that refused to start looks, and calling that a success is
+      // the mistake this file already learned once (UV4 -f on an STC part). No output is not a verdict.
+      const spoke = output.trim().length > 0;
       resolve({
-        ok: !error && !/Error:|error:|FAILED|undefined reference/i.test(output),
+        ok: !error && spoke && !/Error:|error:|FAILED|undefined reference/i.test(output),
         code: typeof error?.code === "number" ? error.code : error ? -1 : 0,
         ms: Date.now() - started,
         output,

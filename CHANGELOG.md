@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.3
+
+- **A Keil project built "successfully" in 2.2 s having done nothing.** `project_build` ran `UV4 -b <project> -j0` with
+  no `-o`, and UV4 with no log file prints nothing and exits 0 - the same shape as a GUI program that refused to start,
+  and indistinguishable from a real build. Keil projects now go through `keil_build`, which passes `-o`, reads the log,
+  and reports the Program Size and `file(line)` errors; and `runPlan` no longer calls an empty console a success at all.
 ## 1.17.2
 
 - **`project_build` on a Keil project failed in 3 ms, because "uv4" is not a program.** The build and flash plans
