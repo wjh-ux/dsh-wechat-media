@@ -1972,17 +1972,21 @@ function emailDraftRef() {
               }),
               " " + t("keil", "Let the agent build Keil uVision5 projects with the UV4 already installed (off by default)"),
             ]),
+            // 工程路径独占一行：它是最长的那个值，和其它控件挤在一行就只能看见开头。
             h("div", { key: "klp", className: "dswxRow" }, [
               h("span", { key: "k", className: "dswxName" }, t("keilProject", "Project")),
               h("input", {
                 key: "i",
                 className: "dswxInput",
-                style: { flex: "4 1 22em" },
+                style: { flex: "1 1 auto" },
                 placeholder: t("keilProjectHint", ".uvprojx path; empty = nothing remembered"),
                 value: keilDraft.project ?? snapshot?.prefs?.keil?.project ?? "",
                 disabled: busy,
                 onChange: (event) => setKeilDraft({ ...keilDraft, project: event.target.value }),
               }),
+            ]),
+            // 第二行放动作：路径已经占满上面一行，浏览 / Target / 保存 在这里才排得开。
+            h("div", { key: "klq", className: "dswxRow" }, [
               h("button", {
                 key: "b",
                 type: "button",
@@ -1994,7 +1998,7 @@ function emailDraftRef() {
               h("select", {
                 key: "t",
                 className: "dswxInput",
-                style: { flex: "1 1 9em" },
+                style: { flex: "1 1 12em" },
                 title: t("keilTarget", "Target"),
                 value: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
                 disabled: busy,

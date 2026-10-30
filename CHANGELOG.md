@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.16.1
+
+- **The path field still cut off the path, and the picker listed everything.** Four controls on one row meant an
+  absolute path showed as `…\default-w`; the project field now has the row to itself and **Browse… / Target / Save**
+  sit under it, which is a layout the window width cannot undo. And "选择 Keil 工程" opened with no file type filter, so
+  a folder with fifty files looked like fifty candidate projects - `dialogs.fileDialogScript` grew an optional `filter`,
+  and this picker asks for `*.uvprojx;*.uvproj` first.
 ## 1.16.0
 
 - **The Keil row made you type things the machine already knew.** The project path had to be pasted by hand and the

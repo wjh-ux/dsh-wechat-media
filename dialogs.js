@@ -39,7 +39,7 @@ export function folderDialogScript({ title = "选择文件夹", initial = "" } =
 }
 
 /** The same for one file, so a flow can point at an existing `.csv` if that is what the person wants. */
-export function fileDialogScript({ title = "选择文件", initial = "" } = {}) {
+export function fileDialogScript({ title = "选择文件", initial = "", filter = "" } = {}) {
   return [
     "$ErrorActionPreference = 'Stop'",
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
@@ -47,6 +47,9 @@ export function fileDialogScript({ title = "选择文件", initial = "" } = {}) 
     "$d = New-Object System.Windows.Forms.OpenFileDialog",
     `$d.Title = ${psQuote(title)}`,
     "$d.CheckFileExists = $false",
+    // A filter is what stops "选择 Keil 工程" from listing every file in the folder; the Windows Forms syntax is
+    // `说明|模式|说明|模式`, and it only goes in when a caller asked for one.
+    ...(String(filter ?? "").trim() ? [`$d.Filter = ${psQuote(filter)}`] : []),
     ...(String(initial ?? "").trim() ? [`$d.InitialDirectory = ${psQuote(initial)}`] : []),
     "$r = $d.ShowDialog()",
     "$p = if ($r -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileName } else { '' }",
@@ -108,7 +111,7 @@ export async function pickFolder({ title = "选择文件夹", initial = "", run 
   return { path: String(answer?.path ?? "").trim() };
 }
 
-export async function pickFile({ title = "选择文件", initial = "", run = runDialogScript } = {}) {
+export async function pickFile({ title = "选择文件", initial = "", filter = "", run = runDialogScript } = {}) {
   const answer = await run(fileDialogScript({ title, initial }));
   return { path: String(answer?.path ?? "").trim() };
 }
