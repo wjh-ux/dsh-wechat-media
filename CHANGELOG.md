@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.0
+
+- **The Keil row made you type things the machine already knew.** The project path had to be pasted by hand and the
+  Target had to be typed from memory, so the two fields most likely to be wrong were the two nobody could check.
+  **Browse…** opens the native file dialog (`/keil-pick`, loopback only - a page cannot learn an absolute path), the
+  Target is now a dropdown filled from the project's own `<TargetName>` entries via a new `/keil` route, and one line
+  under the row names the `UV4.exe` that was found - or the reason none was. A target saved earlier that the project no
+  longer declares is still listed, marked as such: silently dropping a setting is worse than showing a stale one.
 ## 1.15.3
 
 - **The card worked but read badly.** The Keil project field shared the row with the Target field, so an absolute path

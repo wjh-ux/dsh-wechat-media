@@ -10675,6 +10675,60 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       },
       {
+        // What the card needs to draw the Keil row honestly: is UV4 actually on this machine, which project is
+        // remembered, and which targets that project declares. Reading it here (loopback only) keeps the card from
+        // guessing - a switch that says "use the UV4 you already have" should be able to answer "did you find it".
+        kind: "exact",
+        path: "/dsh-wechat-media/keil",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          const prefs = await state.loadPrefs();
+          const current = prefs?.keil && typeof prefs.keil === "object" ? prefs.keil : {};
+          const support = keil.keilSupport();
+          const project = String(current.project ?? "").trim();
+          let targets = [];
+          let projectError = "";
+          if (project) {
+            try {
+              targets = keil.inspectProject(project).targets;
+            } catch (error) {
+              projectError = String(error?.message ?? error);
+            }
+          }
+          json(res, 200, {
+            ok: true,
+            uv4: support.ok ? support.uv4 : null,
+            reason: support.ok ? "" : support.reason,
+            project,
+            target: String(current.target ?? ""),
+            targets,
+            projectError,
+          });
+        },
+      },
+      {
+        // The native file dialog, because a page cannot learn an absolute path: showOpenFilePicker hands back a
+        // handle whose path is hidden. Same reason the export folder has a Browse button.
+        kind: "exact",
+        path: "/dsh-wechat-media/keil-pick",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const prefs = await state.loadPrefs();
+          const current = prefs?.keil && typeof prefs.keil === "object" ? prefs.keil : {};
+          try {
+            const picked = await dialogs.pickFile({ title: "选择 Keil 工程", initial: String(current.project ?? "") });
+            if (!picked.path) return json(res, 200, { ok: true, cancelled: true, project: String(current.project ?? "") });
+            const info = keil.inspectProject(picked.path);
+            await state.savePrefs({ keil: { ...current, project: info.file, dir: info.dir } });
+            noteRoute("/keil", { action: "pick", targets: info.targets.length });
+            return json(res, 200, { ok: true, project: info.file, targets: info.targets });
+          } catch (error) {
+            return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
         kind: "exact",
         path: "/dsh-wechat-media/proxy-hosts",
         handler: async (req, res) => {

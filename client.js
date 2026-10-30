@@ -214,6 +214,10 @@ function emailDraftRef() {
           keilProject: "Project",
           keilProjectHint: ".uvprojx path; empty = nothing remembered",
           keilTarget: "Target",
+          keilTargetDefault: "（工程默认）",
+          keilBrowse: "浏览…",
+          keilTargetDefault: "(project default)",
+          keilBrowse: "Browse…",
           qqTitle: "QQ bot (QQ 开放平台)",
           qqAppId: "appId",
           qqSecret: "clientSecret",
@@ -398,6 +402,10 @@ function emailDraftRef() {
           keilProject: "工程",
           keilProjectHint: ".uvprojx 路径；留空表示不记",
           keilTarget: "Target",
+          keilTargetDefault: "（工程默认）",
+          keilBrowse: "浏览…",
+          keilTargetDefault: "(project default)",
+          keilBrowse: "Browse…",
           qqTitle: "QQ 机器人（QQ 开放平台）",
           qqAppId: "appId",
           qqSecret: "clientSecret",
@@ -559,6 +567,8 @@ function emailDraftRef() {
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
         // Keil 的工程与 Target 是「草稿」：输入框里改了但没点保存，不应该顺手写进 prefs。
         const [keilDraft, setKeilDraft] = react.useState({});
+        // 宿主对这只机器上 Keil 的回答：UV4 在哪、工程有哪些 Target。卡片不猜，问一次。
+        const [keilInfo, setKeilInfo] = react.useState(undefined);
         // The SSH host draft: "name user@host[:port] [identity]". Empty until somebody types one.
         const [sshDraft, setSshDraft] = react.useState("");
         // QQ credentials as typed; undefined = follow /state until edited (the secret never comes back from the host).
@@ -668,6 +678,12 @@ function emailDraftRef() {
           const fast = setInterval(refresh, POLL_MS);
           return () => clearInterval(fast);
         }, [pairingId, refresh]);
+
+        // Keil 的样子要问宿主，不是猜：UV4 找没找到、当前工程声明了哪些 Target。只依赖工程路径 ——
+        // 每次 refresh 都换一个新对象，用它当依赖会打成死循环。
+        react.useEffect(() => {
+          void loadKeilInfo();
+        }, [snapshot?.prefs?.keil?.project]);
 
         // Safety net: every button is disabled while `busy` is true, so one stuck
         // request would make the whole card look dead. Release it automatically.
@@ -1036,6 +1052,31 @@ function emailDraftRef() {
          * The Keil block: the switch `/keil on` writes, plus the project and target it remembers. The build itself
          * runs on the host (`keil_build` with UV4) - this card only decides whether it is allowed to, and on what.
          */
+        async function loadKeilInfo() {
+          try {
+            setKeilInfo(await api("/keil"));
+          } catch {
+            // 宿主没答（旧版本、或路由还没上）就当不知道，不编一个状态出来。
+            setKeilInfo(undefined);
+          }
+        }
+
+        async function pickKeilProject() {
+          setBusy(true);
+          try {
+            const picked = await api("/keil-pick", { method: "POST", body: {} });
+            if (picked?.ok && !picked.cancelled) {
+              setKeilDraft({});
+              await refresh();
+              await loadKeilInfo();
+            }
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
+        }
+
         async function setKeil(patch) {
           setBusy(true);
           try {
@@ -1043,6 +1084,7 @@ function emailDraftRef() {
             await api("/prefs", { method: "POST", body: { keil: { ...current, ...patch } } });
             setKeilDraft({});
             await refresh();
+            await loadKeilInfo();
           } catch (problem) {
             setError(String(problem?.message ?? problem));
           } finally {
@@ -1941,15 +1983,30 @@ function emailDraftRef() {
                 disabled: busy,
                 onChange: (event) => setKeilDraft({ ...keilDraft, project: event.target.value }),
               }),
-              h("input", {
+              h("button", {
+                key: "b",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                title: t("keilProjectHint", ".uvprojx path; empty = nothing remembered"),
+                onClick: () => pickKeilProject(),
+              }, t("keilBrowse", "Browse…")),
+              h("select", {
                 key: "t",
                 className: "dswxInput",
-                style: { flex: "1 1 7em" },
-                placeholder: t("keilTarget", "Target"),
+                style: { flex: "1 1 9em" },
+                title: t("keilTarget", "Target"),
                 value: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
                 disabled: busy,
                 onChange: (event) => setKeilDraft({ ...keilDraft, target: event.target.value }),
-              }),
+              }, [
+                h("option", { key: "", value: "" }, t("keilTargetDefault", "(project default)")),
+                ...((keilInfo?.targets ?? []).map((name) => h("option", { key: name, value: name }, name))),
+                // 存着一个工程里已经删掉的 Target 时，仍把它列出来：静默丢掉一个设置比显示一个过期值更糟。
+                ...((keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "") && !(keilInfo?.targets ?? []).includes(keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "")
+                  ? [h("option", { key: "stale", value: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "" }, `${keilDraft.target ?? snapshot?.prefs?.keil?.target ?? ""}（工程里没有）`)]
+                  : []),
+              ]),
               h("button", {
                 key: "s",
                 type: "button",
@@ -1961,6 +2018,11 @@ function emailDraftRef() {
                 }),
               }, t("save", "Save")),
             ]),
+            h("div", { key: "kls", className: "dswxMeta" }, keilInfo
+              ? (keilInfo.uv4
+                ? `UV4：${keilInfo.uv4.program}${keilInfo.projectError ? ` · 工程有问题：${keilInfo.projectError}` : ""}`
+                : `UV4 没找到：${keilInfo.reason}`)
+              : ""),
             ]),
           ]),
 
@@ -2770,6 +2832,11 @@ function emailDraftRef() {
                 onClick: () => saveExportDir(exportDirDraft ?? snapshot?.browser?.exportDir ?? ""),
               }, t("save", "Save")),
             ]),
+            h("div", { key: "kls", className: "dswxMeta" }, keilInfo
+              ? (keilInfo.uv4
+                ? `UV4：${keilInfo.uv4.program}${keilInfo.projectError ? ` · 工程有问题：${keilInfo.projectError}` : ""}`
+                : `UV4 没找到：${keilInfo.reason}`)
+              : ""),
             browserNotice ? h("p", { key: "browsernotice", className: "dswxMsg" }, browserNotice.text) : null,
             h("p", { key: "browserstate", className: "dswxMeta" }, snapshot?.browser
               ? `浏览器：${snapshot.browser.channel} · 端口 ${snapshot.browser.port} · ${snapshot.browser.headless ? "无头" : "有窗口"} · 配置目录 ${snapshot.browser.profileDir}`
