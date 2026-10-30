@@ -9,6 +9,7 @@ import {
   planOutreach,
   planText,
   recordSend,
+  reviewReasons,
   renderTemplate,
 } from "../outreach.js";
 
@@ -94,5 +95,30 @@ test("the preview shows the message body, not only the address", () => {
   assert.match(text, /您好 ACME/);
 });
 
+test("items a person should look at are flagged, not silently sent", () => {
+  const plan = planOutreach({
+    channel: "email",
+    targets: [
+      { company: "Lounge garden furniture directly from the designer", email: "info@april-furniture.de", website: "https://april-furniture.com", role: "unclear" },
+      { company: "April Furniture GmbH", email: "einkauf@april-furniture.de", website: "https://april-furniture.com", role: "buyer" },
+    ],
+    template: "您好 {{company}}",
+  });
+  const first = plan.items.find((item) => item.to === "info@april-furniture.de");
+  const second = plan.items.find((item) => item.to === "einkauf@april-furniture.de");
+  assert.ok(first.review.length >= 2, "a headline for a name and a generic mailbox are both worth a look");
+  assert.match(first.review.join("；"), /标题/);
+  assert.match(first.review.join("；"), /通用邮箱/);
+  assert.deepEqual(second.review, [], "a named mailbox at a named company needs no review");
+});
+
+test("the preview says how many need a human", () => {
+  const plan = planOutreach({
+    channel: "email",
+    targets: [{ company: "A very long headline about outdoor furniture", email: "info@x.de", website: "https://x.de" }],
+    template: "Hi {{company}}",
+  });
+  assert.match(planText(plan), /需要人工确认/);
+});
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);

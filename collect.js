@@ -237,6 +237,61 @@ export function contactLinks(links, { max = 3 } = {}) {
  */
 export const JUNK_TITLE = /marketplace|b2b\b|trade data|import export data|customs data|directory|yellow ?pages|suppliers? (?:list|directory|network|search)|supplier search|lieferantensuche|lieferantenverzeichnis|business directory|company list|b2b platform|黄页|名录|数据平台|企业库|供应商搜索|供应商目录/i;
 
+/**
+ * Country calling codes, longest first.
+ *
+ * Only the markets this collector knows were covered, so a Danish `0045` came back as "unknown market" and a Danish
+ * webshop stayed in a German plan. The list is the point here, not the length: a phone that belongs to a *known*
+ * country which is not the target is the cheapest proof that a lead is in the wrong market.
+ */
+const PHONE_COUNTRIES = Object.freeze([
+  ["358", "fi"], ["353", "ie"], ["351", "pt"], ["420", "cz"], ["971", "ae"], ["90", "tr"],
+  ["49", "de"], ["45", "dk"], ["46", "se"], ["47", "no"], ["48", "pl"], ["43", "at"], ["41", "ch"],
+  ["44", "uk"], ["39", "it"], ["34", "es"], ["33", "fr"], ["31", "nl"], ["32", "be"], ["30", "gr"],
+  ["7", "ru"], ["1", "us"],
+]);
+
+/** The market a phone number belongs to, or "" when the prefix is not one we know. */
+export function phoneMarket(phone) {
+  // `0045…` and `+45…` are the same country; the leading zeroes of the international prefix have to go first, or the
+  // table never matches and a Danish number reads as "unknown market".
+  const digits = String(phone ?? "").replace(/[^\d+]/g, "").replace(/^\+/, "").replace(/^00/, "").replace(/^0+/, "");
+  if (!digits) return "";
+  for (const [prefix, code] of PHONE_COUNTRIES) {
+    if (digits.startsWith(prefix)) return code;
+  }
+  return "";
+}
+
+/**
+ * A company name a human would recognise, not the page's advertising line.
+ *
+ * Measured: the plan greeted one recipient with "您好 Lounge garden furniture directly from the designer，", which is a
+ * headline, not a name - the first line of a cold email is where a person decides whether it was written for them. The
+ * domain is the more reliable source when the title reads like a sentence: `april-furniture.com` -> "April Furniture".
+ */
+export function companyNameFromDomain(url) {
+  const host = hostOf(url);
+  if (!host) return "";
+  const parts = host.split(".");
+  const core = parts.length > 2 ? parts[parts.length - 2] : parts[0];
+  if (!core || core.length < 3) return "";
+  return core
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/** True when a page title is really a sentence - too many words, or the punctuation of a slogan. */
+export function looksLikeSentence(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  if (text.split(/\s+/).length >= 7) return true;
+  return /[|·–—:!?]/.test(text) && text.split(/\s+/).length >= 6;
+}
+
+
 const ROLE_SIGNALS = {
   buyer: [
     [/we (?:are|r) (?:an? )?(?:importer|distributor|wholesaler|retailer)/i, 4],
@@ -322,6 +377,13 @@ export function marketFit(lead, market) {
       evidence.push(`当地电话 ${String(hit).slice(0, 20)}`);
       return { fit: "target", evidence };
     }
+  }
+  // Any *known* country that is not the target counts as foreign - a Danish `0045` on a `.dk` site used to read
+  // "unknown market" and stayed in a German plan.
+  const knownPhone = phones.map((phone) => ({ phone, code: phoneMarket(phone) })).find((row) => row.code && row.code !== resolved.code);
+  if (knownPhone) {
+    evidence.push(`电话属于 ${knownPhone.code.toUpperCase()}（${String(knownPhone.phone).slice(0, 18)}）`);
+    return { fit: "foreign", evidence, foreign: knownPhone.code };
   }
   // A foreign phone on a .com host, with no market signal anywhere, is the shape of "wrong country" rather than
   // "we cannot tell": the earlier runs produced exactly this.
@@ -610,7 +672,10 @@ export async function collectLeads({
       continue;
     }
     // The company name is the title without the marketing tail every site appends: "ACME GmbH | Outdoor furniture".
-    const company = title.split(/\s[|–—·:]\s|\s\|\s/)[0].trim().slice(0, 80) || candidate.host;
+    // When the title is a whole sentence the domain is the honest source instead - a plan once greeted a recipient
+    // with "Lounge garden furniture directly from the designer", which is a headline, not a name.
+    const headline = title.split(/\s[|–—·:]\s|\s\|\s/)[0].trim().slice(0, 80);
+    const company = (!headline || looksLikeSentence(headline) ? companyNameFromDomain(candidate.url) : headline) || candidate.host;
     const base = {
       company, url: candidate.url, market: String(market ?? ""),
       title, text: text.slice(0, 4000),

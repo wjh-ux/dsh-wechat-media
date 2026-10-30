@@ -64,6 +64,27 @@ export function planItemId(channel, to, index = 0) {
  * week, which is the fastest way to be marked as spam - and the plugin already had this failure once in its own
  * notification path, which is why this is a history table rather than a best-effort `lastSentAt`.
  */
+/** Mailboxes that belong to the company rather than a person - fine to write to, worth flagging before a first email. */
+const GENERIC_MAILBOX = /^(info|kontakt|contact|sales|office|hello|mail|service|support|vertrieb|anfrage|enquiry|inquiry)@/i;
+
+/**
+ * Why a message should be looked at by a person before it goes out.
+ *
+ * Not a blocker by default, and not a score: these are the shapes that read as automated to the recipient - a greeting
+ * addressed to a headline, a first email to `info@`, a company whose role was never established. The plan marks them
+ * and `outreach_send` leaves them alone unless someone says otherwise.
+ */
+export function reviewReasons(target = {}) {
+  const reasons = [];
+  const company = String(target.company ?? "").trim();
+  if (company.split(/\s+/).filter(Boolean).length >= 6) reasons.push("称呼像标题不是公司名");
+  if (GENERIC_MAILBOX.test(String(target.email ?? ""))) reasons.push("只有通用邮箱（info@ 这类）");
+  if (String(target.role ?? "") === "unclear") reasons.push("角色未确认（买家/卖家都看不出来）");
+  if (String(target.marketFit ?? "") === "foreign") reasons.push("市场不符");
+  if (!String(target.website ?? target.url ?? "").trim()) reasons.push("没有可引用的网站");
+  return reasons;
+}
+
 export function planOutreach({
   channel = "email",
   targets = [],
@@ -118,9 +139,11 @@ export function planOutreach({
     }
     if (!rendered.text.trim()) { skipped.push({ label, reason: "模板渲染后是空的" }); continue; }
     seen.add(to);
+    const review = reviewReasons(target);
     items.push({
       id: planItemId(channel, to, items.length + 1),
       channel, to, label,
+      review,
       accountId: target.accountId ?? "", chatId: target.chatId ?? "",
       email: channel === "email" ? to : "",
       text: rendered.text.trim(),
@@ -162,9 +185,12 @@ export function planText(plan, { preview = 3 } = {}) {
   const lines = [`通道 ${plan.channel}：${plan.items.length} 条待发，跳过 ${plan.skipped.length} 条（冷却 ${plan.cooldownDays} 天）`];
   for (const item of plan.items.slice(0, 12)) {
     const body = item.text.replace(/\s+/g, " ").slice(0, preview > 0 ? 120 : 0);
-    lines.push(`  ${item.id}  → ${item.label} <${item.to}>`);
+    const flag = item.review && item.review.length ? `  ⚠ ${item.review.join("；")}` : "";
+    lines.push(`  ${item.id}  → ${item.label} <${item.to}>${flag}`);
     if (body) lines.push(`      ${body}${item.text.length > 120 ? "…" : ""}`);
   }
+  const flagged = plan.items.filter((item) => item.review && item.review.length).length;
+  if (flagged) lines.push(`  ⚠ ${flagged} 条需要人工确认：默认不发（要发就带 includeReview: true）`);
   if (plan.items.length > 12) lines.push(`  …（还有 ${plan.items.length - 12} 条）`);
   const reasons = new Map();
   for (const row of plan.skipped) reasons.set(row.reason, (reasons.get(row.reason) ?? 0) + 1);

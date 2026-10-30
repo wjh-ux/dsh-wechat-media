@@ -7797,6 +7797,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
           ids: { type: "string", description: "Which planned items, e.g. \"1,3,5\" or \"all\" (default: all)." },
           maxPerRun: { type: "number", description: "Hard cap for this call (default 10, max 50) - a runaway loop is worse than a slow campaign." },
           delayMs: { type: "number", description: "Delay between sends (default 5000 for email, 3000 wechat, 2000 wecom)." },
+          includeReview: { type: "boolean", description: "Also send the items the plan flagged for human review (a greeting addressed to a headline, a first email to info@, an unconfirmed role). Off by default." },
         },
         output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
         timeoutMs: 600000,
@@ -7821,9 +7822,19 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               ? plan.items.filter((item) => picked.has(String(item.id)) || picked.has(String(item.id).split("#").pop()))
               : picked;
             if (!chosen.length) return `没有匹配的计划项：${wanted}`;
+            if (held.length && !eligible.length) {
+              return `这 ${held.length} 条都被标为需要人工确认：\n`
+                + held.map((item) => `  ${item.id} → ${item.label}：${(item.review ?? []).join("；")}`).join("\n")
+                + "\n核对过要照发就带 includeReview: true。";
+            }
 
             const cap = Math.max(1, Math.min(50, Number(args?.maxPerRun) || 10));
-            const batch = chosen.slice(0, cap);
+            // Items the plan flagged for a human are held back by default: a greeting addressed to a headline is the
+            // one mistake that cannot be taken back once it sits in someone inbox.
+            const includeReview = args?.includeReview === true;
+            const held = includeReview ? [] : chosen.filter((item) => (item.review ?? []).length);
+            const eligible = includeReview ? chosen : chosen.filter((item) => !(item.review ?? []).length);
+            const batch = eligible.slice(0, cap);
             const shipped = new Set(batch.map((item) => String(item.id)));
             const delay = Math.max(0, Number(args?.delayMs) || (plan.channel === "email" ? 5000 : plan.channel === "wechat" ? 3000 : 2000));
 

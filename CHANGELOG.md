@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.14.0
+
+- **The plan greeted a recipient with "您好 Lounge garden furniture directly from the designer，".** A page headline is
+  not a company name, and the first line of a cold email is where a person decides whether it was written for them.
+  When the title reads like a sentence (>= 7 words, or a slogan's punctuation), the name comes from the domain instead:
+  `april-furniture.com` → "April Furniture".
+- **A Danish webshop stayed in a German plan** because the phone table only covered the nine markets the collector
+  knew, so `0045` read as "unknown market". Twenty countries now, longest prefix first, and any *known* country that
+  is not the target is a hard mismatch (`strictMarket`). Also fixed a real bug found on the way: the leading `00`
+  of an international prefix was never stripped, so `0045…` matched nothing at all.
+- **Some messages should not go out without a human looking.** The plan now flags the shapes that read as automated -
+  a greeting addressed to a headline, a first email to `info@`, a company whose role is still unclear, a website
+  missing - and `outreach_send` **holds those back by default** (`includeReview: true` to override). A score says
+  "worth contacting"; this says "read this one before you do".
+- 49 suites / 781 cases.
 ## 1.13.1
 
 - **`market` only scored leads; it never constrained the search.** A run for `de` returned a US direct-to-consumer
