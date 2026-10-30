@@ -2,7 +2,7 @@
   "name": "dsh-wechat-media-vscode",
   "displayName": "DSH Bridge",
   "description": "Ask DeepSeek Harness from VS Code: a chat panel, commands and a status bar, through dsh-wechat-media.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "wjh-ux",
   "license": "MIT",
   "engines": {
@@ -17,6 +17,8 @@
       { "command": "dsh.askSelection", "title": "DSH: 用选中内容提问" },
       { "command": "dsh.project", "title": "DSH: 读取当前项目" },
       { "command": "dsh.showStatus", "title": "DSH: 显示连接状态" },
+      { "command": "dsh.build", "title": "DSH: 编译当前 Keil 工程" },
+      { "command": "dsh.flash", "title": "DSH: 烧录到板子" },
       { "command": "dsh.openChat", "title": "DSH: 打开聊天面板" }
     ],
     "viewsContainers": {

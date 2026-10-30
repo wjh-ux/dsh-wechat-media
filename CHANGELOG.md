@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.16.8
+
+- **The VS Code panel was unusable in the sidebar it lives in.** A textarea, `项目`, `＋文件` and `发送` shared one row in
+  a ~300px view, which left the input about 90px wide - the placeholder was cut mid-sentence in the screenshot that
+  reported it. The panel is now a full-height column: the log scrolls, the composer is pinned, the input has its own row
+  and grows, Enter sends / Shift+Enter breaks the line, and the buttons sit underneath.
+- **编译 and 烧录 are in the panel.** Both call a new loopback route `/dsh-wechat-media/keil-run`, which runs the same
+  `keil_build` the chat runs - one HTTP call, no model turn, no tokens, and the plugin's own gates still apply. There are
+  palette commands for them too (`DSH: 编译当前 Keil 工程`, `DSH: 烧录到板子`). The result lands as a monospace bubble with
+  the errors, the size and the exit code.
+- The footer gained `Keil：<project> · <target>`, clickable, opening `main.c` beside the `.uvprojx` - editing the file you
+  actually change should not require finding it. Extension version 0.6.0 (`dsh-wechat-media-vscode-0.6.0.vsix`).
 ## 1.16.7
 
 - **Every build left a `.build.log` in the project folder, next to `main.c`.** Nobody asked for that file to be there -

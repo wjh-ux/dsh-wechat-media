@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.16.7** · 50 test suites / 807 cases · every capability below has been exercised against a real
+**Current release: v1.16.8** · 50 test suites / 807 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -949,8 +949,20 @@ extension exists.
 
 ### VS Code / 编辑器桥
 
-`vscode-extension/` is a small editor extension - plain CommonJS, no build step - with three ways in: a chat panel in the
-activity bar, `DSH: 提问…` / `DSH: 用选中内容提问`, and a status-bar item showing what the plugin is connected to.
+`vscode-extension/` is a small editor extension - plain CommonJS, no build step - with the panel in the activity bar,
+`DSH: 提问…` / `DSH: 用选中内容提问`, `DSH: 编译当前 Keil 工程` / `DSH: 烧录到板子`, and a status-bar item.
+
+**The panel is laid out for a sidebar.** It is ~300px wide and often short, and the first version put a textarea, two
+attach buttons and Send on one line - which left the input about 90px wide and unreadable. Now the log takes every pixel
+that is left and scrolls, the composer is pinned to the bottom, the input has its own row and grows up to 40% of the
+window height, Enter sends (Shift+Enter breaks the line), and the buttons sit underneath: `项目` `＋文件` `编译` `烧录`
+… `发送`. The footer shows 可写, the project, and a clickable `Keil：<project> · <target>` chip that opens `main.c` next
+to the `.uvprojx` - "edit" starts with getting to the file you actually change.
+
+**编译 / 烧录 are one HTTP call, not a model turn.** Both post to `/dsh-wechat-media/keil-run`, which runs the same
+`keil_build` the chat uses - so pressing 编译 spends no tokens, and the plugin's gates still decide (`/keil on`,
+`/serial on`). An STC project is flashed by `stcgal` (see above); the result appears as a monospace bubble with the
+exit code, the file/line errors, and the size of what was built.
 
 It talks to three loopback routes: `/dsh-vscode/status`, `/dsh-vscode/ask` and `/dsh-vscode/stream`. All of them are a
 **real agent turn** - the same `ensureAgent` + collector path a chat uses - so the editor gets the same model, tools and
@@ -967,7 +979,7 @@ Verified end to end: "新建 note.txt" created a 31-byte UTF-8 file in the open 
 was refused by the sandbox (`[sandbox: file access denied under read-only mode]`) and the file was left untouched.
 
 The endpoint is discovered from `gui-port.json` in the plugin's state directory, because the GUI port changes on every
-DSH restart. Install: Extensions → `...` → **Install from VSIX** (`dsh-wechat-media-vscode-0.5.0.vsix` in this repo), or
+DSH restart. Install: Extensions → `...` → **Install from VSIX** (`dsh-wechat-media-vscode-0.6.0.vsix` in this repo), or
 `code --install-extension vscode-extension/`. The extension's own version is what VS Code uses to decide whether to
 replace it - a frozen version makes an install a no-op that still prints "successfully installed".
 

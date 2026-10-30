@@ -403,6 +403,19 @@ class ChatView {
         text: cwd ? `项目：${name}（${writeEnabled ? "可改" : "只读"}）` : "没有打开文件夹（只读）",
       });
       webviewView.webview.postMessage({ type: "write-state", value: writeEnabled });
+      // Which project the Compile/Flash buttons will act on - the panel should not make a person guess.
+      keilState()
+        .then((state) => {
+          webviewView.webview.postMessage({
+            type: "keil-state",
+            project: String(state?.project ?? ""),
+            target: String(state?.target ?? ""),
+            uv4: Boolean(state?.uv4),
+          });
+        })
+        .catch(() => {
+          webviewView.webview.postMessage({ type: "keil-state", project: "", target: "", uv4: false });
+        });
     };
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message?.type === "pick") {
@@ -419,6 +432,42 @@ class ChatView {
       }
       if (message?.type === "ready") {
         announce();
+        return;
+      }
+      if (message?.type === "keil") {
+        // The buttons call the plugin directly: one HTTP call, no model turn, and the plugin's own gates decide.
+        const action = String(message.action ?? "build");
+        const label = action === "flash" ? "烧录" : "编译";
+        try {
+          const result = await runKeil(action);
+          webviewView.webview.postMessage({ type: "keil-result", ok: Boolean(result?.ok), label, text: String(result?.text ?? "") });
+        } catch (error) {
+          webviewView.webview.postMessage({ type: "keil-result", ok: false, label, text: String(error?.message ?? error) });
+        }
+        return;
+      }
+      if (message?.type === "open-project") {
+        // "编辑" starts with getting to the file people actually change: main.c beside the .uvprojx, else the project.
+        try {
+          const state = await keilState();
+          const project = String(state?.project ?? "").trim();
+          if (!project) {
+            vscode.window.showInformationMessage("还没设置 Keil 工程：在聊天里用 /keil project <路径>，或面板里点浏览");
+            return;
+          }
+          const dir = project.replace(/[\\/][^\\/]+$/, "");
+          const main = vscode.Uri.file(dir + "\\main.c");
+          let target = vscode.Uri.file(project);
+          try {
+            await vscode.workspace.fs.stat(main);
+            target = main;
+          } catch {
+            // no main.c beside it: the project file itself is still worth opening
+          }
+          await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target));
+        } catch (error) {
+          vscode.window.showErrorMessage("打开工程失败：" + String(error?.message ?? error));
+        }
         return;
       }
       if (message?.type === "toggle-write") {
@@ -449,50 +498,102 @@ class ChatView {
   }
 }
 
-/** The panel's HTML. Inline by design: one file to read, nothing to load from disk. */
+/**
+ * Compile or flash the remembered Keil project through the same tool the chat calls.
+ *
+ * No model turn: a button that says "编译" should compile. The plugin's own gates still decide (`/keil on`,
+ * `/serial on`), so this cannot arm anything the person has not armed.
+ */
+async function runKeil(action) {
+  return request("POST", "/dsh-wechat-media/keil-run", { action }, { timeoutMs: 900000 });
+}
+
+/** What the panel needs to draw its Keil row: the project, its targets, and whether UV4 was found. */
+async function keilState() {
+  return request("GET", "/dsh-wechat-media/keil", undefined, { timeoutMs: 15000 });
+}
+
+/**
+ * The panel's HTML. Inline by design: one file to read, nothing to load from disk.
+ *
+ * Laid out for a *sidebar*, which is where it lives: 300px wide, and often short. So the log takes every pixel that is
+ * left and scrolls, the composer is pinned to the bottom, and the input gets its own row - putting a textarea, two
+ * attach buttons and Send on one line is what made the first version unreadable at that width.
+ */
 function chatHtml() {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <style>
-  body { font: 13px/1.5 var(--vscode-font-family); color: var(--vscode-foreground); margin: 0; padding: 8px; }
-  #log { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.5 var(--vscode-font-family); color: var(--vscode-foreground);
+    margin: 0; display: flex; flex-direction: column; overflow: hidden;
+  }
+  #log { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  #log:empty::before {
+    content: "问什么都可以。Ctrl+Enter 或 Enter 发送，Shift+Enter 换行，@文件 附上内容。";
+    opacity: .55; font-size: 12px;
+  }
   .msg { padding: 6px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
   .me { background: var(--vscode-input-background); }
   .dsh { background: var(--vscode-editorWidget-background); border-left: 2px solid var(--vscode-focusBorder); }
   .dsh.streaming::after { content: "▍"; opacity: .5; animation: blink 1s steps(2, start) infinite; }
   @keyframes blink { to { visibility: hidden; } }
+  .tool { font: 11.5px/1.45 var(--vscode-editor-font-family, monospace); background: var(--vscode-textCodeBlock-background); border-left: 2px solid var(--vscode-charts-blue, #3794ff); max-height: 45vh; overflow: auto; }
+  .tool.bad { border-left-color: var(--vscode-errorForeground); }
+  .tool .tool-head { font-family: var(--vscode-font-family); opacity: .8; margin-bottom: 4px; }
   .meta-line { opacity: .7; font-size: 11px; font-style: italic; }
   .err { color: var(--vscode-errorForeground); }
   .meta { opacity: .6; font-size: 11px; margin-top: 2px; }
-  #row { display: flex; gap: 6px; align-items: flex-end; }
-  textarea { flex: 1; min-height: 54px; resize: vertical; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 6px; font: inherit; }
-  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
-  button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  #composer { flex: 0 0 auto; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.25)); padding: 8px; }
+  textarea {
+    display: block; width: 100%; box-sizing: border-box; min-height: 58px; max-height: 40vh; resize: vertical;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 6px; font: inherit;
+  }
+  #bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  #bar .gap { flex: 1 1 auto; }
+  button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit; }
+  button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   button:disabled { opacity: .5; cursor: default; }
-  #foot { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 11px; opacity: .85; }
-  #foot label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
-  #where { opacity: .7; }
+  #foot { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 11px; opacity: .85; min-width: 0; }
+  #foot label { display: flex; gap: 4px; align-items: center; cursor: pointer; white-space: nowrap; }
+  #where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #keil { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  #keil.none { opacity: .6; }
 </style>
 </head>
 <body>
   <div id="log"></div>
-  <div id="row">
-    <textarea id="input" placeholder="问 DSH…（Ctrl+Enter 发送，@文件 附上文件内容）"></textarea>
-    <button id="project" class="secondary" title="附上当前项目（插入 @项目）">项目</button>
-    <button id="file" class="secondary" title="附上文件（插入 @路径）">＋文件</button>
-    <button id="send">发送</button>
-  </div>
-  <div id="foot">
-    <label title="允许 DSH 修改这个项目里的文件"><input type="checkbox" id="write" checked> 可写</label>
-    <span id="where"></span>
+  <div id="composer">
+    <textarea id="input" placeholder="问 DSH…"></textarea>
+    <div id="bar">
+      <button id="project" title="附上当前项目（插入 @项目）">项目</button>
+      <button id="file" title="附上文件（插入 @路径）">＋文件</button>
+      <button id="build" title="编译当前 Keil 工程（与聊天里的 keil_build 同一个工具）">编译</button>
+      <button id="flash" title="编译产物烧到板子（STC 自动走 stcgal）">烧录</button>
+      <span class="gap"></span>
+      <button id="send" class="primary">发送</button>
+    </div>
+    <div id="foot">
+      <label title="允许 DSH 修改这个项目里的文件"><input type="checkbox" id="write" checked> 可写</label>
+      <span id="where"></span>
+      <span id="keil" class="none" title="点击打开工程文件">Keil：读取中…</span>
+    </div>
   </div>
 <script>
   const vscode = acquireVsCodeApi();
   const log = document.getElementById("log");
   const input = document.getElementById("input");
   const send = document.getElementById("send");
+  const buildBtn = document.getElementById("build");
+  const flashBtn = document.getElementById("flash");
+  const keilChip = document.getElementById("keil");
+
+  function atBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 40; }
+  function scrollDown(force) { if (force || atBottom()) log.scrollTop = log.scrollHeight; }
 
   function add(kind, text, meta) {
     const el = document.createElement("div");
@@ -505,7 +606,31 @@ function chatHtml() {
       el.appendChild(m);
     }
     log.appendChild(el);
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollDown(true);
+    return el;
+  }
+
+  /** A tool result: monospace, scrollable, and it says which command produced it. */
+  function addTool(head, text, ok) {
+    const el = document.createElement("div");
+    el.className = "msg tool" + (ok ? "" : " bad");
+    const h = document.createElement("div");
+    h.className = "tool-head";
+    h.textContent = head;
+    const body = document.createElement("div");
+    body.textContent = text || "（没有输出）";
+    el.appendChild(h);
+    el.appendChild(body);
+    log.appendChild(el);
+    scrollDown(true);
+    return el;
+  }
+
+  function setRunning(on, which) {
+    for (const [btn, label] of [[buildBtn, "编译"], [flashBtn, "烧录"]]) {
+      btn.disabled = on;
+      btn.textContent = on && btn === which ? "进行中…" : label;
+    }
   }
 
   function submit() {
@@ -513,12 +638,34 @@ function chatHtml() {
     if (!text) return;
     add("me", text);
     input.value = "";
+    input.style.height = "";
     send.disabled = true;
-    add("dsh streaming", "", "已发送到 DSH");
+    add("dsh streaming", "");
     vscode.postMessage({ type: "ask", text });
   }
 
+  function grow() {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, Math.round(window.innerHeight * 0.4)) + "px";
+  }
+
   send.addEventListener("click", submit);
+  input.addEventListener("input", grow);
+  input.addEventListener("keydown", (event) => {
+    // Enter sends, Shift+Enter breaks the line: this is a chat, and the panel is too narrow to hunt for Ctrl+Enter.
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
+  });
+  buildBtn.addEventListener("click", () => {
+    setRunning(true, buildBtn);
+    addTool("编译中…", "正在调用 keil_build(action=build)", true);
+    vscode.postMessage({ type: "keil", action: "build" });
+  });
+  flashBtn.addEventListener("click", () => {
+    setRunning(true, flashBtn);
+    addTool("烧录中…", "正在调用 keil_build(action=flash)", true);
+    vscode.postMessage({ type: "keil", action: "flash" });
+  });
+  keilChip.addEventListener("click", () => vscode.postMessage({ type: "open-project" }));
   vscode.postMessage({ type: "ready" });
   document.getElementById("file").addEventListener("click", () => vscode.postMessage({ type: "pick" }));
   document.getElementById("write").addEventListener("change", (event) => {
@@ -527,9 +674,7 @@ function chatHtml() {
   document.getElementById("project").addEventListener("click", () => {
     input.value = (input.value ? input.value.trimEnd() + " " : "") + "@项目 ";
     input.focus();
-  });
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
+    grow();
   });
 
   window.addEventListener("message", (event) => {
@@ -539,28 +684,43 @@ function chatHtml() {
       return;
     }
     if (message.type === "where") {
-      document.getElementById("where").textContent = message.text || "";
+      const where = document.getElementById("where");
+      where.textContent = message.text || "";
+      where.title = message.text || "";
+      return;
+    }
+    if (message.type === "keil-state") {
+      const p = message.project || "";
+      const short = p ? p.split(/[\\\\/]/).pop() : "";
+      keilChip.textContent = p
+        ? "Keil：" + short + (message.target ? " · " + message.target : "") + (message.uv4 ? "" : "（未找到 UV4）")
+        : "Keil：未设置工程";
+      keilChip.className = p ? "" : "none";
+      keilChip.title = p ? p + "\\n点击打开工程" : "还没设置 Keil 工程（面板或 /keil project）";
+      return;
+    }
+    if (message.type === "keil-result") {
+      setRunning(false, null);
+      addTool(message.ok ? "✅ " + message.label : "❌ " + message.label, message.text, Boolean(message.ok));
       return;
     }
     if (message.type === "picked") {
-      // The picker hands back workspace-relative paths, which is exactly the "@path" form the expansion understands.
-      const refs = (message.paths || []).map((p) => (/\s/.test(p) ? '@"' + p + '"' : "@" + p)).join(" ");
+      const refs = (message.paths || []).map((p) => (/\\s/.test(p) ? '@"' + p + '"' : "@" + p)).join(" ");
       if (refs) input.value = (input.value ? input.value.trimEnd() + " " : "") + refs + " ";
       input.focus();
+      grow();
+      return;
+    }
+    if (message.type === "delta") {
+      const live = log.querySelector(".dsh.streaming");
+      const bubble = live ?? add("dsh streaming", "");
+      bubble.className = "msg dsh streaming";
+      bubble.textContent = message.text;
+      scrollDown(false);
       return;
     }
     const live = log.querySelector(".dsh.streaming");
-    if (message.type === "delta") {
-      // The bubble exists from the first chunk and grows: waiting for the whole answer is what this replaces.
-      if (!live) add("dsh streaming", "");
-      const bubble = log.querySelector(".dsh.streaming") ?? [...log.querySelectorAll(".dsh")].pop();
-      if (bubble) { bubble.className = "msg dsh streaming"; bubble.textContent = message.text; }
-      window.scrollTo(0, document.body.scrollHeight);
-      return;
-    }
     if (live) live.remove();
-    const pending = [...log.querySelectorAll(".dsh")].pop();
-    if (pending && (message.type === "answer" || message.type === "error")) pending.remove();
     if (message.type === "answer") {
       add("dsh", message.text || "（空回答）");
       if (Array.isArray(message.attached) && message.attached.length) {
@@ -578,7 +738,6 @@ function chatHtml() {
 </body>
 </html>`;
 }
-
 /** Show an answer in the output channel - the keyboard path has no panel to draw in. */
 function showAnswer(question, answer) {
   channel.appendLine(`> ${question}`);
@@ -598,6 +757,27 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("dsh.chat", new ChatView(), { webviewOptions: { retainContextWhenHidden: true } }),
   );
+
+  // The same two actions the panel's buttons send, on the palette: a person who prefers the keyboard should not have to
+  // click. Both go through the plugin, which owns the gates.
+  const runKeilCommand = (action, label) => async () => {
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `DSH: ${label}…` }, async () => {
+      try {
+        const result = await runKeil(action);
+        const text = String(result?.text ?? "");
+        if (result?.ok) vscode.window.showInformationMessage(`DSH ${label}：${text.split("\n")[0]}`);
+        else {
+          channel.appendLine(text);
+          channel.show(true);
+          vscode.window.showWarningMessage(`DSH ${label} 未通过，详见输出面板`);
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(`DSH ${label} 失败：${String(error?.message ?? error)}`);
+      }
+    });
+  };
+  context.subscriptions.push(vscode.commands.registerCommand("dsh.build", runKeilCommand("build", "编译")));
+  context.subscriptions.push(vscode.commands.registerCommand("dsh.flash", runKeilCommand("flash", "烧录")));
 
   context.subscriptions.push(
     vscode.commands.registerCommand("dsh.ask", async () => {

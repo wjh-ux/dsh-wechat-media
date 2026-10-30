@@ -10741,6 +10741,28 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       },
       {
+        // The VS Code panel's Compile / Flash buttons. Same tool the chat calls, but without a model turn: pressing a
+        // button should compile, not spend tokens asking a model to compile. The gates (`/keil on`, `/serial on`) still
+        // apply, because they live in the tool.
+        kind: "exact",
+        path: "/dsh-wechat-media/keil-run",
+        handler: async (req, res) => {
+          if (!isLoopback(req)) return json(res, 403, { error: "loopback only" });
+          if (req.method !== "POST") return json(res, 405, { error: "POST only" });
+          const body = await readArgs(req);
+          const action = String(body.action ?? "build").trim() || "build";
+          try {
+            const requestedPort = String(body.port ?? "").trim();
+            const text = String(await keilBuildTool.execute(requestedPort ? { action, port: requestedPort } : { action }));
+            // The tool answers in prose; the first character is its verdict, which is the one thing a button needs.
+            const ok = /^[✅⚡🧹]/u.test(text);
+            json(res, 200, { ok, action, text });
+          } catch (error) {
+            json(res, 400, { ok: false, action, text: String(error?.message ?? error) });
+          }
+        },
+      },
+      {
         // The native file dialog, because a page cannot learn an absolute path: showOpenFilePicker hands back a
         // handle whose path is hidden. Same reason the export folder has a Browse button.
         kind: "exact",
