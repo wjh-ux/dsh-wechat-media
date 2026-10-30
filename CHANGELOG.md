@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.2
+
+- **The switch existed everywhere except where people look for switches.** `/keil on` worked and `/prefs` worked after
+  1.15.1, but the card in the Plugins panel - where every other capability has its checkbox, right next to serial -
+  said nothing about Keil, so "can it build?" was unanswerable without reading the README. The card now has the
+  checkbox plus the **Project** and **Target** fields, all through the same `keil` preference block: a field is a draft
+  until Saved, so a half-typed path never lands in prefs.
 ## 1.15.1
 
 - **`/keil on` was the only way to arm the feature, and the panel and `/prefs` route could not save the switch.** Every

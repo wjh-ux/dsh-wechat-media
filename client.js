@@ -210,6 +210,10 @@ function emailDraftRef() {
           sshRemove: "Remove",
           sshPlaceholder: "name user@host[:port] [identity file]",
           serial: "Let the agent flash boards and read serial output (off by default)",
+          keil: "Let the agent build Keil uVision5 projects with the UV4 already installed (off by default)",
+          keilProject: "Project",
+          keilProjectHint: ".uvprojx path; empty = nothing remembered",
+          keilTarget: "Target",
           qqTitle: "QQ bot (QQ 开放平台)",
           qqAppId: "appId",
           qqSecret: "clientSecret",
@@ -390,6 +394,10 @@ function emailDraftRef() {
           sshRemove: "删除",
           sshPlaceholder: "名字 user@host[:port] [identity 文件]",
           serial: "允许 agent 烧录开发板并读取串口输出（默认关）",
+          keil: "允许 agent 用本机已装的 UV4 编译 Keil 工程（默认关：flash 会写芯片）",
+          keilProject: "工程",
+          keilProjectHint: ".uvprojx 路径；留空表示不记",
+          keilTarget: "Target",
           qqTitle: "QQ 机器人（QQ 开放平台）",
           qqAppId: "appId",
           qqSecret: "clientSecret",
@@ -549,6 +557,8 @@ function emailDraftRef() {
         // normal path; this is for "I am already looking at the list".
         // undefined = "not edited yet", so the field follows /state until somebody types in it.
         const [officeDirInput, setOfficeDirInput] = react.useState(undefined);
+        // Keil 的工程与 Target 是「草稿」：输入框里改了但没点保存，不应该顺手写进 prefs。
+        const [keilDraft, setKeilDraft] = react.useState({});
         // The SSH host draft: "name user@host[:port] [identity]". Empty until somebody types one.
         const [sshDraft, setSshDraft] = react.useState("");
         // QQ credentials as typed; undefined = follow /state until edited (the secret never comes back from the host).
@@ -1020,6 +1030,24 @@ function emailDraftRef() {
         async function setSshEnabled(enabled) {
           const current = snapshot?.prefs?.ssh ?? { hosts: [] };
           await saveSsh({ enabled, hosts: Array.isArray(current.hosts) ? current.hosts : [] });
+        }
+
+        /**
+         * The Keil block: the switch `/keil on` writes, plus the project and target it remembers. The build itself
+         * runs on the host (`keil_build` with UV4) - this card only decides whether it is allowed to, and on what.
+         */
+        async function setKeil(patch) {
+          setBusy(true);
+          try {
+            const current = snapshot?.prefs?.keil ?? {};
+            await api("/prefs", { method: "POST", body: { keil: { ...current, ...patch } } });
+            setKeilDraft({});
+            await refresh();
+          } catch (problem) {
+            setError(String(problem?.message ?? problem));
+          } finally {
+            setBusy(false);
+          }
         }
 
         /** The serial switch: the same preference `/serial on` writes. Off by default - flashing writes a board. */
@@ -1866,6 +1894,48 @@ function emailDraftRef() {
                 onChange: (event) => setSerialEnabled(event.target.checked),
               }),
               " " + t("serial", "Let the agent flash boards and read serial output (off by default)"),
+            ]),
+            // Keil: the switch `/keil on` writes, plus the project and the target it remembers. The build itself runs
+            // on the host (`keil_build` drives UV4), so nothing here fetches a target list - the card says what may be
+            // touched, and the host answers with the truth about whether UV4 was found.
+            h("label", { key: "kl", className: "dswxMeta" }, [
+              h("input", {
+                key: "c",
+                type: "checkbox",
+                checked: Boolean(snapshot?.prefs?.keil?.enabled),
+                disabled: busy,
+                onChange: (event) => setKeil({ enabled: event.target.checked }),
+              }),
+              " " + t("keil", "Let the agent build Keil uVision5 projects with the UV4 already installed (off by default)"),
+            ]),
+            h("div", { key: "klp", className: "dswxRow" }, [
+              h("span", { key: "k", className: "dswxName" }, t("keilProject", "Project")),
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("keilProjectHint", ".uvprojx path; empty = nothing remembered"),
+                value: keilDraft.project ?? snapshot?.prefs?.keil?.project ?? "",
+                disabled: busy,
+                onChange: (event) => setKeilDraft({ ...keilDraft, project: event.target.value }),
+              }),
+              h("input", {
+                key: "t",
+                className: "dswxInput",
+                placeholder: t("keilTarget", "Target"),
+                value: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
+                disabled: busy,
+                onChange: (event) => setKeilDraft({ ...keilDraft, target: event.target.value }),
+              }),
+              h("button", {
+                key: "s",
+                type: "button",
+                className: "dswxBtn",
+                disabled: busy,
+                onClick: () => setKeil({
+                  project: keilDraft.project ?? snapshot?.prefs?.keil?.project ?? "",
+                  target: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
+                }),
+              }, t("save", "Save")),
             ]),
             ...(Array.isArray(snapshot?.prefs?.ssh?.hosts) ? snapshot.prefs.ssh.hosts : []).map((host) =>
               h("div", { key: `sshhost-${host.name}`, className: "dswxMeta" }, [
