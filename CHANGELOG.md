@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.1
+
+- **Two kinds of junk still reached the list.** A run for German outdoor furniture returned "Top Global B2B
+  Marketplace" (score 10) and "Global Import Export Trade Data Provider of 100+ Countries" (score 0). Both are
+  directories, and host blocklists lose that fight because aggregators rotate domains - but the *title* says exactly
+  what the page is, so it is now filtered on that ("marketplace", "b2b", "trade data", "directory", "黄页", "名录").
+- **A lead with no contact and no role evidence is not worth a row**, so there is a score floor (`minScore`, default
+  20, `0` disables). Measured after both changes: 15 seconds, 2 leads, no marketplaces - down from 5 rows of which
+  3 were noise.
+- 48 suites / 763 cases.
 ## 1.11.0
 
 - **A perfect score told you nothing about whether the company buys or sells.** Measured on a live run: a Chinese

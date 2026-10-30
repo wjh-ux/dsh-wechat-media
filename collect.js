@@ -225,6 +225,15 @@ export function contactLinks(links, { max = 3 } = {}) {
  * Weights, not just hits: "we are a manufacturer" is a different statement from the noun "manufacturer" appearing in a
  * footer, and "import and export" is a trader's phrase rather than a maker's.
  */
+/**
+ * Titles that name a directory, a marketplace or a data vendor rather than a company.
+ *
+ * Host blocklists lose this fight: the same aggregator rotates domains, and "Global Import Export Trade Data Provider
+ * of 100+ Countries" arrived as a lead at score 0 - it was filtered by score, not by knowing what it was. The title is
+ * the honest signal, because that is exactly what the page says about itself.
+ */
+export const JUNK_TITLE = /marketplace|b2b\b|trade data|import export data|customs data|directory|yellow ?pages|suppliers? (?:list|directory|network)|business directory|company list|黄页|名录|数据平台|企业库/i;
+
 const ROLE_SIGNALS = {
   buyer: [
     [/we (?:are|r) (?:an? )?(?:importer|distributor|wholesaler|retailer)/i, 4],
@@ -395,6 +404,7 @@ export async function collectLeads({
   stepTimeoutMs = 12000,
   maxConsecutiveTimeouts = 3,
   buyerOnly = false,
+  minScore = 20,
 } = {}) {
   const started = Date.now();
   const outOfTime = () => Date.now() - started > deadlineMs;
@@ -463,6 +473,7 @@ export async function collectLeads({
         const host = hostOf(row?.url);
         if (!host) continue;
         if (isDirectoryHost(host)) { skipped.push(host); continue; }
+        if (row?.title && JUNK_TITLE.test(String(row.title))) { skipped.push(`marketplace:${host}`); continue; }
         if (seenHosts.has(host)) continue;
         seenHosts.add(host);
         candidates.push({ url: `https://${host}`, host, title: row?.title ?? "", snippet: row?.snippet ?? "", query: term });
@@ -521,13 +532,17 @@ export async function collectLeads({
       onProgress({ stage: "skip-seller", url: candidate.url, evidence: roleEvidence });
       continue;
     }
+    if (minScore && score < minScore) {
+      onProgress({ stage: "drop-low", url: candidate.url, score });
+      continue;
+    }
     const result = mergeLead(current, lead);
     current = result.store;
     if (result.added) leads.push(lead); else merged += 1;
   }
 
   if (!stopped && bridgeDead) stopped = "bridge";
-  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, buyerOnly, skipped: [...new Set(skipped)].slice(0, 20), store: current };
+  return { goal: wanted, market, queries: terms, searches, candidates: candidates.length, leads, merged, stopped, elapsedMs: Date.now() - started, buyerOnly, minScore, skipped: [...new Set(skipped)].slice(0, 20), store: current };
 }
 
 /**

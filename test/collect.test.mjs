@@ -10,6 +10,7 @@ import {
   extractPhones,
   hostOf,
   isDirectoryHost,
+  JUNK_TITLE,
   leadQueries,
   mergeLead,
   normalizeCompany,
@@ -173,11 +174,32 @@ await testAsync("buyerOnly drops the sellers instead of shipping them to a sales
   const visit = async (url) => url.includes("maker")
     ? { url, title: "Maker", text: "We are a manufacturer with our own factory. OEM/ODM, export worldwide.", links: [] }
     : { url, title: "Buyer GmbH", text: "Wir sind Importeur und Großhandel. kontakt@buyer.de", links: [] };
-  const all = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1 });
-  const onlyBuyers = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, buyerOnly: true, store: [] });
+  const all = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, minScore: 0 });
+  const onlyBuyers = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, buyerOnly: true, minScore: 0, store: [] });
   assert.equal(all.leads.length, 2);
   assert.equal(onlyBuyers.leads.length, 1);
   assert.match(onlyBuyers.leads[0].url, /buyer\.de/);
+});
+test("a page that calls itself a marketplace or a data vendor is not a company", () => {
+  for (const title of [
+    "Top Global B2B Marketplace",
+    "Global Import Export Trade Data Provider of 100+ Countries",
+    "Companies directory - yellow pages",
+    "企业黄页 名录",
+  ]) {
+    assert.ok(JUNK_TITLE.test(title), title);
+  }
+  assert.ok(!JUNK_TITLE.test("SIT Outdoor - distributor of outdoor furniture"), "a real company title must survive");
+});
+
+await testAsync("leads below the floor never reach the store", async () => {
+  const search = async () => [{ title: "Thin Page", url: "https://thin.example.co" }, { title: "Real GmbH", url: "https://real.de" }];
+  const visit = async (url) => url.includes("thin")
+    ? { url, title: "Thin Page", text: "nothing useful here", links: [] }
+    : { url, title: "Real GmbH", text: "Wir sind Importeur für Gartenmöbel. info@real.de +49 30 1234567", links: [{ href: "https://real.de/kontakt", text: "Kontakt" }] };
+  const result = await collectLeads({ goal: "garden furniture", market: "de", limit: 5, search, visit, queries: ["q"], maxSearches: 1, minScore: 20 });
+  assert.equal(result.leads.length, 1);
+  assert.match(result.leads[0].url, /real\.de/);
 });
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
 if (failed.length) process.exit(1);
