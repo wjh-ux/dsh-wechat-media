@@ -1883,6 +1883,28 @@ function emailDraftRef() {
               }),
               " " + t("ssh", "Let the agent run commands on your SSH hosts (key-based only)"),
             ]),
+            ...(Array.isArray(snapshot?.prefs?.ssh?.hosts) ? snapshot.prefs.ssh.hosts : []).map((host) =>
+              h("div", { key: `sshhost-${host.name}`, className: "dswxMeta" }, [
+                `  · ${host.name} → ${host.user ? host.user + "@" : ""}${host.host}:${host.port} `,
+                h("button", {
+                  key: "rm",
+                  type: "button",
+                  className: "dswxBtn",
+                  disabled: busy,
+                  onClick: () => removeSshHost(host.name),
+                }, t("sshRemove", "Remove")),
+              ])),
+            h("div", { key: "sshadd", className: "dswxRow" }, [
+              h("input", {
+                key: "i",
+                className: "dswxInput",
+                placeholder: t("sshPlaceholder", "name user@host[:port] [identity file]"),
+                value: sshDraft,
+                disabled: busy,
+                onChange: (event) => setSshDraft(event.target.value),
+              }),
+              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addSshHost }, t("sshAdd", "Add host")),
+            ]),
             // Serial: flashing writes a board's flash, so it is off by default like desktop control. The port list and
             // the toolchain discovery live on the host (`serial_ports`), not here: the card is not the flasher.
             h("label", { key: "se", className: "dswxMeta" }, [
@@ -1913,6 +1935,7 @@ function emailDraftRef() {
               h("input", {
                 key: "i",
                 className: "dswxInput",
+                style: { flex: "4 1 22em" },
                 placeholder: t("keilProjectHint", ".uvprojx path; empty = nothing remembered"),
                 value: keilDraft.project ?? snapshot?.prefs?.keil?.project ?? "",
                 disabled: busy,
@@ -1921,6 +1944,7 @@ function emailDraftRef() {
               h("input", {
                 key: "t",
                 className: "dswxInput",
+                style: { flex: "1 1 7em" },
                 placeholder: t("keilTarget", "Target"),
                 value: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
                 disabled: busy,
@@ -1936,28 +1960,6 @@ function emailDraftRef() {
                   target: keilDraft.target ?? snapshot?.prefs?.keil?.target ?? "",
                 }),
               }, t("save", "Save")),
-            ]),
-            ...(Array.isArray(snapshot?.prefs?.ssh?.hosts) ? snapshot.prefs.ssh.hosts : []).map((host) =>
-              h("div", { key: `sshhost-${host.name}`, className: "dswxMeta" }, [
-                `  · ${host.name} → ${host.user ? host.user + "@" : ""}${host.host}:${host.port} `,
-                h("button", {
-                  key: "rm",
-                  type: "button",
-                  className: "dswxBtn",
-                  disabled: busy,
-                  onClick: () => removeSshHost(host.name),
-                }, t("sshRemove", "Remove")),
-              ])),
-            h("div", { key: "sshadd", className: "dswxRow" }, [
-              h("input", {
-                key: "i",
-                className: "dswxInput",
-                placeholder: t("sshPlaceholder", "name user@host[:port] [identity file]"),
-                value: sshDraft,
-                disabled: busy,
-                onChange: (event) => setSshDraft(event.target.value),
-              }),
-              h("button", { key: "b", type: "button", className: "dswxBtn", disabled: busy, onClick: addSshHost }, t("sshAdd", "Add host")),
             ]),
             ]),
           ]),

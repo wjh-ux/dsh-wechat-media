@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.3
+
+- **The card worked but read badly.** The Keil project field shared the row with the Target field, so an absolute path
+  showed as `C:\Users\Administrator\Documents\deepseek-har` - the one thing that must be readable at a glance was the
+  thing truncated. The project box now takes four shares of the row and the Target box one, because a path is long and
+  a target name is not. And the SSH host list had been pushed below the serial and Keil switches by the 1.15.2 insert,
+  separating "add host" from the switch that owns it; it sits back under its own switch.
 ## 1.15.2
 
 - **The switch existed everywhere except where people look for switches.** `/keil on` worked and `/prefs` worked after
