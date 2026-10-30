@@ -939,6 +939,29 @@ value changes, Enter, and a debounced scroll (one step per pause, not one per pi
 then `data-*`, then a short `tag:nth-of-type` path - never a generated class name, which changes between two loads.
 
 
+## Lead collection / 获客采集
+
+`collect_leads` turns a goal into a scored list instead of a page of results. Give it `goal="户外家具 进口商"`（或
+`outdoor furniture importer`）and a `market`; it searches, opens each company's site **and its contact page**, extracts
+emails / phones / WhatsApp, scores every lead, merges into a local lead store, and writes a CSV on request.
+
+The method is the part worth reading, because each rule exists to kill a specific kind of junk:
+
+| Rule | Why |
+|---|---|
+| A role word is a **recall hint, not proof** | `importer` / `distributor` / `进口商` widen the net; the verdict comes later from the site's own contacts and evidence |
+| Search terms are generated **in the market's language** | `importeur`/`großhandel` for `de`, `importateur` for `fr` - an English-only query finds exporters, not local buyers |
+| **Directories are filtered out by host** | Alibaba, Amazon, LinkedIn, Europages, company registers: high in results, never the company |
+| **Two de-duplication axes** | `ACME GmbH` = `acme gmbh co kg` (name normalised) and `acme.de` = `www.acme.de` (registrable host) |
+| **The contact page is fetched, not just linked** | half the emails on a site live at `/kontakt`, `/impressum`, `/contact` |
+| **Noise is filtered from contacts** | `logo@2x.png`, `name@example.com`, `@wixpress.com` and HTML-entity artefacts all look exactly like a mailbox |
+| **Every score carries its reasons** | a lead at 60 with "has email, no contact page" is actionable; a bare 60 is a mystery nobody can audit |
+
+The lead store lives at `$DSH_HOME/dsh-wechat-media/leads.json` and is merged, not overwritten - running the same goal
+twice adds only what is new. Exports go through the same save rules as `browser_flow`.
+
+Two things it deliberately does **not** do: it never treats a search hit as a qualified buyer, and it stops instead of
+retrying when the engine shows a captcha - burning the address for a few more rows is the worse trade.
 ## Chat commands / 聊天里的命令
 
 A message that starts with `/` is addressed to the bridge, not to the agent - it is answered immediately and

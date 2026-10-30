@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.0
+
+- **The plugin could drive a browser and send messages, but it could not turn "找德国做户外家具的进口商" into a list.**
+  Doing that as a prompt loop works once and then drifts: the same company arrives twice under two spellings, a
+  directory outranks every real company, and "found it" gets confused with "it is a buyer".
+- `collect_leads` now runs the pipeline natively: generated query terms (role words in the market's own language) ->
+  paged search -> directory filtering -> de-duplication on two axes -> homepage **and contact page** -> email / phone /
+  WhatsApp extraction -> a score with the reasons that produced it -> the local lead store plus an optional CSV.
+- The method is the valuable part, and it is deliberately narrow: a role word is a **recall hint, not proof** (the
+  verdict comes from the site itself); a single SERP is dominated by directories so pages are walked until the budget
+  or the hit target; `ACME GmbH`, `acme gmbh co kg` and `www.acme.de` all collapse to one lead; and no lead is
+  ever reported with a bare score.
+- `collect.js` is pure - no browser, no network, no filesystem - and takes the browser as an injected adapter. That is
+  why the whole pipeline is tested against fixtures (10 cases: request building, directory filtering, both de-dup
+  axes, asset-name and template-placeholder rejection, postcode-vs-phone, evidence-weighted scoring, idempotent merge).
+- 48 suites / 756 cases.
 ## 1.8.2
 
 - **An upload from a path outside the CLI's allowlist failed with `unsafe file path`.** lark-cli only accepts a

@@ -8169,6 +8169,163 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         1_500_000,
       );
 
+      // ── Lead collection: search -> de-duplicate -> extract contacts -> score ────────────────────────────
+      //
+      // The pipeline itself lives in collect.js and is pure (query building, de-duplication, extraction, scoring).
+      // This tool is the half that needs a browser: run a real search, open the company sites, hand the snapshots
+      // over. Splitting it that way is what makes the method testable without a live page - the same collector runs
+      // against fixtures in the test suite and against your Edge here.
+
+      const collectTool = browserTool(
+        "collect_leads",
+        "Find prospect companies for a goal and turn them into a scored, de-duplicated list with contacts. Runs real searches in the browser this plugin drives, opens each company's site and its contact page, extracts emails / phones / WhatsApp, and scores every lead with reasons. Merges into the local lead store (dsh-wechat-media/leads.json) so a second run does not re-add what is already there, and writes a CSV on request.",
+        {
+          goal: { type: "string", required: true, description: "What you are looking for, e.g. 户外家具 进口商 or outdoor furniture importer." },
+          market: { type: "string", description: "de / uk / us / fr / es / it / nl / ru / ae, or 德国 / 英国 … - decides which local role words are searched and how a matching domain is scored." },
+          limit: { type: "number", description: "How many companies to keep (default 10, max 50). Each one costs up to two page loads." },
+          sources: { type: "string", description: "search (default). maps is accepted once the Maps source lands." },
+          engine: { type: "string", description: "bing (default) or ddg. Bing carries no captcha for a handful of queries; ddg is the fallback." },
+          queries: { type: "string", description: "Explicit search terms (JSON array or comma separated) instead of the generated ones." },
+          save: { type: "string", description: "Where to write the CSV (same rules as browser_flow save: a path, a folder, or a bare file name)." },
+          reset: { type: "boolean", description: "Ignore the existing lead store and start empty." },
+        },
+        async (args) => {
+          const { live } = await browserEnsure();
+          const browserMod = await import("./browser.js");
+          const collect = await import("./collect.js");
+          const fs = await import("node:fs/promises");
+          const { join } = await import("node:path");
+
+          const goal = String(args?.goal ?? "").trim();
+          if (!goal) return "需要一个目标，例如 goal=\"户外家具 进口商\"。";
+          const sources = String(args?.sources ?? "search").toLowerCase();
+          if (sources.includes("maps")) {
+            return "maps 源还没接上（下一步做）。现在用 sources=search，或先用 browser_maps_places 把地图结果单独采出来。";
+          }
+          const engine = String(args?.engine ?? "bing").toLowerCase() === "ddg" ? "ddg" : "bing";
+          const limit = Math.max(1, Math.min(50, Number(args?.limit) || 10));
+
+          // One file under the plugin's own state root: the lead store belongs to this machine, not to a session.
+          const storePath = join(state.root, "leads.json");
+          let store = [];
+          if (!args?.reset) {
+            try { store = JSON.parse(await fs.readFile(storePath, "utf8")); } catch { store = []; }
+            if (!Array.isArray(store)) store = [];
+          }
+
+          const explicit = (() => {
+            const raw = String(args?.queries ?? "").trim();
+            if (!raw) return [];
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) return parsed.map(String);
+            } catch { /* not JSON: fall through to the comma split */ }
+            return raw.split(/[,，\n]/).map((entry) => entry.trim()).filter(Boolean);
+          })();
+
+          const snapshot = `(() => {
+            const text = (document.body && document.body.innerText ? document.body.innerText : "").slice(0, 20000);
+            const links = [...document.querySelectorAll("a[href]")].slice(0, 400)
+              .map((a) => ({ href: a.href, text: (a.innerText || "").trim().slice(0, 80) }));
+            return { url: location.href, title: document.title || "", text, links };
+          })()`;
+
+          // SERP extraction is engine-agnostic on purpose: take the anchors, keep one per host, drop the ones with no
+          // surrounding text. Search-result CSS classes change every few months; host de-duplication does not.
+          const serpExpression = `(() => {
+            const out = [];
+            const seen = new Set();
+            for (const a of [...document.querySelectorAll("a[href^='http']")]) {
+              let host = "";
+              try { host = new URL(a.href).hostname.toLowerCase().replace(/^www\\./, ""); } catch (_) { continue; }
+              if (!host || seen.has(host)) continue;
+              const box = a.closest("li, .b_algo, .result, article, div");
+              const snippet = ((box && box.innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 300);
+              if (snippet.length < 30) continue;
+              seen.add(host);
+              out.push({ title: (a.innerText || "").trim().slice(0, 120), url: a.href, snippet });
+            }
+            return out.slice(0, 40);
+          })()`;
+
+          const adapter = {
+            async search(query, page) {
+              const url = engine === "ddg"
+                ? `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+                : `https://www.bing.com/search?q=${encodeURIComponent(query)}&first=${page * 10 + 1}`;
+              await browserMod.browserOpen(live.session, url, { waitMs: 25000 });
+              const rows = await browserMod.browserEvaluate(live.session, serpExpression);
+              return Array.isArray(rows) ? rows : [];
+            },
+            async visit(url) {
+              await browserMod.browserOpen(live.session, url, { waitMs: 25000 });
+              const page = await browserMod.browserEvaluate(live.session, snapshot);
+              return page && typeof page === "object" ? page : { url, title: "", text: "", links: [] };
+            },
+          };
+
+          const result = await collect.collectLeads({
+            goal,
+            market: String(args?.market ?? ""),
+            limit,
+            sources: [sources],
+            queries: explicit,
+            search: adapter.search,
+            visit: adapter.visit,
+            store: args?.reset ? [] : store,
+            onProgress: (event) => {
+              if (event.stage === "search") process.stderr.write(`[collect] search ${event.query} p${event.page} -> ${event.results ?? "err"}\n`);
+              if (event.stage === "visit") process.stderr.write(`[collect] visit ${event.url}\n`);
+            },
+          });
+
+          await fs.mkdir(state.root, { recursive: true }).catch(() => {});
+          await fs.writeFile(storePath, `${JSON.stringify(result.store, null, 2)}\n`, "utf8").catch(() => {});
+
+          const rows = result.leads.map((lead) => ({
+            "公司": lead.company,
+            "网址": lead.url,
+            "国家/市场": lead.market,
+            "邮箱": (lead.emails ?? []).join(" "),
+            "电话": (lead.phones ?? []).join(" "),
+            "社媒": (lead.socials ?? []).map((s) => `${s.kind}:${s.url}`).join(" "),
+            "分数": lead.score,
+            "理由": (lead.reasons ?? []).join("；"),
+            "来源查询": lead.query,
+            "抓取时间": lead.at,
+          }));
+
+          const lines = [
+            `采集完成：目标「${goal}」${result.market ? ` · 市场 ${result.market}` : ""}`,
+            `查询 ${result.searches} 次（${result.queries.join(" / ")}），候选 ${result.candidates} 个，入库 ${rows.length} 个${result.merged ? `，合并 ${result.merged} 个已有线索` : ""}`,
+          ];
+          if (result.skipped.length) lines.push(`跳过的目录/社交站：${result.skipped.slice(0, 6).join("、")}`);
+          if (!rows.length) {
+            lines.push("");
+            lines.push("一条都没采到。常见原因：搜索引擎要验证码（换 engine=ddg）、目标词太窄，或浏览器会话没登录/被墙。");
+            return lines.join("\n");
+          }
+          lines.push("", "公司 | 邮箱 | 电话 | 分数");
+          for (const row of rows.slice(0, 20)) {
+            lines.push(`${row["公司"] || "?"} | ${row["邮箱"] || "—"} | ${row["电话"] || "—"} | ${row["分数"]}`);
+          }
+          if (rows.length > 20) lines.push(`…（还有 ${rows.length - 20} 条）`);
+          const reasons = rows.slice(0, 5).map((row) => `· ${row["公司"]}：${row["理由"]}`).join("\n");
+          if (reasons) lines.push("", "打分依据（前 5 条）：", reasons);
+
+          const target = String(args?.save ?? "").trim();
+          if (target) {
+            const saved = await saveFlowRows(target, rows, { name: "leads" });
+            lines.push("", `已保存 ${rows.length} 行到 ${saved}`);
+          } else {
+            lines.push("", `线索库：${storePath}（共 ${result.store.length} 条）。要 CSV 就再调一次并带上 save。`);
+          }
+          return lines.join("\n");
+        },
+        // Each company is up to two page loads; 50 companies is minutes, not seconds.
+        1_500_000,
+      );
+
       const browserJsonTool = browserTool(
         "browser_json",
         "Run JavaScript in the page that returns an array of objects, turn it into rows (optional field map) and optionally save it as CSV/JSON. The bridge between 'I found the data' and 'a file'.",
@@ -9129,7 +9286,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         },
       });
 
-      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
+      for (const definition of [sendFileTool, sendTextTool, sendVoiceTool, statusTool, wecomText, wecomFile, wecomVoice, feishuText, feishuFile, feishuDocCreate, feishuDocRead, feishuDocAppend, feishuSheetNew, feishuSheetReadTool, feishuSheetWriteTool, feishuBitableNew, feishuBitableWriteTool, feishuBitableReadTool, feishuWikiSpaces, feishuWikiNew, feishuWikiUpload, feishuCliHelp, feishuCli, tavilySearchTool, browserOpenTool, browserTextTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserCloseTool, browserEvalTool, browserFlowTool, browserRecordTool, browserCaptureTool, browserMapsTool, collectTool, browserJsonTool, browserCookiesTool, browserDownloadTool, browserTabsTool, desktopScreenTool, desktopWindowsTool, desktopFocusTool, desktopScreenshotTool, desktopMouseTool, desktopTypeTool, desktopKeyTool, clipboardReadTool, clipboardWriteTool, sshExecTool, sshUploadTool, sshDownloadTool, serialPortsTool, serialFlashTool, serialMonitorTool, scraplingFetchTool, taskAddTool, taskListTool, taskRemoveTool, officeReadTool, officeWriteTool, officeConvertTool, officeRenderTool]) {
         try {
           const dispose = toolCtx.tools.register(definition);
           if (typeof dispose === "function") disposers.push(dispose);
