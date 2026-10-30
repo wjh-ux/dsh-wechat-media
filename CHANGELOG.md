@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.14.1
+
+- **The one-click extension install failed on a fresh machine with `cannot find path …\.dsh\exports`, although nothing
+  was wrong with the extension.** `Compress-Archive` does not create the destination folder, and a new `$DSH_HOME` has
+  no `exports` directory under it. The pack helper now creates that folder itself — and names the path it could not
+  create instead of surfacing a zip error — so every caller gets the fix; a test covers the nested-path case.
+
 ## 1.14.0
 
 - **The plan greeted a recipient with "您好 Lounge garden furniture directly from the designer，".** A page headline is

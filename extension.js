@@ -414,6 +414,18 @@ export async function packExtension({ dir, zipPath, execFileImpl } = {}) {
   const target = String(zipPath ?? "").trim();
   if (!source || !target) throw new Error("打包扩展需要源目录和目标 zip 路径");
   if (process.platform !== "win32") throw new Error("扩展打包目前用 Windows 的 Compress-Archive 实现");
+  // Compress-Archive refuses a destination whose directory does not exist - it does not create it. A fresh machine has
+  // no `exports` under $DSH_HOME, so the one-click install failed with "cannot find path …\.dsh\exports" even though
+  // nothing was wrong with the extension. Create it here, where every caller gets the fix, and name the path if the
+  // directory cannot be made (a read-only or missing drive is a different sentence from a broken zip).
+  const { mkdir } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const parent = dirname(target);
+  try {
+    await mkdir(parent, { recursive: true });
+  } catch (error) {
+    throw new Error(`打包目标目录无法创建：${parent}（${error?.message ?? error}）`);
+  }
   const exec = execFileImpl ?? (await import("node:child_process")).execFile;
   const script = `Compress-Archive -Path ${psQuote(`${source}\\*`)} -DestinationPath ${psQuote(target)} -Force`;
   await new Promise((resolve, reject) => {

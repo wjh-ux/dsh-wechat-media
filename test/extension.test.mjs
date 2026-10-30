@@ -3,6 +3,9 @@
 // fetch client-side would test the mock, not the bridge.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ExtensionBridge, bridgeToken, extensionSession, packExtension, openExtensionsPage } from "../extension.js";
 
 const passed = [];
@@ -317,6 +320,27 @@ await test("the install helper packs the folder and opens the extensions page", 
   const quoted = await packExtension({ dir: "C:\\it's here\\extension", zipPath: "C:\\out\\x.zip", execFileImpl });
   assert.equal(quoted.zip, "C:\\out\\x.zip");
   assert.match(calls[3].args.join(" "), /'C:\\it''s here\\extension\\\*'/, "an apostrophe in a path is doubled, not dropped");
+});
+
+await test("packing creates the destination directory instead of failing on it", async () => {
+  // Compress-Archive does not create the destination folder, and a fresh $DSH_HOME has no exports directory - the
+  // one-click install then failed with "cannot find path …\\.dsh\\exports" on a machine where nothing was wrong.
+  const base = await mkdtemp(join(tmpdir(), "wx-pack-"));
+  const nested = join(base, "one", "two", "ext.zip");
+  const calls = [];
+  const execFileImpl = (cmd, args, options, callback) => {
+    calls.push({ cmd, args });
+    callback(null, "", "");
+  };
+  try {
+    const packed = await packExtension({ dir: "C:\\plugins\\x\\extension", zipPath: nested, execFileImpl });
+    assert.equal(packed.zip, nested);
+    assert.equal(calls.length, 1, "the archive command still runs");
+    const made = await stat(join(base, "one", "two")).then((s) => s.isDirectory()).catch(() => false);
+    assert.ok(made, "the destination directory exists afterwards");
+  } finally {
+    await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
 });
 
 console.log(`\n${passed.length} passed, ${failed.length} failed`);
