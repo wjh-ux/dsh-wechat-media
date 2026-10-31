@@ -139,16 +139,54 @@ function Save-Installer([string]$Url, [string]$FileName) {
   return $path
 }
 
+function Install-ZipNode {
+  <#
+    Node 的免管理员安装：官方 zip + 只改进程与用户 PATH，不碰系统和 HKLM。
+    MSI 是机器级安装，msiexec /qn 在非管理员会话里会以 1603 失败（真实 VM 上就是这样）。
+  #>
+  param([Parameter(Mandatory)][string]$Version)
+  $url = "https://nodejs.org/dist/$Version/node-$Version-win-x64.zip"
+  $zip = Save-Installer $url "node-$Version-win-x64.zip"
+  $dest = Join-Path $ToolsRoot "node"
+  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+  New-Item -ItemType Directory -Force $dest | Out-Null
+  Expand-Archive -Path $zip -DestinationPath $dest -Force
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue
+  # 解压出来是一层 node-vX-win-x64，把内容提上来，路径才稳定
+  $inner = Get-ChildItem $dest -Directory | Select-Object -First 1
+  if ($inner -and -not (Get-ChildItem $dest -File)) {
+    Get-ChildItem $inner.FullName | Move-Item -Destination $dest -Force
+    Remove-Item $inner.FullName -Recurse -Force
+  }
+  # 用户级 PATH（不需要管理员），插件自己的 which() 也会扫 ~\tools\node
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (-not $userPath) { $userPath = "" }
+  if ($userPath -notlike "*$dest*") {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $dest).TrimStart(";"), "User")
+    Info "已把 $dest 加进用户 PATH（不需要管理员）"
+  }
+  Refresh-Path
+  return (Test-Path (Join-Path $dest "node.exe"))
+}
+
 function Install-NodeFallback {
   try {
     $found = Get-NodeMsiUrl
-    Info "Node.js LTS $($found.Version)（官方 msi）"
-    $msi = Save-Installer $found.Url "node-$($found.Version)-x64.msi"
+    $version = $found.Version
+    # 先试 MSI（机器级，要管理员）；失败就退到 zip（不需要）
+    Info "Node.js LTS $version（先试官方 msi）"
+    $msi = Save-Installer $found.Url "node-$version-x64.msi"
     $proc = Start-Process msiexec.exe -ArgumentList @("/i", "`"$msi`"", "/qn", "/norestart") -Wait -PassThru
     Remove-Item $msi -Force -ErrorAction SilentlyContinue
     Refresh-Path
     if (Have "node") { Ok "node $(Read-Version 'node' @('--version'))"; return $true }
-    Bad "msiexec 退出码 $($proc.ExitCode)，node 仍不可用"
+
+    Info "msiexec 退出码 $($proc.ExitCode)（1603 通常是权限）——改用免管理员的 zip"
+    if (Install-ZipNode -Version $version) {
+      if (Have "node") { Ok "node $(Read-Version 'node' @('--version'))（zip 安装）"; return $true }
+      Bad "zip 解开了但 node 仍不可用"; return $false
+    }
+    Bad "Node 安装失败：msi 与 zip 都没成"
     return $false
   } catch { Bad "Node 安装失败：$($_.Exception.Message)"; return $false }
 }

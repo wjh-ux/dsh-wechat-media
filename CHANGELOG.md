@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.23.5
+
+- **Node without administrator rights.** The MSI is a machine-wide install, so `msiexec /qn` returns 1603 in a non-elevated
+  session - which is what a VM user often is. The script now falls back to the same version's official
+  `node-<ver>-win-x64.zip`, unpacks it to `%USERPROFILE%\tools\node`, and adds that folder to the **user** PATH only
+  (nothing under HKLM is touched). Verified by installing v26.13.0 through that path in a temporary folder and running
+  `node --version`, then removing the temporary PATH entry again.
+- Python and VS Code already needed no elevation (`InstallAllUsers=0`, and the VS Code User installer); the manual now
+  says so per row.
 ## 1.23.4
 
 - **No winget is no longer a dead end.** On a VM without winget (Win10 before 1809, trimmed images, some servers) the

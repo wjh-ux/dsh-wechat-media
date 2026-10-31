@@ -56,7 +56,7 @@
 
 | 组件 | 来源 | 静默参数 |
 |---|---|---|
-| Node.js LTS | `nodejs.org/dist/<版本>/node-<版本>-x64.msi` | `msiexec /i … /qn` |
+| Node.js LTS | `nodejs.org/dist/<版本>/node-<版本>-x64.msi`；**MSI 失败（1603 = 不是管理员）时改用同版本的 `node-<版本>-win-x64.zip`** | `msiexec /i … /qn`；zip 走解压 + 用户 PATH |
 | Python 3.12 | `python.org/ftp/python/<版本>/python-<版本>-amd64.exe` | `/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1` |
 | VS Code | `update.code.visualstudio.com/latest/win32-x64-user/stable`（302 到真实文件） | `/VERYSILENT /NORESTART /MERGETASKS=!runcode` |
 
@@ -76,6 +76,11 @@
 ```
 
 三个都 `✔` 就直接去掉 `-ResolveOnly` 跑；有 `✖` 说明那台机器网络到不了那个域名，把失败项的行贴出来。
+
+**Node 的 MSI 需要管理员**（它是机器级安装）。VM 里如果是普通用户，会看到 `msiexec 退出码 1603`，
+脚本会自动退到**免管理员的 zip**：下同版本的 `node-<版本>-win-x64.zip`，解到 `%USERPROFILE%\tools\node`，
+只把它加进**用户级** PATH（不碰 HKLM）。实测那条路能装成（`v26.13.0`）。
+Python 与 VS Code 本来就不需要管理员：前者 `InstallAllUsers=0`，后者是 User 安装包。
 
 ### 装到哪
 
