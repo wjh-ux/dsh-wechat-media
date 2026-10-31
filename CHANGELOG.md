@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.19.5
+
+- **Arduino flashing is `compile --upload`, not `upload`.** `arduino-cli upload` looks for an already-compiled sketch by
+  project hash and fails with `Compiled sketch not found in ...sketches\<hash>`; the one-command form builds and writes,
+  which is also what "flash this project" means.
+- Verified on a real ESP32 (CP210x, COM6): `Wrote 298160 bytes (158774 compressed) at 0x00010000 in 2.4 seconds`,
+  `Hash of data verified`, and the sketch then printed `ESP32 alive #15 …` over the same port.
+- Recorded in the README: a CP210x board is invisible to `arduino-cli board list` (only `vid 0x10C4 pid 0xEA60`, no
+  matching board), so `sketch.yaml` has to win - and opening the port resets the chip, so read at once with
+  `DtrEnable=false; RtsEnable=false`.
 ## 1.19.4
 
 - **The hex-to-bin conversion never ran, because the regex had two backslashes.** `/\.hex$/i` was written as

@@ -173,7 +173,8 @@ await test("an Arduino sketch is a folder with a matching .ino, and the board is
 
   // Uploading needs the port as well.
   const flash = flashPlan({ kind: "arduino", dir, arduinoCli: "arduino-cli.exe", fqbn: "arduino:avr:uno", port: "COM3" });
-  assert.deepEqual(flash.args, ["upload", "--fqbn", "arduino:avr:uno", "-p", "COM3", dir]);
+  // `compile --upload`, not a bare `upload`: the latter needs a sketch that was compiled first.
+  assert.deepEqual(flash.args, ["compile", "--fqbn", "arduino:avr:uno", "--upload", "-p", "COM3", dir]);
   assert.match(flashPlan({ kind: "arduino", dir, arduinoCli: "a", fqbn: "arduino:avr:uno" }).error, /串口/);
   // auto: an arduino project goes to arduino-cli, not to openocd or uart.
   assert.equal(flashPlan({ kind: "arduino", dir, arduinoCli: "a", fqbn: "f", port: "COM3" }).tool, "a");

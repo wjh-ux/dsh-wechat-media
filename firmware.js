@@ -194,10 +194,13 @@ export function flashPlan({
     if (!arduinoCli) return { error: "没找到 arduino-cli" };
     if (!fqbn) return { error: "不知道板子型号：给 board 参数（如 arduino:avr:uno）" };
     if (!port) return { error: "Arduino 烧录要给串口（例如 port=\"COM3\"）" };
+    // `upload` alone is not enough: arduino-cli looks for a compiled sketch by its project hash and fails with
+    // "Compiled sketch not found in ...sketches\<hash>" when nothing was built. `compile --upload` is one command that
+    // builds and writes, which is also what "flash this project" means to the person asking.
     return {
       tool: arduinoCli,
-      args: ["upload", "--fqbn", fqbn, "-p", port, dir],
-      note: `arduino-cli upload · ${fqbn} · ${port}`,
+      args: ["compile", "--fqbn", fqbn, "--upload", "-p", port, dir],
+      note: `arduino-cli compile --upload · ${fqbn} · ${port}`,
     };
   }
   if (resolved === "openocd") {

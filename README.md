@@ -729,7 +729,7 @@ its `python_env` interpreter - and reported "no serial ports" when no board was 
 | `CMakeLists.txt` | `cmake --build build` | `openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program x.elf verify reset exit"` |
 | `Makefile` | `make -C <dir> -j` | same as CMake; `st-flash write x.bin 0x8000000` when stlink-tools is what is installed |
 | any of the above, **no debugger at all** | as above | `flasher="uart"` → `python -m stm32loader -p COMx -b 115200 -f F1 -e -w x.bin -v`, with `BOOT0=1` and a reset first |
-| `.ino` (Arduino sketch) | `arduino-cli compile --fqbn arduino:avr:uno <dir>` | `arduino-cli upload --fqbn … -p COMx <dir>` |
+| `.ino` (Arduino sketch) | `arduino-cli compile --fqbn arduino:avr:uno <dir>` | `arduino-cli compile --fqbn … --upload -p COMx <dir>` (one command: a bare `upload` needs a sketch compiled first) |
 
 ```text
 project_build(dir="D:\\work\\my_f4", action="build")
@@ -753,6 +753,24 @@ installed by this README's instructions and the ESP32 core that was already on t
 
 **Install notes are in [docs/keil-arm-install.md](docs/keil-arm-install.md)**: the download page and its direct link, the
 installer's size and SHA256, the device pack URL, the licence activation, and the four traps this install produced.
+
+**ESP32, on the real board (v1.19.5):** a CP210x board on COM6, `project_build(action="flash", port="COM6")` →
+`arduino-cli compile --upload` → `Wrote 298160 bytes (158774 compressed) at 0x00010000 in 2.4 seconds`,
+`Hash of data verified`, `Hard resetting via RTS pin`. The sketch printed its own evidence over the same port:
+
+```
+ESP32 alive #15  (uptime 14s)
+ESP32 alive #26  (uptime 25s)
+```
+
+Three things that board taught:
+
+- **`arduino-cli board list` cannot identify a CP210x ESP32.** The port reports only `vid 0x10C4 pid 0xEA60` and no
+  `matching_boards`, so the FQBN has to come from `sketch.yaml` - which is why that is consulted before the port scan.
+- **Opening the port resets the board** (`rst:0x1 (POWERON_RESET)`), and the banner is in the first 300 ms - read
+  immediately, do not discard the buffer. `DtrEnable = false; RtsEnable = false` keeps the auto-reset circuit quiet.
+- **`arduino-cli upload` alone fails** with `Compiled sketch not found in ...sketches\<hash>`; `compile --upload` is the
+  command that means "flash this project".
 
 **Verified with Keil MDK-ARM itself (v1.19.0):** MDK-ARM 5.43a was installed next to the existing C51 install, and the
 project in `scripts/arm-keil-template/` built through `keil_build` in 1.9 s:
