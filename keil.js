@@ -36,6 +36,10 @@ export const UV4_EXIT = {
 
 /** Where a Keil install usually is, most specific first. Only used after the environment and TOOLS.INI say nothing. */
 const UV4_CANDIDATES = [
+  // MDK 5.43's installer defaults to the per-user folder, so a machine can have two installs: C51 under
+  // D:\Keil_v5 and MDK-ARM under %LOCALAPPDATA%\Keil_v5. Both are legitimate; which one builds a project depends on
+  // the project's family (see uv4ForFamily).
+  join(process.env.LOCALAPPDATA ?? "", "Keil_v5", "UV4", "UV4.exe"),
   "D:\\Keil_v5\\UV4\\UV4.exe",
   "C:\\Keil_v5\\UV4\\UV4.exe",
   "D:\\Keil\\UV4\\UV4.exe",
@@ -254,6 +258,7 @@ const SUMMARY = /(\d+)\s+Error\(s\),\s*(\d+)\s+Warning\(s\)/i;
  * `Target not created` is a failure even when the counts look clean. Both facts are in the text, so both are read.
  */
 export function parseBuildLog(text) {
+  let artifact = '';
   const lines = String(text ?? "").split(/\r?\n/);
   const errors = [];
   const warnings = [];
@@ -275,15 +280,31 @@ export function parseBuildLog(text) {
       errorCount = Number(sum[1]);
       warningCount = Number(sum[2]);
       summary = line;
+      // This line is also the only place ARMCLANG names the output (`".\Objects\blink.axf" - 0 Error(s)`), and the
+      // `FromELF: creating hex file...` line above it carries no path. Remember the .axf here, or the hex line can never
+      // be filled in - which is exactly what happened on the first ARM build.
+      const named = line.match(/"([^"]+\.axf)"/i);
+      if (named) artifact = named[1].trim();
       continue;
     }
     if (/program size\s*:/i.test(line)) {
       size = line.replace(/^.*?Program Size\s*:\s*/i, "").trim();
       continue;
     }
+    // ARMCLANG writes `FromELF: creating hex file...` - no path in it - so the hex name has to come from the .axf that
+    // the summary line just named. C51 prints the path directly, which is the branch below.
+    if (/creating hex file/i.test(line) && !hex && artifact) {
+      hex = artifact.replace(/\.axf$/i, ".hex");
+      continue;
+    }
     const hexLine = line.match(/creating hex file from\s+"?([^"]+)"?/i);
     if (hexLine) {
       hex = hexLine[1].trim();
+      continue;
+    }
+    const axfLine = line.match(/^\s*"([^"]+\.axf)"\s*-\s*\d+\s+Error/i);
+    if (axfLine) {
+      artifact = axfLine[1].trim();
       continue;
     }
     const buildTarget = line.match(/build target '([^']+)'/i) ?? line.match(/build (?:target|targets?) '([^']+)'/i);
@@ -315,6 +336,9 @@ export function parseBuildLog(text) {
   // The counts in the log are the tool's own; the lists are what a person reads. Keep both, and let the lists win
   // when they disagree (a truncated "0 Error(s)" after "*** ERROR" is a real thing).
   const failed = notCreated || errors.length > 0 || (errorCount !== null && errorCount > 0);
+  // `FromELF: creating hex file...` arrives before the summary line that names the .axf, so the name is only known after
+  // the loop: without this, every ARMCLANG project reports no hex even though the file is sitting next to the .axf.
+  if (!hex && artifact) hex = artifact.replace(/\.axf$/i, ".hex");
   return {
     ok: !failed,
     errors,
@@ -416,8 +440,10 @@ export function summarizeBuild(result, { project = "", action = "build" } = {}) 
   for (const item of parsed.warnings.slice(0, 10)) lines.push(`  ⚠ ${formatDiagnostic(item)}`);
   if (parsed.warnings.length > 10) lines.push(`  … 还有 ${parsed.warnings.length - 10} 条警告`);
 
+  // A stale hex from an earlier build is worse than no line at all: "HEX: ..." under "❌ 编译失败" reads as "there is a
+  // file to flash" when `Target not created` just said there is not. Only a successful build gets to name its output.
   if (parsed.size) lines.push(`程序大小：${parsed.size}`);
-  if (parsed.hex) lines.push(`HEX：${parsed.hex}`);
+  if (parsed.hex && parsed.ok) lines.push(`HEX：${parsed.hex}`);
   if (parsed.notCreated) lines.push("（Target not created：没有产出可下载的文件）");
   if (UV4_EXIT[result.code] && result.code !== 0) lines.push(`UV4 退出码 ${result.code}：${UV4_EXIT[result.code]}`);
 
@@ -494,6 +520,59 @@ export function keilSupport({ env = process.env, exists = existsSync, readFile =
     };
   }
   return { ok: true, uv4 };
+}
+
+/**
+ * The UV4 that can build *this* project.
+ *
+ * A machine can hold two Keil installs - C51 and MDK-ARM are separate products that share the uVision shell - and each
+ * UV4.exe knows only its own toolchains. Verified on this machine: `D:\Keil_v5\UV4\UV4.exe` has C51 and no ARM, while
+ * `%LOCALAPPDATA%\Keil_v5\UV4\UV4.exe` has ARMCLANG and no C51. Handing an ARM project to the C51 UV4 is not a warning;
+ * it is a build that fails with "Toolchain not installed".
+ */
+export function uv4ForFamily(family, { env = process.env, exists = existsSync, readFile = readFileSync, platform = process.platform } = {}) {
+  if (platform !== "win32") return null;
+  // Check for the compiler itself, not just the folder: 'the folder is there' has been wrong before, and the sentence
+  // this function is here to avoid is "UV4 says the toolchain is not installed".
+  const markers =
+    family === "arm"
+      ? [["ARM", "ARMCLANG", "bin", "armclang.exe"], ["ARM", "ARMCC", "bin", "armcc.exe"]]
+      : [["C51", "BIN", "c51.exe"]];
+
+  const roots = [];
+  const addRoot = (root) => {
+    if (root && !roots.includes(root)) roots.push(root);
+  };
+  for (const [name, value] of [["KEIL_UV4", env.KEIL_UV4], ["UV4_PATH", env.UV4_PATH]]) {
+    if (!value) continue;
+    const exe = /\.exe$/i.test(value) ? value : join(value, "UV4", "UV4.exe");
+    addRoot(dirname(dirname(exe)));
+  }
+  // The per-user install path is computed from the *passed* env, not from the module's load-time one: a caller with a
+  // different LOCALAPPDATA would otherwise search the wrong folder and report "no ARM toolchain" while it sat right
+  // there. (The static candidate list cannot know about that; this one can.)
+  if (env.LOCALAPPDATA) addRoot(join(env.LOCALAPPDATA, "Keil_v5"));
+  for (const candidate of UV4_CANDIDATES) addRoot(dirname(dirname(candidate)));
+  for (const root of [...roots]) {
+    const ini = join(root, "TOOLS.INI");
+    if (!exists(ini)) continue;
+    try {
+      for (const section of ["C51", "ARM"]) {
+        const toolchain = parseToolsIni(readFile(ini, "utf8"))[section]?.PATH;
+        if (toolchain) addRoot(dirname(toolchain.replace(/[\\/]+$/, "")));
+      }
+    } catch {
+      // A TOOLS.INI that cannot be read tells us nothing; the candidate list still has the usual places.
+    }
+  }
+
+  for (const root of roots) {
+    const exe = join(root, "UV4", "UV4.exe");
+    if (!exists(exe)) continue;
+    if (!markers.some((parts) => exists(join(root, ...parts)))) continue;
+    return { program: exe, root, source: `${family} toolchain in ${root}` };
+  }
+  return null;
 }
 
 /** Arm the tool from a project path: reads the targets so `/keil target` has something real to offer. */

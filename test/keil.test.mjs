@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 
 import {
+  uv4ForFamily,
   ACTIONS,
   KEIL_TIMEOUT_MS,
   UV4_EXIT,
@@ -406,6 +407,59 @@ await test("a real download log still reads as success", () => {
   const log = "Erase Done.\nProgramming Done.\nVerify OK.\nApplication running ...";
   const text = summarizeBuild({ code: 0, ms: 2000, log, parsed: parseBuildLog(log) }, { action: "flash" });
   assert.match(text, /下载到芯片完成/);
+});
+await test("two Keil installs on one machine: the project's family decides which UV4 runs", () => {
+  // Exactly this machine: C51 under D:\Keil_v5, MDK-ARM under %LOCALAPPDATA%\Keil_v5.
+  const c51Root = "D:\\Keil_v5";
+  const armRoot = "C:\\Users\\u\\AppData\\Local\\Keil_v5";
+  const present = new Set([
+    `${c51Root}\\UV4\\UV4.exe`,
+    `${c51Root}\\C51\\BIN\\c51.exe`,
+    `${armRoot}\\UV4\\UV4.exe`,
+    `${armRoot}\\ARM\\ARMCLANG\\bin\\armclang.exe`,
+  ]);
+  const opts = {
+    env: { LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" },
+    exists: (p) => present.has(p),
+    readFile: () => "",
+  };
+  assert.equal(uv4ForFamily("arm", opts).program, `${armRoot}\\UV4\\UV4.exe`);
+  assert.equal(uv4ForFamily("c51", opts).program, `${c51Root}\\UV4\\UV4.exe`);
+  // An ARM project on a machine with only C51 installed must say "not found", never hand it to the C51 UV4.
+  const onlyC51 = { ...opts, env: { LOCALAPPDATA: "C:\\empty" } };
+  assert.equal(uv4ForFamily("arm", onlyC51), null);
+  assert.equal(uv4ForFamily("c51", onlyC51).program, `${c51Root}\\UV4\\UV4.exe`);
+});
+await test("an ARMCLANG build names its Program Size and its hex, but not when it failed", () => {
+  const good = [
+    "*** Using Compiler 'V6.24', folder: 'C:\\Keil_v5\\ARM\\ARMCLANG\\Bin'",
+    "Rebuild target 'STM32F103C8'",
+    "assembling startup_stm32f10x_md.s...",
+    "compiling main.c...",
+    "linking...",
+    "Program Size: Code=444 RO-data=252 RW-data=0 ZI-data=1632  ",
+    "FromELF: creating hex file...",
+    '".\\Objects\\blink.axf" - 0 Error(s), 0 Warning(s).',
+  ].join("\n");
+  const parsed = parseBuildLog(good);
+  assert.equal(parsed.size, "Code=444 RO-data=252 RW-data=0 ZI-data=1632");
+  // The hex line carries no path, so it has to come from the .axf named on the summary line.
+  assert.equal(parsed.hex, ".\\Objects\\blink.hex");
+  assert.equal(parsed.ok, true);
+
+  const bad = [
+    "compiling main.c...",
+    "main.c(19): error: use of undeclared identifier 'notDeclared'",
+    '".\\Objects\\blink.axf" - 1 Error(s), 0 Warning(s).',
+    "Target not created.",
+  ].join("\n");
+  const failed = parseBuildLog(bad);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.errors[0].line, 19);
+  // A hex left over from the previous build must not be offered under a failed build.
+  const summary = summarizeBuild({ code: 2, ms: 5, log: bad, parsed: failed }, { project: "x.uvprojx", action: "build" });
+  assert.ok(!/HEX：/.test(summary), "no stale hex");
+  assert.match(summary, /Target not created/);
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

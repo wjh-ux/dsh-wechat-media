@@ -9832,6 +9832,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const file = keil.assertProject(wanted);
             const support = keil.keilSupport();
             if (!support.ok) return `keil_build 失败：${support.reason}`;
+            // Two Keil installs on one machine is the normal case (C51 and MDK-ARM are separate products): ask the
+            // project which toolchain it needs and use that UV4. The picked program is named in the answer, so a
+            // wrong choice is visible instead of mysterious.
+            const projectXml = readFileSync(file, "utf8");
+            const family = firmware.keilFamily(projectXml);
+            const familyUv4 = family === "arm" || family === "c51" ? keil.uv4ForFamily(family) : null;
+            const uv4Program = familyUv4 ? familyUv4.program : support.uv4.program;
             // STC parts have no uVision download driver, so `UV4 -f` exits 0 having programmed nothing. Ask the
             // project what it is first, and hand an STC part to stcgal - the tool that speaks its ISP protocol.
             if (action === "flash") {
@@ -9874,7 +9881,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             const limit = Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : keil.KEIL_TIMEOUT_MS;
             const logPath = keil.defaultLogPath(file, action);
             const result = await keil.runUv4({
-              uv4: support.uv4.program,
+              uv4: uv4Program,
               project: file,
               action,
               target: chosen,

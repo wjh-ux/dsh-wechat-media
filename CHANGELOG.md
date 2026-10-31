@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.19.0
+
+- **The Keil ARM path is verified against a real MDK-ARM install.** MDK-ARM 5.43a (Arm Compiler for Embedded 6.24) was
+  installed, a minimal STM32F103C8T6 project built through `keil_build` in 1.9 s -
+  `Program Size: Code=444 RO-data=252 RW-data=0 ZI-data=1632`, `.axf` + `.hex`, 0 errors - and a deliberately broken
+  line produced exit code 2 with `main.c(19): error: use of undeclared identifier 'notDeclared'`.
+- **Two Keil installs on one machine are now handled.** `uv4ForFamily()` picks the `UV4.exe` whose toolchain matches the
+  project's device family (C51 in `D:\Keil_v5`, ARM in `%LOCALAPPDATA%\Keil_v5` here), instead of handing an ARM project
+  to the C51 compiler and reporting "toolchain not installed".
+- **ARMCLANG's hex is named again.** `FromELF: creating hex file...` carries no path, so the name is taken from the
+  `.axf` on the summary line - and a hex left over from a previous build is no longer offered under a failed one.
+- `scripts/arm-keil-template/` is that project: device STM32F103C8, a checked-in `blink.sct` (32K/10K), register-level
+  blink, and a README naming the three traps (scatter, pack examples with RTX, two installs).
 ## 1.18.1
 
 - **`arduino-cli` colours its output, and the escapes came through to the chat.** A failed ESP32 compile arrived as

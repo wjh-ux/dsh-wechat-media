@@ -751,6 +751,21 @@ Verified here without any board: the same Blink sketch compiled for **two** boar
 installed by this README's instructions and the ESP32 core that was already on the machine. The upload leg is the same
 `arduino-cli upload` call and needs a board on a COM port.
 
+**Verified with Keil MDK-ARM itself (v1.19.0):** MDK-ARM 5.43a was installed next to the existing C51 install, and the
+project in `scripts/arm-keil-template/` built through `keil_build` in 1.9 s:
+`Program Size: Code=444 RO-data=252 RW-data=0 ZI-data=1632`, `.axf` and `.hex` produced, `0 Error(s)`. Deliberately
+breaking one line gave exit code 2 and `main.c(19): error: use of undeclared identifier 'notDeclared'` - the ARMCC6
+dialect parsed with a file and a line, not a wall of log. Three things that only a real install could teach:
+
+- **A machine can hold two Keil installs and they do not share toolchains.** C51 lives in `D:\Keil_v5`, MDK-ARM in
+  `%LOCALAPPDATA%\Keil_v5` (the 5.43 installer's default). Handing an ARM project to the C51 `UV4.exe` is not a warning,
+  it is a build that fails saying the toolchain is missing - so `uv4ForFamily()` now picks by the project's device
+  family and the answer names the `UV4.exe` it used.
+- **The scatter file must be explicit.** A hand-written minimal project failed with `*** Scatter Error: no default
+  'Read/Write' range selected` and then `L6031U: Could not open .sct`; the fix is a checked-in `.sct`, not a dialog.
+- **Do not copy a pack example.** The STM32F1 pack's `Blinky` uses Keil RTX, so uVision aborts the build with "uses RTOS
+  support that is part of a Legacy Pack" - a download unrelated to what the example was being used for.
+
 **Verified on a real board (STM32F103C8T6 clone, no ST-Link):** wired PA9/PA10 to the CH340 that was already on COM3,
 `BOOT0=1` + reset, `flasher="uart"` wrote 212 bytes, `Verification OK`, the 212 bytes were read back and hashed
 identical, and the LED blinked after `BOOT0=0` + reset. Two things that board taught that no datasheet would have:
