@@ -77,7 +77,7 @@ Verification is never "the file exists" - every tool is run (`--version`), and t
 reach, then runs the smoke test.
 
 完整说明（先决条件、十步各做什么、虚拟机怎么装、离线模式、卸载、排错）：**[docs/deploy.md](docs/deploy.md)**。
-想要一份能带进虚拟机看的 PDF：
+仓库里直接有 PDF：**[docs/deploy.pdf](docs/deploy.pdf)**。要自己重新生成：
 
 ```powershell
 python scripts/md-to-docx.py docs/deploy.md deploy.docx   # 需要 python-docx

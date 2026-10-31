@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.23.3
+
+- **`docs/deploy.pdf` is in the repo** (390 KB, six pages), so a clone already has the manual in a form that survives being
+  printed, mailed, or opened on a machine with no markdown viewer. `docs/deploy.md` now says at the top that the PDF is
+  generated, and names the command - the risk of a shipped PDF silently drifting from its source is worth one line.
+- Checks before committing it: the PDF is newer than the `.md` it came from, and rendering page 2 from the copy inside the
+  repository produced the expected page (six pages, no missing fonts) - a file that opens only in the working folder is not
+  a deliverable.
 ## 1.23.2
 
 - **Node.js is installed by the script too** (`winget install OpenJS.NodeJS.LTS`), so a Windows machine with nothing but

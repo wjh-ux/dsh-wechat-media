@@ -1,5 +1,8 @@
 # 安装说明书
 
+> 这份文档有 PDF 版：[`docs/deploy.pdf`](deploy.pdf)（6 页，方便带进虚拟机照着做）。
+> **它是生成的**：改了本文件之后重新跑 `python scripts/md-to-docx.py docs/deploy.md x.docx` 再导出 PDF，别直接改 PDF。
+
 一句话：**在 Windows 上跑一条命令**，它把环境、插件、VS Code 扩展装好，然后自检。
 
 ```powershell
