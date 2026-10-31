@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.24.5
+
+- **`.\deploy.ps1 -Version`** answers "which version did I actually get?" - printed before the banner, with the step count
+  and which optional switches exist. Asked for exactly because `@main` on jsDelivr can be 12 hours stale, and the only other
+  way to tell was guessing from which parameters existed.
+- The answer is now enforced, not trusted: the smoke test reads `$scriptVersion` out of the script and compares it with
+  `package.json`, and checks that `$total` equals the number of `Step` calls. Mutation-tested both halves - a wrong version
+  and a wrong count each fail with the actual numbers in the message.
+- **Found while adding that test: the smoke suite could not fail.** Its `setImmediate(() => process.exit(process.exitCode ?? 0))`
+  ran *before* node's test runner set `process.exitCode = 1`, so a deliberately broken assertion printed `✖` and the process
+  still exited 0 - CI would have called it green. Detaching the plugin's timers and disposing its effects did not empty the
+  loop either (runs still needed a 10 s safety net), so the file now counts failures itself and decides the exit code from
+  that count. Measured: 5 s, exit 1 on a broken assertion, exit 0 when green, 52/52 suites still pass.
+- README's release line was stuck at **v1.16.10 / 50 suites / 807 cases**; every previous bump had been replacing a string
+  that no longer existed. Now v1.24.5, 52 suites, 832 cases (counted, not estimated).
 ## 1.24.4
 
 - **jsDelivr is now the documented way to fetch the script.** `raw.githubusercontent.com` dropped mid-download on the VM

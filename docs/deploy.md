@@ -31,7 +31,23 @@ irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deplo
 jsDelivr 的缓存规则值得知道：`@main` 在边缘节点上**最多缓存 12 小时**（`s-maxage=43200`），
 所以刚发布后可能拿到旧内容；`@latest` 或 `@vX.Y.Z` 指向发布标签，不会出现这个情况。
 
-拿到脚本后先确认是新版（新参数存在才算）：
+拿到脚本后，**问它自己**：
+
+```powershell
+.\deploy.ps1 -Version
+```
+
+```
+dsh-wechat-media 部署脚本 v1.24.5
+  步骤总数：11
+  可选功能：ToolsArchiveDir 有 / GitHubProxy / Ch340Installer 有 / SkipToolchain / SkipArduino / SkipCh340
+  说明：v1.24.3 起有 -ToolsArchiveDir；v1.24.1 起 CH340 自动装；v1.23.10 起修 pip PATH
+```
+
+（v1.24.5 之前的脚本没有这个开关，只能用下面的特征对照。）
+
+老脚本也可以用特征对照：
+
 
 ```powershell
 Select-String -Path .\deploy.ps1 -Pattern 'ToolsArchiveDir' -Quiet      # True = 1.24.3 及以后

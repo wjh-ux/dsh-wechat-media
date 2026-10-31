@@ -7,7 +7,7 @@ text, images, video, documents and archives. Several WeChat accounts can be pair
 **给 DeepSeek Harness 的个人微信桥**：扫一次码，之后就能在微信里和 agent 对话 —— 每个联系人/群各自
 一个独立会话，文字、图片、视频、文档、压缩包**双向**互通，支持**多个微信号同时在线**（小号 + 大号）。
 
-**Current release: v1.16.10** · 50 test suites / 807 cases · every capability below has been exercised against a real
+**Current release: v1.24.5** · 52 test suites / 832 cases · every capability below has been exercised against a real
 service or real hardware at least once (see *What was actually verified*).
 
 ---
@@ -59,6 +59,7 @@ service or real hardware at least once (see *What was actually verified*).
 irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@latest/scripts/deploy-windows.ps1 -OutFile deploy.ps1
 
 # 体检：只看缺什么，不改任何东西
+.\deploy.ps1 -Version      # 先问一句：这是哪一版
 .\deploy.ps1 -CheckOnly
 
 # 部署，十一步依次是

@@ -24,6 +24,9 @@
 .PARAMETER SkipTools
   跳过环境安装（python 包 / arduino-cli / arm 工具链），只做插件部署。
 
+.PARAMETER Version
+  只打印脚本版本并退出。拿到的脚本是哪一版，用它一句话问清楚。
+
 .PARAMETER ToolsArchiveDir
   已下载好的压缩包目录。GitHub 太慢时，在浏览器里（或用镜像站）把
   arduino-cli / arm-none-eabi-gcc / cmake / ninja / openocd 的 zip 下到这里，
@@ -75,9 +78,18 @@ param(
   [string]$Ch340Installer = "",
   [switch]$WithEsp32Core,
   [switch]$NoSelfTest,
+  [switch]$Version,
   [switch]$Offline,
   [switch]$ResolveOnly
 )
+
+# ── 脚本版本 ────────────────────────────────────────────────────────────────
+# 为什么要写在脚本里：没有版本号时，"我拿到的到底是哪一版"只能靠猜参数在不在（ToolsArchiveDir 只说明 ≥1.24.3），
+# 而 jsDelivr 的 @main 会缓存 12 小时，拿旧版是最容易发生的事。
+$scriptVersion = "1.24.5"
+
+$total = 11          # 步骤总数（-Version 与各步标题共用）
+
 
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest 的进度条会让下载慢十倍
@@ -392,8 +404,18 @@ function Get-LatestAsset($repo, $pattern) {
   return $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
 }
 
+# -Version 要在横幅之前处理：否则一进来先刷一堆方块字符，最后才说版本，读起来是反的。
+if ($Version) {
+  Write-Host "dsh-wechat-media 部署脚本 v$scriptVersion"
+  Write-Host "  步骤总数：$total"
+  Write-Host "  可选功能：ToolsArchiveDir 有 / GitHubProxy / Ch340Installer 有 / SkipToolchain / SkipArduino / SkipCh340"
+  Write-Host "  说明：v1.24.3 起有 -ToolsArchiveDir；v1.24.1 起 CH340 自动装；v1.23.10 起修 pip PATH"
+  exit 0
+}
+
 Write-Host "`n============================================" -ForegroundColor White
-Write-Host " dsh-wechat-media 部署" -ForegroundColor White
+
+Write-Host " dsh-wechat-media 部署 · 脚本 v$scriptVersion" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor White
 if ($CheckOnly) { Write-Host " 模式：只体检（不改任何东西）" -ForegroundColor Yellow }
 if ($Offline) { Write-Host " 模式：离线（不下载、不安装，只检测并把已有的东西接进 profile）" -ForegroundColor Yellow }
@@ -401,7 +423,6 @@ Info "工具目录 : $ToolsRoot"
 Info "插件目录 : $InstallDir"
 Info "目标 profile : $Profile"
 
-$total = 11
 $failures = 0
 
 # ── -ResolveOnly：只解析地址 ──────────────────────────────────────────────────
