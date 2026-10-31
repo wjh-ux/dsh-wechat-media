@@ -11,7 +11,13 @@
     可执行文件；`UV4 -b` 不带 `-o` 时"成功"了什么都没做。拆成 `routes/`、`tools/`、`turn.js` 之后这三种不可能发生。
   - 验收：`wc -l index.js` 降到 2000 行以内，测试全绿，`/state` 与所有路由行为不变。
 
-- [ ] **路由层冒烟测试**
+- [ ] **路由层冒烟测试**（**已经咬人三次**，见下面的证据）
+  - 2026-10-31 三次同形状的故障，全都是"工具自己走一遍"才暴露、手写验证不会暴露：
+    1. `keilBuildTool is not defined` —— 路由与工具定义在两个嵌套作用域
+    2. `uv4 is not defined` —— 烧录分支引用了编译分支里的变量
+    3. `idfInfo is not defined` —— plan 对象漏传了一个字段（`firmwarePlan` 里声明、`execute` 里使用）
+  - 共同点：`index.js` 里的数据要穿过「firmwarePlan → return 对象 → execute 解构」三道手，漏一个就炸，
+    而语法检查（`node --check`）看不见、纯函数测试也覆盖不到
   - 原因：824 个用例全在决策层（纯函数 + 注入的 exec/fs），**没有一条验证"起插件 → 打路由 → 断言响应"**。
     上面那三个 bug 里至少两个会被这种测试抓住。
   - 验收：一条测试起一个真实的 loopback 服务，逐个打 `/keil`、`/keil-run`、`/project`、`/prefs`，断言状态码与

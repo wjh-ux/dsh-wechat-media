@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.19.7
+
+- **`idfInfo is not defined` on the first ESP-IDF flash through the tool.** The IDF environment was read inside
+  `firmwarePlan()` and used inside `execute()` without being passed between them - the third time this exact shape has
+  bitten on the same day (`keilBuildTool`, `uv4`, now `idfInfo`). It is now part of the plan object and destructured
+  beside `idfPy`.
+- `docs/TODO.md` records all three as the argument for the route-level smoke test: `node --check` cannot see this and
+  pure-function tests cannot reach it, because the data crosses "firmwarePlan → returned object → execute destructuring"
+  three times.
 ## 1.19.6
 
 - **ESP-IDF projects through `project_build`, verified on the ESP32 board.** `hello_world` built in 162 s and flashed with

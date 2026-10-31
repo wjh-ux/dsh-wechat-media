@@ -9957,7 +9957,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const stflash = serial.which("st-flash", {}) || serial.which("st-flash.exe", {}) || "";
         const project = detected.kind === "keil" ? detected.project : "";
         const xml = project ? readFileSync(project, "utf8") : "";
-        return { prefs, dir, kind, detected, support, idfPy, openocd, stflash, project, xml, arduinoCli, fqbn };
+        return { prefs, dir, kind, detected, support, idfPy, idfInfo, openocd, stflash, project, xml, arduinoCli, fqbn };
       };
 
       const projectBuildTool = define({
@@ -9985,7 +9985,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             }
             const plan = await firmwarePlan(args);
             if (plan.error) return `project_build 失败：${plan.error}`;
-            const { dir, kind, detected, idfPy, openocd, stflash, project, xml, arduinoCli, fqbn } = plan;
+            const { dir, kind, detected, idfPy, idfInfo, openocd, stflash, project, xml, arduinoCli, fqbn } = plan;
 
             // A Keil project goes to keil_build, always: it passes `-o` and parses the log, and without that a bare
             // `UV4 -b` exits 0 with an empty console - which is indistinguishable from a successful build. One
