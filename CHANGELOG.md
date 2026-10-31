@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.24.1
+
+- **The CH340 driver installs itself now, from WCH's own file host.** `https://file.wch.cn/download/file?id=65` returns
+  `CH341SER.EXE` (780 KB) - a URL with no file extension that the download page itself never exposes. Two gates before
+  anything is executed: the file must start with `MZ` and be larger than 100 KB (a CDN/WAF interception page would
+  otherwise fail the signature check and send the reader looking in the wrong place), and its Authenticode signature must
+  be `Valid` with a signer containing `Nanjing Qinheng Microelectronics` - WCH's legal name, DigiCert-issued. Then `/S`,
+  and afterwards `pnputil /enum-drivers` decides whether it worked, not the exit code.
+- Measured on this machine: 780.4 KB, `MZ`, `Valid`, signer `CN="Nanjing Qinheng Microelectronics Co., Ltd."`; `/S`
+  accepted (exit code 0) and the driver still staged afterwards.
+- If verification fails the file is deleted and nothing runs; `-Ch340Installer` still lets you point at your own copy, and
+  the manual says which two gates it must pass.
 ## 1.24.0
 
 - **A serial-driver step, and a decision not to download a driver from the internet.** Step 5 reports the CH340/CH343 state

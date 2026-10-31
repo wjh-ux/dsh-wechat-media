@@ -194,16 +194,30 @@ irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deplo
 STC / STM32 的板子大多用 CH340（或 CH343）做 USB 转串口。**这个驱动不用买、也不要从第三方镜像下**
 （驱动能伪造签名）。两条正路：
 
-1. **插上设备并联网**，Windows 10/11 会自动从 Windows Update 装。第 5 步会报告它看到的驱动，
-   例如 `✔ CH34x 驱动已装：ch341ser.inf, ch343ser.inf（签名者 Microsoft，来自 Windows Update）`。
-2. **你手上已经有 WCH 的安装包**时，交给脚本静默装：
+**脚本自己会装**，用的是 WCH 的官方直链（这个 URL 没有扩展名，但确实返回文件）：
+
+```
+https://file.wch.cn/download/file?id=65      →  CH341SER.EXE（780 KB）
+```
+
+装之前先做两道检查，不合格就拒绝执行：
+
+1. **是不是可执行文件** —— 头两字节必须是 `MZ`、大小 > 100 KB。CDN/WAF 有时返回 HTML 拦截页，
+   那种文件验签必然失败，报错会误导人。
+2. **签名** —— 必须是 `Valid`，且签名者包含 `Nanjing Qinheng Microelectronics`（WCH 的正式名称，DigiCert 签发）。
+   实测：`780.4 KB`，`MZ`，签名 `Valid`，通过。
+
+确认无误后用 `/S` 静默运行（实测该参数被接受，退出码 0），随后**再查一次 `pnputil`** ——
+装没装上以它为准，不看退出码。
+
+另外两条路：插上设备并联网让 Windows Update 装（本机就是这么来的），或你手上的安装包：
 
 ```powershell
 .\deploy.ps1 -Ch340Installer D:\CH341SER.EXE   # EXE，用 /S 静默
 .\deploy.ps1 -Ch340Installer D:\ch341ser.inf   # INF，用 pnputil 装
 ```
 
-官方下载页：<https://www.wch.cn/downloads/CH341SER_EXE.html>（是 JS 单页，没有稳定直链，所以脚本不去抓）。
+官方下载页（人工看说明用）：<https://www.wch.cn/downloads/CH341SER_EXE.html>
 
 不想管这块可以跳过（不影响插件本身）：`.\deploy.ps1 -SkipCh340`。
 

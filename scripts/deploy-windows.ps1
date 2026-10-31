@@ -568,40 +568,99 @@ Step 5 $total "串口驱动（CH340）"
 if ($SkipCh340) {
   Miss "按 -SkipCh340 跳过"
 } else {
-  # CH340 的驱动来源只有两个靠谱的：Windows Update（插上设备自动装），或 WCH 官网的安装包。
-  # WCH 的下载页是 JS 单页，没有稳定直链（三个候选 URL 都只返回 text/html），
-  # 所以脚本不替你从第三方镜像下驱动 —— 那玩意儿能伪造签名。这里做的是：
-  #   有 → 报告（并说明来源）
-  #   没有但插着设备 → 告诉你去重插/联网，Windows Update 会装
-  #   你手上有安装包 → -Ch340Installer 指给它，脚本静默装
+  # CH340 驱动的来源就两个可信的：Windows Update（插上设备自动装），或 WCH 官方安装包。
+  # 官方安装包有个可用的直链（用户提供的）：https://file.wch.cn/download/file?id=65 → CH341SER.EXE（780 KB）
+  # 而且**签名可验**：Nanjing Qinheng Microelectronics Co., Ltd.（WCH 的正式名称），DigiCert 签发。
+  # 所以脚本可以自动装 —— 但一定要先验签，不合格就拒绝，绝不解压/执行。
+  $wchDriverUrl = "https://file.wch.cn/download/file?id=65"        # → CH341SER.EXE
+  $wchSigner = "Nanjing Qinheng Microelectronics"
+
   $driverDump = (pnputil /enum-drivers 2>&1 | Out-String)
   $wchBlocks = ($driverDump -split "(`r?`n){2,}") | Where-Object { $_ -match '(?i)(ch34[0-9a-z]*ser\.inf|provider name:\s*wch)' }
   $devices = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '(?i)CH34[0-9]|USB-SERIAL CH34|CP210' }
   $deviceNames = @($devices | ForEach-Object { $_.Name })
 
+  $installed = $false
   if ($wchBlocks) {
     $infNames = [regex]::Matches(($wchBlocks -join "`n"), '(?im)^Original Name:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
     $signed = [bool](($wchBlocks -join "`n") -match 'Microsoft Windows Hardware Compatibility Publisher')
     Ok "CH34x 驱动已装：$($infNames -join ', ')$(if ($signed) { '（签名者 Microsoft，来自 Windows Update）' })"
-  } elseif ($CheckOnly -or $Offline) {
-    Miss "没装 CH340 驱动$(if ($Offline) { '（离线模式不装）' } else { '' })"
-    Info "插上 CH340 设备并联网，Windows 10/11 会自动从 Windows Update 装（本机就是这么来的）"
-  } elseif ($Ch340Installer) {
-    if (-not (Test-Path $Ch340Installer)) { Bad "找不到安装包：$Ch340Installer"; $failures++ }
-    elseif ($Ch340Installer -match '\.inf$') {
-      Info "用 pnputil 装 INF：$Ch340Installer"
-      $out = pnputil /add-driver $Ch340Installer /install 2>&1 | Out-String
-      if ($LASTEXITCODE -eq 0) { Ok "INF 已提交" } else { Bad "pnputil 失败"; ($out -split "`n" | Select-Object -Last 4) | ForEach-Object { Info $_.Trim() }; $failures++ }
+    $installed = $true
+  }
+
+  if (-not $installed) {
+    if ($CheckOnly -or $Offline) {
+      Miss "没装 CH340 驱动$(if ($Offline) { '（离线模式不装）' } else { '' })"
+      Info "去掉只读开关后脚本会下官方安装包并静默装（$wchDriverUrl，签名可验）"
     } else {
-      Info "静默运行安装包：$Ch340Installer /S"
-      $proc = Start-Process $Ch340Installer -ArgumentList @("/S") -Wait -PassThru
-      if ($proc.ExitCode -eq 0) { Ok "安装包退出码 0" } else { Miss "安装包退出码 $($proc.ExitCode)（有的版本不支持 /S，需要图形界面点一下）" }
+      # 用谁给的安装包？
+      if ($Ch340Installer) {
+        $candidate = $Ch340Installer
+        Info "用你指定的安装包：$candidate"
+      } else {
+        try {
+          Info "下载 WCH 官方驱动（CH341SER.EXE，约 780 KB）"
+          # 下载器要个文件名；这个 URL 没有扩展名信息，先用 .exe 存
+          $candidate = Save-Installer $wchDriverUrl "CH341SER.EXE"
+        } catch {
+          Bad "驱动下载失败：$($_.Exception.Message)"
+          Info "备选：插上设备并联网让 Windows Update 装，或从 https://www.wch.cn/downloads/CH341SER_EXE.html 手动下"
+          $candidate = $null
+        }
+      }
+
+      if ($candidate -and -not (Test-Path $candidate)) {
+        Bad "找不到安装包：$candidate"
+        $candidate = $null
+      }
+
+      if ($candidate) {
+        # 先验签，再执行 —— 驱动是签名代码，未签名的一律不装
+        if ($candidate -match '\.inf$') {
+          Info "用 pnputil 装 INF：$candidate"
+          $out = pnputil /add-driver $candidate /install 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0) { Ok "INF 已提交" } else { Bad "pnputil 失败"; ($out -split "`n" | Select-Object -Last 4) | ForEach-Object { Info $_.Trim() }; $failures++ }
+        } else {
+          # 先确认下下来的确实是可执行文件：某些 CDN/WAF 会返回一个 HTML 拦截页，
+          # 那种文件验签必然失败，但错误信息会指向"签名不合格"，把人引到错误的方向。
+          $headBytes = [IO.File]::ReadAllBytes($candidate)
+          $isPe = $headBytes.Length -gt 2 -and $headBytes[0] -eq 0x4D -and $headBytes[1] -eq 0x5A   # "MZ"
+          if (-not $isPe -or $headBytes.Length -lt 100KB) {
+            Bad "下载到的不是正常的安装包（$([int]($headBytes.Length/1KB)) KB，不是 PE 文件）"
+            Info "多半是 CDN 返回了拦截页；请联网后重试，或手动从官网下载后用 -Ch340Installer 指定"
+            if (-not $Ch340Installer) { Remove-Item $candidate -Force -ErrorAction SilentlyContinue }
+            $failures++
+            $candidate = $null
+          }
+        }
+        if ($candidate) {
+          $sig = Get-AuthenticodeSignature $candidate
+          $signerOk = $sig.SignerCertificate -and ($sig.SignerCertificate.Subject -match [regex]::Escape($wchSigner))
+          if ($sig.Status -ne "Valid" -or -not $signerOk) {
+            Bad "安装包签名不合格，拒绝执行（Status=$($sig.Status)）"
+            if ($sig.SignerCertificate) { Info "实际签名者：$($sig.SignerCertificate.Subject)" }
+            Info "期望的签名者包含：$wchSigner"
+            if (-not $Ch340Installer) { Remove-Item $candidate -Force -ErrorAction SilentlyContinue }
+            $failures++
+          } else {
+            Ok "签名已验证：$wchSigner（$($sig.Status)）"
+            Info "静默安装（/S）"
+            $proc = Start-Process $candidate -ArgumentList @("/S") -Wait -PassThru
+            if (-not $Ch340Installer) { Remove-Item $candidate -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+            # 重新看 pnputil：装没装上以它为准，不看退出码
+            $after = (pnputil /enum-drivers 2>&1 | Out-String)
+            if ($after -match '(?i)ch34[0-9a-z]*ser\.inf|provider name:\s*wch') {
+              Ok "驱动已装（安装器退出码 $($proc.ExitCode)）"
+            } else {
+              Miss "安装器退出码 $($proc.ExitCode)，但 pnputil 里还看不到 CH34x 驱动"
+              Info "有的版本不支持 /S，需要图形界面点一下；或插上设备让 Windows Update 装"
+            }
+          }
+        }
+      }
     }
-  } else {
-    Miss "没装 CH340 驱动"
-    Info "最省事的办法：插上设备并联网，Windows Update 会自动装（用 -Ch340Installer 也能指定本地安装包）"
-    Info "官方下载页：https://www.wch.cn/downloads/CH341SER_EXE.html"
   }
 
   if ($deviceNames.Count -gt 0) {
