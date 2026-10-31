@@ -78,7 +78,9 @@ param(
   [string]$Ch340Installer = "",
   [switch]$WithEsp32Core,
   [switch]$NoSelfTest,
-  [switch]$Version,
+  # 参数变量名不能叫 $Version：脚本里 `$version = …` 这类局部变量（PowerShell 不区分大小写）会把
+  # 字符串赋给 switch 参数，报 "Cannot convert System.String to SwitchParameter"。对外仍叫 -Version。
+  [Alias("Version")][switch]$ShowVersion,
   [switch]$Offline,
   [switch]$ResolveOnly
 )
@@ -86,7 +88,7 @@ param(
 # ── 脚本版本 ────────────────────────────────────────────────────────────────
 # 为什么要写在脚本里：没有版本号时，"我拿到的到底是哪一版"只能靠猜参数在不在（ToolsArchiveDir 只说明 ≥1.24.3），
 # 而 jsDelivr 的 @main 会缓存 12 小时，拿旧版是最容易发生的事。
-$scriptVersion = "1.24.9"
+$scriptVersion = "1.24.10"
 
 $total = 11          # 步骤总数（-Version 与各步标题共用）
 
@@ -135,8 +137,8 @@ function Get-NodeMsiUrl {
   $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -TimeoutSec 60
   $lts = $index | Where-Object { $_.lts } | Select-Object -First 1
   if (-not $lts) { throw "拿不到 Node 的 LTS 版本号" }
-  $version = $lts.version
-  return @{ Version = $version; Url = "https://nodejs.org/dist/$version/node-$version-x64.msi" }
+  $releaseVersion = $lts.version
+  return @{ Version = $releaseVersion; Url = "https://nodejs.org/dist/$releaseVersion/node-$releaseVersion-x64.msi" }
 }
 
 function Get-PythonExeUrl {
@@ -152,14 +154,14 @@ function Get-PythonExeUrl {
   if (-not $versions) { throw "ftp 目录里没有 3.12.x" }
 
   $tried = 0
-  foreach ($version in $versions) {
+  foreach ($candidateVersion in $versions) {
     if ($tried -ge 12) { break }        # 有上限，别在弱网下探太久
     $tried++
-    $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
+    $url = "https://www.python.org/ftp/python/$candidateVersion/python-$candidateVersion-amd64.exe"
     try {
       $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
       if ($head.StatusCode -eq 200) {
-        return @{ Version = $version; Url = $url; Probed = $tried }
+        return @{ Version = $candidateVersion; Url = $url; Probed = $tried }
       }
     } catch {
       # 404 就是"这个版本没有 Windows 安装包"，继续往旧看
@@ -177,9 +179,9 @@ function Get-VSCodeExeUrl {
   $final = $response.BaseResponse.ResponseUri.AbsoluteUri
   if (-not $final) { throw "重定向后拿不到最终地址" }
   $name = ($final -split "/")[-1]
-  $version = "latest"
-  if ($name -match '(\d+\.\d+\.\d+)') { $version = $Matches[1] }
-  return @{ Version = $version; Url = $final }
+  $releaseVersion = "latest"
+  if ($name -match '(\d+\.\d+\.\d+)') { $releaseVersion = $Matches[1] }
+  return @{ Version = $releaseVersion; Url = $final }
 }
 
 # 下载工具的通用实现：流式写入 + 进度/速度/剩余时间。
@@ -271,18 +273,18 @@ function Save-Installer([string]$Url, [string]$FileName) {
 function Install-NodeFallback {
   try {
     $found = Get-NodeMsiUrl
-    $version = $found.Version
+    $releaseVersion = $found.Version
     # 先试 MSI（机器级，要管理员）；失败就退到 zip（不需要）
-    Info "Node.js LTS $version（先试官方 msi）"
-    $msi = Save-Installer $found.Url "node-$version-x64.msi"
+    Info "Node.js LTS $releaseVersion（先试官方 msi）"
+    $msi = Save-Installer $found.Url "node-$releaseVersion-x64.msi"
     $proc = Start-Process msiexec.exe -ArgumentList @("/i", "`"$msi`"", "/qn", "/norestart") -Wait -PassThru
     Remove-Item $msi -Force -ErrorAction SilentlyContinue
     Refresh-Path
-    if (Have "node") { Ok "node $(Read-Version 'node' @('--version'))"; return $true }
+    if (Have "node") { Ok "node $((& "node" --version 2>&1 | Select-Object -First 1))"; return $true }
 
     Info "msiexec 退出码 $($proc.ExitCode)（1603 通常是权限）——改用免管理员的 zip"
-    if (Install-ZipNode -Version $version) {
-      if (Have "node") { Ok "node $(Read-Version 'node' @('--version'))（zip 安装）"; return $true }
+    if (Install-ZipNode -Version $releaseVersion) {
+      if (Have "node") { Ok "node $((& "node" --version 2>&1 | Select-Object -First 1))（zip 安装）"; return $true }
       Bad "zip 解开了但 node 仍不可用"; return $false
     }
     Bad "Node 安装失败：msi 与 zip 都没成"
@@ -300,7 +302,7 @@ function Install-PythonFallback {
     Remove-Item $exe -Force -ErrorAction SilentlyContinue
     Refresh-Path
     foreach ($candidate in @("python", "python3", "py")) {
-      if (Have $candidate) { Ok "$candidate $(Read-Version $candidate @('--version'))"; return $true }
+      if (Have $candidate) { Ok "$candidate $((& $candidate --version 2>&1 | Select-Object -First 1))"; return $true }
     }
     Bad "安装器退出码 $($proc.ExitCode)，python 仍不可用"
     return $false
@@ -343,15 +345,6 @@ function Have($command) {
   return [bool](Get-Command $command -ErrorAction SilentlyContinue)
 }
 
-# 第二个参数**不能**叫 $args：那是 PowerShell 的自动变量，第一版因此什么都没传给 --version，
-# 于是每个工具的"版本"都变成了 "Usage" 或 "fatal error: no input files"。
-function Read-Version([string]$command, [string[]]$ArgList = @()) {
-  try {
-    $out = & $command @ArgList 2>&1 | Select-Object -First 1
-    if ($LASTEXITCODE -eq 0 -or $out) { return ("" + $out).Trim() }
-  } catch { }
-  return ""
-}
 
 # 下载并解压一个便携工具（xpack / arduino-cli 都发 win32-x64 的 zip，解压出来带一层目录）
 function Install-PortableZip {
@@ -441,7 +434,7 @@ function Get-LatestAsset($repo, $pattern) {
 }
 
 # -Version 要在横幅之前处理：否则一进来先刷一堆方块字符，最后才说版本，读起来是反的。
-if ($Version) {
+if ($ShowVersion) {
   Write-Host "dsh-wechat-media 部署脚本 v$scriptVersion"
   Write-Host "  步骤总数：$total"
   Write-Host "  可选功能：ToolsArchiveDir 有 / GitHubProxy / Ch340Installer 有 / SkipToolchain / SkipArduino / SkipCh340"
@@ -495,13 +488,13 @@ if (-not (Have "node")) {
   if ($CheckOnly -or $Offline) {
     Miss "没找到 node（Node.js 18+）$(if ($Offline) { '；离线模式不装' } else { '' })"
   } elseif (Install-Package -Id "OpenJS.NodeJS.LTS" -Probe "node" -Name "Node.js LTS" -Fallback { Install-NodeFallback }) {
-    Ok "node $((Read-Version "node" @("--version")))"
+    Ok "node $(((& "node" --version 2>&1 | Select-Object -First 1)))"
   } else {
     Info "备选：https://nodejs.org/en/download  （选 LTS 的 .msi，装完重开一个终端）"
     $failures++
   }
 } else {
-  $nodeVersion = Read-Version "node" @("--version")
+  $nodeVersion = (& "node" --version 2>&1 | Select-Object -First 1)
   Ok "node $nodeVersion"
 }
 
@@ -850,8 +843,8 @@ if ($SkipToolchain) {
   foreach ($tool in $toolchain) {
     $present = Get-ChildItem $ToolsRoot -Filter "$($tool.Command).exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($present) {
-      $version = Read-Version $present.FullName @($tool.Version)
-      Ok "$($tool.Command)：$($version -replace '\s+', ' ')"
+      $toolVersionText = ""; try { $out1 = & $present.FullName --version 2>&1 | Select-Object -First 1; if ($out1) { $toolVersionText = ("" + $out1).Trim() } } catch { }
+      Ok "$($tool.Command)：$($toolVersionText -replace '\s+', ' ')"
       continue
     }
     if ($CheckOnly -or $Offline) { Miss "没装 $($tool.Command)"; continue }

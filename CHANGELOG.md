@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.24.10
+
+- **A variable named `$version` was colliding with the new `-Version` switch parameter, and PowerShell does not
+  distinguish case.** `1.24.5` added `[switch]$Version`; from then on `$version = $lts.version` (Get-NodeMsiUrl),
+  `foreach ($version in $versions)` (Get-PythonExeUrl), `$version = $Matches[1]` (Get-VSCodeExeUrl) and the version read in
+  step 7 were all **assigning a string to a switch**, which fails with
+  `Cannot convert value "System.String" to type "SwitchParameter"`. The VM saw it in step 7 as `✔ arm-none-eabi-gcc：False`
+  plus four red errors; the three URL resolvers would have failed the same way the moment a machine needed them.
+- Fix: the parameter is now `[Alias("Version")][switch]$ShowVersion` (so `-Version` still works exactly as before) and the
+  locals are `$releaseVersion` / `$candidateVersion` / `$toolVersionText`. Verified: `-Version` exits 0, step 7 prints all
+  four versions, `-ResolveOnly` resolves Node v26.13.0 / Python 3.12.10 / VS Code 1.144.0 again.
+- Chasing this also produced a true but secondary finding worth keeping: an **alias beats a function** of the same name, so
+  a helper called `Read-Version` can be hijacked by a user profile. The version read is now inlined at each call site
+  instead of being a shared helper - four lines of duplication is cheaper than one more name that can be shadowed.
 ## 1.24.9
 
 - **The "does it really compile" check failed on the first clean machine, and the reason was mine.** Step 11 put only
