@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.19.1
+
+- **The MDK install is written down, including the download URL.** `docs/keil-arm-install.md`: the form page
+  (`keil.com/demo/eval/arm.htm`, eight fields before any link appears), the direct link the form produced
+  (`/fid/<token>/files/eval/mdk543a.exe`, with the warning that the token is not permanent), the installer's exact size
+  and SHA256, the device pack URL (`Keil.STM32F1xx_DFP.2.4.1.pack`, 47.9 MB) and how its zip layout has to be placed
+  under the pack root, `cpackget.exe` as the tidier alternative, and the Community licence steps.
+- Also recorded: the installer is **unsigned by design** (so size and hash are the check), MDK 5.43 ships AC6 and not
+  AC5, and the four traps that cost time here - pack examples that need the Legacy Pack, a scatter file that must be
+  checked in, `UV4.exe` being a GUI program that PowerShell does not wait for, and a truncated download sitting next to
+  a complete one with the same name.
 ## 1.19.0
 
 - **The Keil ARM path is verified against a real MDK-ARM install.** MDK-ARM 5.43a (Arm Compiler for Embedded 6.24) was

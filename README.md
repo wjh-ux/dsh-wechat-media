@@ -751,6 +751,9 @@ Verified here without any board: the same Blink sketch compiled for **two** boar
 installed by this README's instructions and the ESP32 core that was already on the machine. The upload leg is the same
 `arduino-cli upload` call and needs a board on a COM port.
 
+**Install notes are in [docs/keil-arm-install.md](docs/keil-arm-install.md)**: the download page and its direct link, the
+installer's size and SHA256, the device pack URL, the licence activation, and the four traps this install produced.
+
 **Verified with Keil MDK-ARM itself (v1.19.0):** MDK-ARM 5.43a was installed next to the existing C51 install, and the
 project in `scripts/arm-keil-template/` built through `keil_build` in 1.9 s:
 `Program Size: Code=444 RO-data=252 RW-data=0 ZI-data=1632`, `.axf` and `.hex` produced, `0 Error(s)`. Deliberately

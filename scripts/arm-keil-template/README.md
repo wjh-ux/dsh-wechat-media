@@ -1,4 +1,4 @@
-﻿# Keil MDK-ARM 最小工程（STM32F103C8T6 / ARMCLANG）
+# Keil MDK-ARM 最小工程（STM32F103C8T6 / ARMCLANG）
 
 这个工程是**真机验证过**的：在装了 MDK-ARM 5.43a（Arm Compiler for Embedded 6.24）的机器上
 `UV4 -r` 编出 `Program Size: Code=444 RO-data=252 RW-data=0 ZI-data=1632`，`.axf` 与 `.hex` 都生成。
@@ -13,6 +13,11 @@ blink.sct                 显式散射文件：32K Flash / 10K RAM，向量表�
 main.c                    寄存器级点灯（PC13）+ 空的 SystemInit，不依赖 HAL/CMSIS
 startup_stm32f10x_md.s    从器件包拷来的启动文件（工程自包含，换机器也能编）
 ```
+
+## 装 MDK 的完整流程
+
+下载地址、安装包大小与 SHA256、器件包直链、许可激活，都在
+[`docs/keil-arm-install.md`](../../docs/keil-arm-install.md)。
 
 ## 两条踩过的坑，别重走
 
