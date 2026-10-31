@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.24.7
+
+- **Fetch advice corrected again, because the previous two attempts were both wrong.** Measured, back to back:
+  jsDelivr `@v1.24.6` still answered **404** minutes after the tag existed, `@latest`/`@main` served the 1.24.4 content, and
+  `raw.githubusercontent.com/main` served 1.24.5 while `main` was already 1.24.6. The one path that is byte-for-byte the
+  file is the **release asset**: `releases/download/v1.24.7/deploy-windows.ps1` - 59,783 bytes, 1,119 lines, SHA256 equal to
+  the working copy (both directly and through `ghproxy.net`).
+- Every release now attaches the script as an asset, so that URL exists for each version and can be mirrored by anything
+  that proxies GitHub releases.
+- The manual lists the three routes in that order and says plainly not to trust `@latest`/`@main` or a brand-new tag on
+  jsDelivr.
 ## 1.24.6
 
 - **`@latest` on jsDelivr served a stale file, so the manual no longer recommends it.** Measured at the same moment:

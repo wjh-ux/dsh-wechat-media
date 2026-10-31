@@ -18,12 +18,17 @@
 三条路，第一条最快（国内一般都能通）：
 
 ```powershell
-# 1. jsDelivr + 具体版本号（推荐。用 @vX.Y.Z，不要用 @latest 或 @main）
-irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@v1.24.6/scripts/deploy-windows.ps1 -OutFile deploy.ps1
+# 1. 发布附件（推荐：内容不可变、和本地逐字节相同，改版本号即可）
+irm https://github.com/wjh-ux/dsh-wechat-media/releases/download/v1.24.7/deploy-windows.ps1 -OutFile deploy.ps1
 
-# 2. GitHub 原地址（有时会断流："基础连接已经关闭: 接收时发生错误"）
+# 2. GitHub 不通时的国内前缀（慢一些，但能通）
+irm https://ghproxy.net/https://github.com/wjh-ux/dsh-wechat-media/releases/download/v1.24.7/deploy-windows.ps1 -OutFile deploy.ps1
+
+# 3. raw 分支地址（发布后几分钟内可能还是旧内容，GitHub 的 raw 缓存）
 irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deploy-windows.ps1 -OutFile deploy.ps1
 ```
+
+**别用 jsDelivr 的 `@latest` / `@main`**，也别指望它对刚发的标签立即可用（实测 `@v1.24.6` 发布几分钟后仍 404）。
 
 **别用 `@latest` 或 `@main`**——实测它们会给你缓存的旧文件：
 
@@ -34,7 +39,7 @@ irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deplo
 raw        48248 字节   1.24.5      ← 正确
 ```
 
-想要一条命令既要拿对版本、又能自动换路：
+发布附件与本地文件逐字节相同（59783 字节 / 1119 行，SHA256 一致），这是"要哪一版就是哪一版"的唯一可靠路径。想要自动换路：
 
 ```powershell
 $want = '1.24.6'
