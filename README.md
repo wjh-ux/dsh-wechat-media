@@ -58,7 +58,12 @@ service or real hardware at least once (see *What was actually verified*).
 # 体检：只看缺什么，不改任何东西
 .\scripts\deploy-windows.ps1 -CheckOnly
 
-# 部署：环境（python 包 / arduino-cli + 核心 / arm-none-eabi-gcc + cmake + ninja + openocd）+ 插件 + 自检
+# 部署：九步依次是
+#   1 前置（node / DSH profile）        2 Python 本体（缺了用 winget 装）
+#   3 Python 包（pyserial/stcgal/stm32loader）  4 VS Code + ms-python.python 扩展
+#   5 arduino-cli + 核心                6 arm-none-eabi-gcc / cmake / ninja / openocd
+#   7 Keil 与 ESP-IDF（只检测）          8 插件装进 profile
+#   9 自检（用插件自己的解析器 + 冒烟测试）
 .\scripts\deploy-windows.ps1
 
 # 只要插件（环境已就绪）

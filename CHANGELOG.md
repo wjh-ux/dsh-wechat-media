@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.22.0
+
+- **The deploy script now installs Python itself, VS Code, and the Python extension.** Nine steps: prerequisites → Python
+  (winget, when missing) → python packages → **VS Code + `ms-python.python`** → arduino-cli + cores → ARM toolchain →
+  Keil/ESP-IDF detection → plugin into the profile → self-check. Everything installed through `winget` is verified by
+  asking for the command afterwards (`winget` returning 0 is not the same as `python` being on PATH), and PATH is
+  re-read from the registry in-session because winget only edits the persisted copy.
+- Verified on this machine: the extension step found VS Code 1.144.0 and installed `ms-python.python`, and
+  `code --list-extensions` then reported `ms-python.python` / `ms-python.vscode-pylance` / `ms-python.debugpy` /
+  `ms-python.vscode-python-envs`. A temp profile was used and removed, so the running desktop profile was untouched.
 ## 1.21.0
 
 - **One script for a fresh Windows machine: `scripts/deploy-windows.ps1`.** It installs what the plugin needs (python

@@ -66,6 +66,30 @@ function Miss($text) { Write-Host "  – $text" -ForegroundColor Yellow; $script
 function Bad($text)  { Write-Host "  ✖ $text" -ForegroundColor Red;    $script:Report += [pscustomobject]@{ 项 = $text; 状态 = "✖" } }
 function Info($text) { Write-Host "    $text" -ForegroundColor DarkGray }
 
+# 装完东西要立刻能用：winget 改的是注册表里的 PATH，当前进程看不到。这个从注册表把机器级+用户级 PATH 重新拼一遍。
+function Refresh-Path {
+  $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $user = [Environment]::GetEnvironmentVariable("Path", "User")
+  $env:PATH = (@($machine, $user) | Where-Object { $_ }) -join ";"
+}
+
+# 用 winget 装一个包，并验证它真的出现了（winget 返回 0 不等于装好了：还要看命令能不能找到）。
+function Install-WithWinget {
+  param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Probe, [string]$Name = $Id)
+  if (-not (Have "winget")) {
+    Bad "没有 winget，装不了 $Name"
+    Info "Windows 10 1809 以下没有 winget；也可以从官网下安装包手动装"
+    return $false
+  }
+  Write-Host "    winget install $Id …" -ForegroundColor DarkGray
+  & winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements 2>&1 |
+    Select-String -Pattern "已成功|Successfully|已安装|already installed|失败|error" | ForEach-Object { Info $_.Line.Trim() }
+  Refresh-Path
+  if (Have $Probe) { Ok "$Name 已可用：$((Get-Command $Probe).Source)"; return $true }
+  Bad "$Name 装完了但命令还是找不到（可能需要重新登录，或 PATH 里有别的问题）"
+  return $false
+}
+
 function Have($command) {
   return [bool](Get-Command $command -ErrorAction SilentlyContinue)
 }
@@ -117,7 +141,7 @@ Info "工具目录 : $ToolsRoot"
 Info "插件目录 : $InstallDir"
 Info "目标 profile : $Profile"
 
-$total = 7
+$total = 9
 $failures = 0
 
 # ── 1. 前置 ───────────────────────────────────────────────────────────────────
@@ -137,17 +161,32 @@ if (-not (Have "node")) {
   if (Test-Path $profileDir) { Ok "profile 存在（$profileDir）" } else { Miss "profile 不存在（$profileDir）——会在部署时创建" }
 }
 
-# ── 2. Python 与串口/烧录包 ───────────────────────────────────────────────────
-Step 2 $total "Python 与串口烧录包"
+# ── 2. Python 本体 ────────────────────────────────────────────────────────────
+Step 2 $total "Python 本体"
 $python = $null
-foreach ($candidate in @("python", "python3", "py")) {
-  if (Have $candidate) { $python = $candidate; break }
+foreach ($candidate in @("python", "python3", "py")) { if (Have $candidate) { $python = $candidate; break } }
+if ($python) {
+  Ok "python：$((Get-Command $python).Source) · $((& $python --version 2>&1))"
+} elseif ($CheckOnly) {
+  Miss "没找到 python（第 3 步需要它）"
+  Info "去掉 -CheckOnly 后脚本会用 winget 装 Python（winget install Python.Python.3.12）"
+} else {
+  Miss "没找到 python，尝试安装"
+  if (Install-WithWinget -Id "Python.Python.3.12" -Probe "python" -Name "Python 3.12") {
+    $python = "python"
+    Ok "python：$((& python --version 2>&1))"
+  } else {
+    Info "备选：从 python.org 下安装包，装时勾选 Add python.exe to PATH"
+    $failures++
+  }
 }
+
+# ── 3. Python 包 ───────────────────────────────────────────────────
+Step 3 $total "Python 包（串口烧录依赖）"
 if (-not $python) {
   Miss "没找到 python —— STC 烧录（stcgal）与 STM32 UART 引导（stm32loader）需要它"
-  Info "装法：winget install Python.Python.3.12   （或从 python.org 装）"
+  Info "第 2 步没装上 python，跳过这一节"
 } else {
-  Ok "python：$((Get-Command $python).Source)"
   # pyserial 用 import 验（插件以 `serial` 引用它）；stcgal / stm32loader 只验"能不能找到"。
   # 这台机器上 stcgal 就装在 ESP-IDF 的 python 环境里，是个独立 exe —— 用系统 python `import stcgal` 会误报缺失，
   # 而实际烧录一切正常。所以最终判断交给第 7 步：用插件自己的解析器（serial.js）来回答。
@@ -178,8 +217,47 @@ if (-not $python) {
     if ($still) { Bad "装完还缺：$($still -join ', ')"; $failures++ } else { Ok "装好：$($missing -join ', ')" }
   }
 }
-# ── 3. Arduino ────────────────────────────────────────────────────────────────
-Step 3 $total "Arduino（arduino-cli + 核心）"
+# ── 4. VS Code 与 Python 扩展 ─────────────────────────────────────────────────
+Step 4 $total "VS Code 与 Python 扩展"
+$code = Get-Command "code" -ErrorAction SilentlyContinue
+if ($code) {
+  Ok "VS Code：$((& code --version 2>&1 | Select-Object -First 1)) · $($code.Source)"
+} elseif ($CheckOnly) {
+  Miss "没装 VS Code"
+} else {
+  Miss "没装 VS Code，尝试安装"
+  if (Install-WithWinget -Id "Microsoft.VisualStudioCode" -Probe "code" -Name "VS Code") {
+    $code = Get-Command "code"
+  } else {
+    Info "备选：https://code.visualstudio.com/Download  （选 User Installer，装时勾选 Add to PATH）"
+    $failures++
+  }
+}
+
+if ($code) {
+  # 扩展装没装用 `code --list-extensions` 看，而不是猜目录
+  $extensions = (& code --list-extensions 2>&1) -join "`n"
+  $wanted = @("ms-python.python")
+  $missingExt = $wanted | Where-Object { $extensions -notmatch [regex]::Escape($_) }
+  if (-not $missingExt) {
+    Ok "扩展齐：$(($wanted -join ', '))"
+  } elseif ($CheckOnly) {
+    Miss "缺扩展：$($missingExt -join ', ')"
+  } else {
+    foreach ($ext in $missingExt) {
+      Info "装扩展 $ext"
+      & code --install-extension $ext --force 2>&1 | Select-String -Pattern "successfully|已成功|already" | ForEach-Object { Info $_.Line.Trim() }
+    }
+    $after = (& code --list-extensions 2>&1) -join "`n"
+    $stillMissing = $missingExt | Where-Object { $after -notmatch [regex]::Escape($_) }
+    if ($stillMissing) { Bad "扩展没装上：$($stillMissing -join ', ')"; $failures++ }
+    else { Ok "扩展装好：$($missingExt -join ', ')" }
+  }
+  Info "插件自带的 VS Code 扩展（dsh-wechat-media-vscode-*.vsix）不在这一步 —— 它要 DSH 跑起来之后再装"
+}
+
+# ── 5. Arduino ────────────────────────────────────────────────────────────────
+Step 5 $total "Arduino（arduino-cli + 核心）"
 if ($SkipArduino) {
   Miss "按 -SkipArduino 跳过"
 } else {
@@ -223,8 +301,8 @@ if ($SkipArduino) {
   }
 }
 
-# ── 4. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
-Step 4 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
+# ── 6. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
+Step 6 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
 $toolchain = @(
   @{ Name = "armgcc";  Command = "arm-none-eabi-gcc"; Version = "--version"; Repo = "xpack-dev-tools/arm-none-eabi-gcc-xpack"; Sub = "bin" },
   @{ Name = "cmake";   Command = "cmake";             Version = "--version"; Repo = "xpack-dev-tools/cmake-xpack";              Sub = "bin" },
@@ -248,8 +326,8 @@ foreach ($tool in $toolchain) {
   } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
 }
 
-# ── 5. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
-Step 5 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
+# ── 7. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
+Step 7 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
 $uv4 = @(
   "$env:LOCALAPPDATA\Keil_v5\UV4\UV4.exe",
   "D:\Keil_v5\UV4\UV4.exe",
@@ -277,8 +355,8 @@ else {
   Info "装法：Espressif 的 IDF 安装器，或 git clone + install.bat"
 }
 
-# ── 6. 插件部署 ───────────────────────────────────────────────────────────────
-Step 6 $total "插件部署（源码 → profile）"
+# ── 8. 插件部署 ───────────────────────────────────────────────────────────────
+Step 8 $total "插件部署（源码 → profile）"
 if ($SkipTools -eq $false -and $CheckOnly) { Info "环境检查模式下不改插件；去掉 -CheckOnly 才会动" }
 
 # 源码位置：显式 -LocalPath > 已存在的 profile 联接 > 默认安装目录（不存在就 clone 一个）
@@ -369,8 +447,8 @@ if ($CheckOnly) {
   Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media）"
 }
 
-# ── 7. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
-Step 7 $total "自检"
+# ── 9. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
+Step 9 $total "自检"
 if ($CheckOnly) {
   Info "体检模式不跑测试；去掉 -CheckOnly 才会验证"
 } elseif (-not (Test-Path (Join-Path $checkout "scripts\probe-tools.mjs"))) {
