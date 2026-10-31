@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.24.2
+
+- **`-GitHubProxy`**: a mirror prefix for the downloads that come from GitHub. Measured on a VM: VS Code from Microsoft's
+  CDN ran at 475 KB/s while GitHub Releases sat at **1 KB/s** - arduino-cli (17 MB) would have taken 4.7 hours, and
+  arm-none-eabi-gcc (320 MB) longer than a day. The prefix rewrites *only* GitHub URLs (`github.com/*/releases/download`,
+  `codeload.github.com`, `objects.githubusercontent.com`); nodejs.org, python.org, update.code.visualstudio.com and
+  `api.github.com` are left alone, because those were not the slow ones.
+- The rewriting itself is verified (with a prefix, without, with a trailing slash, and a non-GitHub URL that must pass
+  through); which mirror actually works depends on the network and cannot be verified from here, so the manual lists four
+  candidates and two fallbacks (`-SkipToolchain -SkipArduino`, or copy `~\tools` in and use `-Offline`).
 ## 1.24.1
 
 - **The CH340 driver installs itself now, from WCH's own file host.** `https://file.wch.cn/download/file?id=65` returns

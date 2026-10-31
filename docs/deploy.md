@@ -189,6 +189,44 @@ irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deplo
 
 ---
 
+## 四·前、GitHub 太慢时怎么办
+
+这台机器上实测过：VS Code（微软 CDN）475 KB/s，但 **GitHub Releases 只有 1 KB/s** ——
+arduino-cli 17 MB 要 4.7 小时，后面还有 320 MB 的 arm-gcc。这时候给脚本一个镜像前缀：
+
+```powershell
+.\deploy.ps1 -GitHubProxy https://ghproxy.net
+```
+
+脚本会把**只对 GitHub 的下载地址**改写成 `<前缀>/<原地址>`：
+
+| 会改写的 | 不改写的 |
+|---|---|
+| `github.com/*/releases/download/...`（arduino-cli、xpack 工具链） | `nodejs.org`（Node） |
+| `codeload.github.com/...`（源码 zip） | `python.org`（Python） |
+| `objects.githubusercontent.com/...` | `update.code.visualstudio.com`（VS Code） |
+| | `api.github.com`（查版本号，通常不慢） |
+
+前缀末尾带不带 `/` 都行。常见的几个（哪个能用取决于你那边的网络，脚本无法替你判断）：
+
+```
+https://ghproxy.net
+https://gh-proxy.com
+https://ghfast.top
+https://github.moeyy.xyz
+```
+
+都不行的话，两个退路：
+
+```powershell
+# 先只要"插件能用"（跳过 320 MB 的 arm-gcc 与 70 MB 的 Arduino）
+.\deploy.ps1 -SkipToolchain -SkipArduino
+
+# 或者：在别的机器上跑过一次 deploy，把整个 %USERPROFILE%\tools 拷进这台机器，
+#      再用 -Offline 指向它（脚本只做校验与联接，不下载）
+.\deploy.ps1 -Offline -ToolsRoot D:\tools
+```
+
 ## 四·补、CH340 串口驱动
 
 STC / STM32 的板子大多用 CH340（或 CH343）做 USB 转串口。**这个驱动不用买、也不要从第三方镜像下**

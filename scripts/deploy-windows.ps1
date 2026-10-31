@@ -24,6 +24,10 @@
 .PARAMETER SkipTools
   跳过环境安装（python 包 / arduino-cli / arm 工具链），只做插件部署。
 
+.PARAMETER GitHubProxy
+  GitHub 加速前缀（可选），例如 https://ghproxy.net 。给"直连 GitHub 慢到用不了"的网络用：
+  脚本会把 arduino-cli / arm 工具链 / 源码 zip 的下载地址改写成 <前缀>/<原地址>。
+
 .PARAMETER SkipToolchain
   跳过 ARM 工具链（arm-none-eabi-gcc 约 320 MB + cmake / ninja / openocd）。
   只想先确认"插件能装进 DSH 并启动"时用；之后想编 STM32 再去掉这个开关重跑即可。
@@ -55,6 +59,7 @@ param(
   [string]$InstallDir = "$env:USERPROFILE\dsh-wechat-media",
   [string]$Profile = "desktop",
   [string]$Source = "https://github.com/wjh-ux/dsh-wechat-media.git",
+  [string]$GitHubProxy = "",
   [string]$LocalPath = "",
   [switch]$CheckOnly,
   [switch]$SkipTools,
@@ -327,6 +332,15 @@ function Install-PortableZip {
     Remove-Item $inner.FullName -Recurse -Force
   }
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
+}
+
+# GitHub 直连慢的时候（实测有 1 KB/s 的网络），把下载地址改写成镜像前缀 + 原地址。
+# 只改下载 URL，不改 api.github.com（API 通常没事，而且镜像不一定代理 API）。
+function Resolve-DownloadUrl([string]$Url) {
+  if (-not $GitHubProxy) { return $Url }
+  if ($Url -notmatch '^https://(github\.com|codeload\.github\.com|objects\.githubusercontent\.com)/') { return $Url }
+  $prefix = $GitHubProxy.TrimEnd("/")
+  return "$prefix/$Url"
 }
 
 function Get-LatestAsset($repo, $pattern) {
@@ -688,7 +702,7 @@ if ($SkipArduino) {
     try {
       $asset = Get-LatestAsset "arduino/arduino-cli" "Windows_64bit\.zip$"
       $dest = Join-Path $ToolsRoot "arduino-cli"
-      Install-PortableZip -Name "arduino-cli" -Url $asset.browser_download_url -Destination $dest
+      Install-PortableZip -Name "arduino-cli" -Url (Resolve-DownloadUrl $asset.browser_download_url) -Destination $dest
       $cli = (Get-ChildItem $dest -Filter "arduino-cli.exe" -Recurse | Select-Object -First 1).FullName
       Ok "arduino-cli 装到 $dest（$($asset.name)）"
     } catch { Bad "arduino-cli 下载失败：$($_.Exception.Message)"; $failures++; $cli = $null }
@@ -739,7 +753,7 @@ if ($SkipToolchain) {
     try {
       $asset = Get-LatestAsset $tool.Repo "win32-x64\.zip$"
       $dest = Join-Path $ToolsRoot $tool.Name
-      Install-PortableZip -Name $tool.Name -Url $asset.browser_download_url -Destination $dest
+      Install-PortableZip -Name $tool.Name -Url (Resolve-DownloadUrl $asset.browser_download_url) -Destination $dest
       $exe = Get-ChildItem $dest -Filter "$($tool.Command).exe" -Recurse | Select-Object -First 1
       if ($exe) { Ok "$($tool.Command) 装到 $dest（$($asset.name)）" } else { Bad "$($tool.Name) 解压后没找到 $($tool.Command).exe"; $failures++ }
     } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
@@ -803,7 +817,8 @@ if (-not (Test-Path (Join-Path $checkout "package.json"))) {
     Info "没有 git，改用 zip 下载"
     try {
       $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
-      $null = Save-Installer (($Source -replace '\.git$', '') + '/archive/refs/heads/main.zip') "dsh-wechat-media.zip"; $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
+        $null = Save-Installer (Resolve-DownloadUrl (($Source -replace '\.git$', '') + '/archive/refs/heads/main.zip')) 'dsh-wechat-media.zip'
+        $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
       Expand-Archive $zip -DestinationPath $env:TEMP -Force
       $inner = Get-ChildItem $env:TEMP -Directory -Filter "dsh-wechat-media-*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
       Move-Item $inner.FullName $InstallDir -Force
