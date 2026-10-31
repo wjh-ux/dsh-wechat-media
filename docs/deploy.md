@@ -57,7 +57,7 @@
 | 组件 | 来源 | 静默参数 |
 |---|---|---|
 | Node.js LTS | `nodejs.org/dist/<版本>/node-<版本>-x64.msi`；**MSI 失败（1603 = 不是管理员）时改用同版本的 `node-<版本>-win-x64.zip`** | `msiexec /i … /qn`；zip 走解压 + 用户 PATH |
-| Python 3.12 | `python.org/ftp/python/<版本>/python-<版本>-amd64.exe` | `/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1` |
+| Python 3.12 | `python.org/ftp/python/<版本>/python-<版本>-amd64.exe`（**从新到旧探，取第一个真的存在的**） | `/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1` |
 | VS Code | `update.code.visualstudio.com/latest/win32-x64-user/stable`（302 到真实文件） | `/VERYSILENT /NORESTART /MERGETASKS=!runcode` |
 
 先确认这台机器能连上这三个域名，用 `-ResolveOnly`（只解析地址，不下载、不安装）：
@@ -81,6 +81,10 @@
 脚本会自动退到**免管理员的 zip**：下同版本的 `node-<版本>-win-x64.zip`，解到 `%USERPROFILE%\tools\node`，
 只把它加进**用户级** PATH（不碰 HKLM）。实测那条路能装成（`v26.13.0`）。
 Python 与 VS Code 本来就不需要管理员：前者 `InstallAllUsers=0`，后者是 User 安装包。
+
+> **Python 有个坑值得记**：python.org 的 ftp 目录里 3.12.11 及以后的文件夹**是存在的**，但那些是仅源码的安全更新，
+> 里面没有 `.exe`。第一版脚本取"最新目录"就拿到 `3.12.16` 的地址，下载直接 404。
+> 现在从新到旧逐个 HEAD，取第一个真能下的 —— 写到这份文档时是 `3.12.10`（25.7 MB，`Python 3.12.10 (64-bit)`）。
 
 ### 装到哪
 

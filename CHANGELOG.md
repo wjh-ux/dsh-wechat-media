@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.23.6
+
+- **The Python link was a 404, and the reason is worth remembering.** python.org's ftp tree has directories for
+  `3.12.11` and later, but those are source-only security releases - no `.exe` inside. Taking "the newest directory" gave
+  a URL that 404s, which is exactly what a VM hit. `Get-PythonExeUrl` now walks the versions newest to oldest and HEADs
+  each `python-<ver>-amd64.exe` until one answers 200 (capped at 12 tries so a slow network cannot stall it). Today that
+  is **3.12.10**: 25.7 MB, and its own metadata says `Python 3.12.10 (64-bit)` - both checked by downloading it.
 ## 1.23.5
 
 - **Node without administrator rights.** The MSI is a machine-wide install, so `msiexec /qn` returns 1603 in a non-elevated

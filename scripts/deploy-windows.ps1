@@ -110,12 +110,32 @@ function Get-NodeMsiUrl {
 }
 
 function Get-PythonExeUrl {
+  <#
+    python.org 的 ftp 目录里有 3.12.11 及以后的文件夹，但那些是**仅源码**的安全版本，里面没有 .exe。
+    第一版直接取"最新目录"，于是拿到 3.12.16 的地址、下载 404（VM 上真实发生）。
+    现在从新到旧逐个 HEAD，直到找到真的带 amd64 安装包的那个。
+  #>
   $listing = Invoke-WebRequest -Uri "https://www.python.org/ftp/python/" -TimeoutSec 60 -UseBasicParsing
   $versions = [regex]::Matches($listing.Content, 'href="(3\.12\.\d+)/"') |
-    ForEach-Object { $_.Groups[1].Value } | Sort-Object { [version]$_ }
-  $latest = $versions | Select-Object -Last 1
-  if (-not $latest) { throw "拿不到 Python 3.12 的版本号" }
-  return @{ Version = $latest; Url = "https://www.python.org/ftp/python/$latest/python-$latest-amd64.exe" }
+    ForEach-Object { $_.Groups[1].Value } |
+    Sort-Object { [version]$_ } -Descending
+  if (-not $versions) { throw "ftp 目录里没有 3.12.x" }
+
+  $tried = 0
+  foreach ($version in $versions) {
+    if ($tried -ge 12) { break }        # 有上限，别在弱网下探太久
+    $tried++
+    $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
+    try {
+      $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
+      if ($head.StatusCode -eq 200) {
+        return @{ Version = $version; Url = $url; Probed = $tried }
+      }
+    } catch {
+      # 404 就是"这个版本没有 Windows 安装包"，继续往旧看
+    }
+  }
+  throw "3.12.x 里没找到带 amd64 安装包的版本（探了 $tried 个）"
 }
 
 function Get-VSCodeExeUrl {
