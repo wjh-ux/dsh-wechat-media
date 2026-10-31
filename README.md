@@ -76,6 +76,8 @@ Verification is never "the file exists" - every tool is run (`--version`), and t
 (`scripts/probe-tools.mjs` calls the same `which()` / `serialSupport()` the plugin uses at runtime) what it can actually
 reach, then runs the smoke test.
 
+完整说明（先决条件、十步各做什么、虚拟机怎么装、离线模式、卸载、排错）：**[docs/deploy.md](docs/deploy.md)**。
+
 What it cannot install for you, and why:
 
 | | 原因 |

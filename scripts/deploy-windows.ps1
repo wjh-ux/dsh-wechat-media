@@ -30,6 +30,10 @@
 .PARAMETER WithEsp32Core
   额外装 esp32 的 Arduino 核心（约 1.2 GB）。默认只装 arduino:avr（UNO/Mega/Nano）。
 
+.PARAMETER Offline
+  不联网、不下载：只检测，以及把已有的插件接进 profile。给离线机器，或已经把 ~\tools 整个拷过来的 VM。
+  缺什么就报什么，不尝试安装。
+
 .PARAMETER NoSelfTest
   跳过最后的冒烟测试。
 
@@ -52,7 +56,8 @@ param(
   [switch]$SkipTools,
   [switch]$SkipArduino,
   [switch]$WithEsp32Core,
-  [switch]$NoSelfTest
+  [switch]$NoSelfTest,
+  [switch]$Offline
 )
 
 $ErrorActionPreference = "Continue"
@@ -137,6 +142,7 @@ Write-Host "`n============================================" -ForegroundColor Whi
 Write-Host " dsh-wechat-media 部署" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor White
 if ($CheckOnly) { Write-Host " 模式：只体检（不改任何东西）" -ForegroundColor Yellow }
+if ($Offline) { Write-Host " 模式：离线（不下载、不安装，只检测并把已有的东西接进 profile）" -ForegroundColor Yellow }
 Info "工具目录 : $ToolsRoot"
 Info "插件目录 : $InstallDir"
 Info "目标 profile : $Profile"
@@ -155,8 +161,35 @@ if (-not (Have "node")) {
 } else {
   $nodeVersion = Read-Version "node" @("--version")
   Ok "node $nodeVersion"
+  # DSH 本体：只查 ~/.dsh 目录是不够的（那个目录可能是空的，或者从别的机器拷来的）。
+  # 这里按实际安装布局找：PATH 里的 dsh.cmd、或 %LOCALAPPDATA%\Programs\DeepSeek Harness\DeepSeek Harness.exe。
+  $dshExe = $null
+  foreach ($candidate in @(
+      (Join-Path $env:LOCALAPPDATA "Programs\DeepSeek Harness\DeepSeek Harness.exe"),
+      (Join-Path $env:LOCALAPPDATA "Programs\deepseek-harness\DeepSeek Harness.exe"),
+      (Join-Path $env:PROGRAMFILES "DeepSeek Harness\DeepSeek Harness.exe")
+    )) {
+    if (Test-Path $candidate) { $dshExe = $candidate; break }
+  }
+  $dshCmd = Get-Command "dsh" -ErrorAction SilentlyContinue
+  if ($dshExe) {
+    Ok "DSH 已安装：$dshExe"
+  } elseif ($dshCmd) {
+    Ok "DSH 已安装（PATH 里的 dsh：$($dshCmd.Source)）"
+  } else {
+    Bad "没找到 DSH 本体 —— 插件是 DSH 的扩展，装不了也跑不起"
+    Info "先装 DSH（DeepSeek Harness）并启动一次，生成 %USERPROFILE%\.dsh\，再来跑这个脚本"
+    $failures++
+  }
   $dsh = Join-Path $env:USERPROFILE ".dsh"
-  if (Test-Path $dsh) { Ok "DSH 目录存在（$dsh）" } else { Miss "还没有 DSH 目录（$dsh）——插件装进去也没东西加载它，先把 DSH 跑起来一次" }
+  if (Test-Path $dsh) {
+    Ok "DSH 目录存在（$dsh）"
+    if (-not (Test-Path (Join-Path $dsh "profiles"))) {
+      Miss "还没有 profiles\ —— DSH 至少启动过一次才会有；插件要装进某个 profile"
+    }
+  } else {
+    Miss "还没有 DSH 目录（$dsh）——先把 DSH 启动一次"
+  }
   $profileDir = Join-Path $dsh "profiles\$Profile"
   if (Test-Path $profileDir) { Ok "profile 存在（$profileDir）" } else { Miss "profile 不存在（$profileDir）——会在部署时创建" }
 }
@@ -167,7 +200,7 @@ $python = $null
 foreach ($candidate in @("python", "python3", "py")) { if (Have $candidate) { $python = $candidate; break } }
 if ($python) {
   Ok "python：$((Get-Command $python).Source) · $((& $python --version 2>&1))"
-} elseif ($CheckOnly) {
+} elseif ($CheckOnly -or $Offline) {
   Miss "没找到 python（第 3 步需要它）"
   Info "去掉 -CheckOnly 后脚本会用 winget 装 Python（winget install Python.Python.3.12）"
 } else {
@@ -222,7 +255,7 @@ Step 4 $total "VS Code 与 Python 扩展"
 $code = Get-Command "code" -ErrorAction SilentlyContinue
 if ($code) {
   Ok "VS Code：$((& code --version 2>&1 | Select-Object -First 1)) · $($code.Source)"
-} elseif ($CheckOnly) {
+} elseif ($CheckOnly -or $Offline) {
   Miss "没装 VS Code"
 } else {
   Miss "没装 VS Code，尝试安装"
@@ -253,7 +286,7 @@ if ($code) {
     if ($stillMissing) { Bad "扩展没装上：$($stillMissing -join ', ')"; $failures++ }
     else { Ok "扩展装好：$($missingExt -join ', ')" }
   }
-  Info "插件自带的 VS Code 扩展（dsh-wechat-media-vscode-*.vsix）不在这一步 —— 它要 DSH 跑起来之后再装"
+  Info "插件自带的 vsix 在第 9 步装（那一步不依赖扩展市场）"
 }
 
 # ── 5. Arduino ────────────────────────────────────────────────────────────────
@@ -265,7 +298,7 @@ if ($SkipArduino) {
   if ($arduinoCli) {
     Ok "arduino-cli：$($arduinoCli.FullName)"
     $cli = $arduinoCli.FullName
-  } elseif ($CheckOnly) {
+  } elseif ($CheckOnly -or $Offline) {
     Miss "没装 arduino-cli"
     $cli = $null
   } else {
@@ -285,7 +318,7 @@ if ($SkipArduino) {
     if ($WithEsp32Core -and $cores -notmatch "esp32:esp32") { $needCores += "esp32:esp32" }
     if (-not $needCores) {
       Ok "核心齐：$((($cores -split "`n" | Select-String -Pattern '^\S+:\S+\s').Line | ForEach-Object { ($_ -split '\s+')[0] }) -join ', ')"
-    } elseif ($CheckOnly) {
+    } elseif ($CheckOnly -or $Offline) {
       Miss "缺核心：$($needCores -join ', ')（约 $(if ($needCores -contains 'esp32:esp32') { '1.2 GB' } else { '60 MB' }))"
     } else {
       Info "安装核心 $($needCores -join ', ')（要下载，几分钟）"
@@ -316,7 +349,7 @@ foreach ($tool in $toolchain) {
     Ok "$($tool.Command)：$($version -replace '\s+', ' ')"
     continue
   }
-  if ($CheckOnly) { Miss "没装 $($tool.Command)"; continue }
+  if ($CheckOnly -or $Offline) { Miss "没装 $($tool.Command)"; continue }
   try {
     $asset = Get-LatestAsset $tool.Repo "win32-x64\.zip$"
     $dest = Join-Path $ToolsRoot $tool.Name
@@ -371,6 +404,10 @@ if (-not (Test-Path (Join-Path $checkout "package.json"))) {
   } elseif ($LocalPath) {
     Bad "指定的 -LocalPath 里没有 package.json：$LocalPath"
     $failures++
+  } elseif ($Offline) {
+    Bad "插件源码不在这里，而离线模式不 clone：$checkout"
+    Info "把仓库拷进这台机器，然后用 -LocalPath <路径> 指过去"
+    $failures++
   } elseif (Have "git") {
     Info "git clone $Source → $InstallDir"
     & git clone --depth 1 $Source $InstallDir 2>&1 | Out-Null
@@ -389,7 +426,7 @@ if (-not (Test-Path (Join-Path $checkout "package.json"))) {
   }
 } else {
   Ok "插件源码在 $checkout"
-  if ((Have "git") -and (Test-Path (Join-Path $checkout ".git")) -and -not $LocalPath -and -not $CheckOnly) {
+  if ((Have "git") -and (Test-Path (Join-Path $checkout ".git")) -and -not $LocalPath -and -not $CheckOnly -and -not $Offline) {
     Info "更新源码（git pull --ff-only）"
     & git -C $checkout pull --ff-only 2>&1 | Out-Null
   }

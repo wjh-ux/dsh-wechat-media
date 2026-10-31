@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.23.0
+
+- **`-Offline`**: no network at all - it reports what is missing and links what is already there, instead of downloading.
+  For an air-gapped machine, or a VM that had `~\tools` copied in. The banner says which mode is active, so "why is it
+  only reporting?" answers itself.
+- **A real DSH check, not just `~/.dsh` existing.** The first version accepted the directory as proof; it may be empty, or
+  copied from another machine. Step 1 now looks for the DSH binary (`%LOCALAPPDATA%\Programs\DeepSeek Harness\DeepSeek
+  Harness.exe`, the `dsh` command, Program Files) and fails loudly when it is absent, because the plugin is an extension
+  of DSH and cannot run without it.
+- **`docs/deploy.md` is the manual**: prerequisites the script cannot install, the ten steps, VM walkthrough (online and
+  offline), uninstall, and a troubleshooting table. It also explains why the verification is so fussy - the three
+  "looked installed, was not" bugs from the first version.
 ## 1.22.1
 
 - **The deploy script also installs the plugin's own VS Code extension** (step 9, the `.vsix` in the repo). Its identity
