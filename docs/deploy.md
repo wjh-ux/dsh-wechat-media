@@ -385,6 +385,23 @@ https://file.wch.cn/download/file?id=65      →  CH341SER.EXE（780 KB）
 
 ---
 
+## 六·补、DSH 起不来：`Unexpected token '﻿', "﻿{ "n"... is not valid JSON`
+
+这是 **UTF-8 BOM**。Windows PowerShell 5.1 的 `Set-Content -Encoding utf8` 会写 BOM，而 DSH 用
+`JSON.parse` 读 profile 的 `package.json`，BOM 不是合法 JSON 开头（早期版本的部署脚本就是这么写崩的）。
+
+**恢复**：崩溃框上点「Disable third-party plugins, back up profile patch, and restart」先把 DSH 起来，
+然后去掉 BOM：
+
+```powershell
+$f = "$env:USERPROFILE\.dsh\profiles\desktop\package.json"
+$t = [IO.File]::ReadAllText($f)
+if ($t.Length -gt 0 -and [int][char]$t[0] -eq 0xFEFF) { $t = $t.Substring(1) }
+[IO.File]::WriteAllText($f, $t, [Text.UTF8Encoding]::new($false))
+```
+
+（v1.24.11 起脚本自己就不会写 BOM，并在写之前校验 JSON、写之后检查头三字节。）
+
 ## 七、出问题怎么查
 
 | 现象 | 原因 | 怎么办 |

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.24.11
+
+- **The deploy script crashed DSH by writing a UTF-8 BOM into the profile's `package.json`.** Windows PowerShell 5.1's
+  `Set-Content -Encoding utf8` writes `EF BB BF` in front; DSH reads that file with `JSON.parse`, which rejects it:
+  `Unexpected token '﻿', "﻿{ "n"... is not valid JSON`. Reproduced byte for byte locally: the same
+  `Set-Content -Encoding utf8` produced `前 3 字节: 239,187,191` and `JSON.parse 失败: Unexpected token`.
+- Now the JSON is serialised, **validated by parsing it back**, then written with `[IO.File]::WriteAllText(..., UTF8Encoding($false))`,
+  and the first three bytes are checked afterwards (`-` no BOM). Verified on a throwaway profile: `前 3 字节: 123,13,10`
+  (`{`) and `JSON.parse: OK`.
+- The manual gained a section for the recovery: use DSH's own "Disable third-party plugins… and restart" to get back in,
+  then strip the BOM with four lines of PowerShell.
 ## 1.24.10
 
 - **A variable named `$version` was colliding with the new `-Version` switch parameter, and PowerShell does not

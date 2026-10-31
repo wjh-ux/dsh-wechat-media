@@ -88,7 +88,7 @@ param(
 # ── 脚本版本 ────────────────────────────────────────────────────────────────
 # 为什么要写在脚本里：没有版本号时，"我拿到的到底是哪一版"只能靠猜参数在不在（ToolsArchiveDir 只说明 ≥1.24.3），
 # 而 jsDelivr 的 @main 会缓存 12 小时，拿旧版是最容易发生的事。
-$scriptVersion = "1.24.10"
+$scriptVersion = "1.24.11"
 
 $total = 11          # 步骤总数（-Version 与各步标题共用）
 
@@ -980,8 +980,24 @@ if ($CheckOnly) {
   if (-not $json.dsh.profile) { $json.dsh | Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{}) -Force }
   $json.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue $bundles -Force
   New-Item -ItemType Directory -Force $profileDir | Out-Null
-  $json | ConvertTo-Json -Depth 8 | Set-Content $profilePkg -Encoding utf8
-  Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media）"
+  # 写 JSON **不能**用 Set-Content -Encoding utf8：Windows PowerShell 5.1 会写成「UTF-8 with BOM」，
+  # 而 DSH 用 JSON.parse 读这个文件，BOM 会直接让应用起不来：
+  #   Unexpected token '﻿', "﻿{ "n"... is not valid JSON
+  # （VM 上真把 DSH 崩了）。所以：先序列化 → 校验能被解析 → 再用不带 BOM 的编码写盘。
+  $jsonText = $json | ConvertTo-Json -Depth 8
+  try { $null = $jsonText | ConvertFrom-Json } catch {
+    Bad "生成的 package.json 不是合法 JSON，已放弃写入（原文件保持不变）：$($_.Exception.Message)"
+    $failures++
+    $jsonText = $null
+  }
+  if ($jsonText) {
+    [IO.File]::WriteAllText($profilePkg, $jsonText, [Text.UTF8Encoding]::new($false))
+    # 读回来再确认一次：写完的文件没有 BOM，且能被解析
+    $written = [IO.File]::ReadAllBytes($profilePkg)
+    $hasBom = $written.Length -ge 3 -and $written[0] -eq 0xEF -and $written[1] -eq 0xBB -and $written[2] -eq 0xBF
+    if ($hasBom) { Bad "写出来的 $profilePkg 仍带 BOM（不该发生）"; $failures++ }
+    else { Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media，UTF-8 无 BOM）" }
+  }
 }
 
 # ── 10. 插件自带的 VS Code 扩展（vsix）────────────────────────────────────────
