@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.22.1
+
+- **The deploy script also installs the plugin's own VS Code extension** (step 9, the `.vsix` in the repo). Its identity
+  (`publisher.name@version`) is read out of the `.vsix`'s `extension/package.json` rather than guessed from the file name,
+  and "already installed" is answered by `code --list-extensions --show-versions`.
+- Two bugs, both found by running it: the newest file was chosen with `-replace '^.*?-'` (which cut at the *first* hyphen
+  and produced `wechat-media-vscode-0.6.1`, so `[version]` failed and the sort degenerated - it picked **0.5.0**), and the
+  older `0.5.0.vsix` stores entry names with **backslashes** (`extension\package.json`), so the lookup missed it entirely.
+- Verified by uninstalling the extension first and letting the script reinstall it: `Extension
+  'dsh-wechat-media-vscode-0.6.1.vsix' was successfully installed` and `code --list-extensions --show-versions` then
+  reported `wjh-ux.dsh-wechat-media-vscode@0.6.1`.
 ## 1.22.0
 
 - **The deploy script now installs Python itself, VS Code, and the Python extension.** Nine steps: prerequisites → Python

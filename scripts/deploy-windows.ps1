@@ -141,7 +141,7 @@ Info "工具目录 : $ToolsRoot"
 Info "插件目录 : $InstallDir"
 Info "目标 profile : $Profile"
 
-$total = 9
+$total = 10
 $failures = 0
 
 # ── 1. 前置 ───────────────────────────────────────────────────────────────────
@@ -447,8 +447,63 @@ if ($CheckOnly) {
   Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media）"
 }
 
-# ── 9. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
-Step 9 $total "自检"
+# ── 9. 插件自带的 VS Code 扩展（vsix）────────────────────────────────────────
+Step 9 $total "插件自带的 VS Code 扩展"
+if (-not $code) {
+  Miss "没有 VS Code，跳过 vsix"
+} else {
+  # 版本号从文件名末尾取 x.y.z。早先用 `-replace '^.*?-'` 切到第一个连字符，得到的是
+  # "wechat-media-vscode-0.6.1"，[version] 转换失败，排序退化成任意顺序 → 选到了 0.5.0。
+  $vsix = Get-ChildItem $checkout -Filter "dsh-wechat-media-vscode-*.vsix" -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $m = [regex]::Match($_.BaseName, '-(\d+\.\d+\.\d+)$')
+      [pscustomobject]@{ File = $_; Version = if ($m.Success) { [version]$m.Groups[1].Value } else { [version]"0.0.0" } }
+    } |
+    Sort-Object Version |
+    Select-Object -Last 1 |
+    ForEach-Object { $_.File }
+  if (-not $vsix) {
+    Miss "仓库里没有 vsix（插件会在发布时打包，这里只装现成的）"
+  } else {
+    # 身份从 vsix 里读，不从文件名猜：vsix 是个 zip，extension/package.json 里有 publisher/name/version
+    $identity = $null
+    try {
+      Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+      $zip = [IO.Compression.ZipFile]::OpenRead($vsix.FullName)
+      try {
+        # 老 vsix 里条目名可能是反斜杠（Windows 的 ZipFile.CreateFromDirectory 就这么写），两种都要认
+        $entry = $zip.Entries | Where-Object { $_.FullName -match '^extension[\\/]package\.json$' } | Select-Object -First 1
+        if ($entry) {
+          $reader = New-Object IO.StreamReader($entry.Open())
+          $meta = $reader.ReadToEnd() | ConvertFrom-Json
+          $reader.Close()
+          $identity = "$($meta.publisher).$($meta.name)@$($meta.version)"
+        }
+      } finally { $zip.Dispose() }
+    } catch { Info "读 vsix 里的 package.json 失败：$($_.Exception.Message)" }
+
+    if (-not $identity) {
+      Miss "vsix 结构看不懂（缺 extension/package.json），跳过：$($vsix.Name)"
+    } else {
+      $installed = (& code --list-extensions --show-versions 2>&1) -join "`n"
+      if ($installed -match [regex]::Escape($identity)) {
+        Ok "已装：$identity（$($vsix.Name)）"
+      } elseif ($CheckOnly) {
+        Miss "没装：$identity（仓库里有 $($vsix.Name)）"
+      } else {
+        Info "装 $($vsix.Name)（$identity）"
+        & code --install-extension $vsix.FullName --force 2>&1 |
+          Select-String -Pattern "successfully|已成功|already" | ForEach-Object { Info $_.Line.Trim() }
+        $after = (& code --list-extensions --show-versions 2>&1) -join "`n"
+        if ($after -match [regex]::Escape($identity)) { Ok "装好：$identity" }
+        else { Bad "装完没在列表里：$identity"; $failures++ }
+      }
+    }
+  }
+}
+
+# ── 10. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
+Step 10 $total "自检"
 if ($CheckOnly) {
   Info "体检模式不跑测试；去掉 -CheckOnly 才会验证"
 } elseif (-not (Test-Path (Join-Path $checkout "scripts\probe-tools.mjs"))) {

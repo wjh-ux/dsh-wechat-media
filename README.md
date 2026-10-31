@@ -63,7 +63,7 @@ service or real hardware at least once (see *What was actually verified*).
 #   3 Python 包（pyserial/stcgal/stm32loader）  4 VS Code + ms-python.python 扩展
 #   5 arduino-cli + 核心                6 arm-none-eabi-gcc / cmake / ninja / openocd
 #   7 Keil 与 ESP-IDF（只检测）          8 插件装进 profile
-#   9 自检（用插件自己的解析器 + 冒烟测试）
+#   9 插件自带的 VS Code 扩展（vsix）     10 自检（插件自己的解析器 + 冒烟测试）
 .\scripts\deploy-windows.ps1
 
 # 只要插件（环境已就绪）
