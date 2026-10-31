@@ -341,8 +341,13 @@ export function normalizeBuildPrefs(value = {}) {
 const NOSYS_NOISE =
   /(not implemented and will always fail|does not take linker garbage collection into account|libc_nano\.a\(libc_a-[a-z]+\.o\): in function `_[a-z]+_r':)/i;
 
+// eslint-disable-next-line no-control-regex
+const ANSI = /\u001b\[[0-9;]*m/g;
+
 export function tidyOutput(text, { maxLines = 14 } = {}) {
-  const lines = String(text ?? "").split(/\r?\n/);
+  // arduino-cli and several compilers colour their output. Those escapes are not information in a chat bubble; they are
+  // four characters of noise in front of every path (`[92mUsed platform[0m`).
+  const lines = String(text ?? "").replace(ANSI, "").split(/\r?\n/);
   const kept = lines.filter((line) => !NOSYS_NOISE.test(line));
   const dropped = lines.length - kept.length;
   const tail = kept

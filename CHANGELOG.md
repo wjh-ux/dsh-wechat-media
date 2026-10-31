@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.18.1
+
+- **`arduino-cli` colours its output, and the escapes came through to the chat.** A failed ESP32 compile arrived as
+  `[92mUsed platform[0m [93mesp32:esp32[0m` - four characters of noise in front of every path. `tidyOutput` strips ANSI
+  sequences now, and a test asserts no escape survives.
+- The sample sketch got an `#ifndef LED_BUILTIN` fallback, because the generic `esp32:esp32:esp32` board does not define
+  it while the UNO does - the same 15 lines now compile for both (`924 bytes (2%)` on the UNO, `282984 bytes (21%)` on
+  the ESP32), which is also how the ESP32 core on this machine was confirmed to work through the new entry.
 ## 1.18.0
 
 - **Arduino is now the fourth family `project_build` drives.** A sketch is recognised the way `arduino-cli` recognises

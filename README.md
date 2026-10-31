@@ -746,10 +746,10 @@ FQBN (`arduino:avr:uno`), and which FQBN applies is read from, in order: `sketch
 answers for a board that is actually plugged in, which is exactly right for `upload` and useless for `compile`. A sketch
 is recognised the way arduino-cli recognises one: a folder containing a `.ino` of the same name.
 
-Verified here without any board: `arduino-cli compile --fqbn arduino:avr:uno` on a 220-byte Blink sketch reported
-`Sketch uses 924 bytes (2%) of program storage space` and `Global variables use 9 bytes (0%)`, with the AVR core
-(`arduino:avr@1.8.8`) installed by the tool's own instructions. The upload leg is the same `arduino-cli upload` call and
-needs a board on a COM port.
+Verified here without any board: the same Blink sketch compiled for **two** boards - `arduino:avr:uno` → `Sketch uses
+924 bytes (2%)` and `esp32:esp32:esp32` → `Sketch uses 282984 bytes (21%)` - with the AVR core (`arduino:avr@1.8.8`)
+installed by this README's instructions and the ESP32 core that was already on the machine. The upload leg is the same
+`arduino-cli upload` call and needs a board on a COM port.
 
 **Verified on a real board (STM32F103C8T6 clone, no ST-Link):** wired PA9/PA10 to the CH340 that was already on COM3,
 `BOOT0=1` + reset, `flasher="uart"` wrote 212 bytes, `Verification OK`, the 212 bytes were read back and hashed

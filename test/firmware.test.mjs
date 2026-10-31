@@ -285,6 +285,10 @@ await test("newlib's nosys noise is counted, not printed", () => {
   const failed = tidyOutput("Error: undefined reference to `main'\n_close is not implemented and will always fail");
   assert.match(failed.text, /undefined reference/);
   assert.equal(failed.dropped, 1);
+  // arduino-cli colours its output; the escapes are noise in a chat bubble, not information.
+  const coloured = tidyOutput("\u001b[92mUsed platform\u001b[0m  \u001b[93mesp32:esp32\u001b[0m 3.1.1");
+  assert.equal(coloured.text, "Used platform  esp32:esp32 3.1.1");
+  assert.ok(!/\u001b/.test(coloured.text), "no escape survives");
   // And an empty build prints nothing rather than a blank block.
   assert.equal(tidyOutput("").text, "");
 });
