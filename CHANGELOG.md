@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.20.0
+
+- **A route-level smoke test, and it is proven to catch the bugs it exists for.** `test/smoke.test.mjs` imports
+  `index.js`, starts the plugin against a fake host context, and then asserts what the chat depends on: 67 tools
+  registered with a description and an `execute`, the route table mounted, `/dsh-wechat-media/state` answering 200 with
+  JSON, a cross-site request refused with 403, and `project_build.execute()` running through **both** its build and flash
+  branches without a name escaping its scope.
+- **Mutation-tested, twice.** Removing `idfInfo` from the plan's return object turns it red; moving `uv4`'s declaration
+  back inside the build branch (the exact bug that shipped as 1.19.3) turns it red too. The first version of this test
+  caught neither - the gate was closed so `project_build` returned before the plan, and the CMake fixture returned from a
+  failed `configure` before the plan as well. A test that has never failed is not evidence; this one has.
+- `docs/TODO.md` records what it covers (two of the three historical failures) and what it does not (real build/flash
+  outcomes, which need hardware; and the client-side panel).
 ## 1.19.7
 
 - **`idfInfo is not defined` on the first ESP-IDF flash through the tool.** The IDF environment was read inside
