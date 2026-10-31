@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.17.5
+
+- **A board with no SWD debugger can now be flashed by the tool, not by hand.** Verified today on an STM32F103C8T6 clone
+  (Chip ID `0x412`, **32 KiB** flash, no ST-Link): `flasher="uart"` drives `python -m stm32loader` over PA9/PA10 with
+  `BOOT0=1`, and the write was confirmed by reading the 212 bytes back and comparing hashes rather than trusting
+  "Write ok". The auto path falls back to it only when neither openocd nor st-flash exists and a port was given.
+- The three things that make this path impossible each say which one is missing: no python, no firmware, no port.
 ## 1.17.4
 
 - **`project_build()` with no arguments said "还没有工程目录" while a project was remembered.** `/keil project` stores the

@@ -139,6 +139,15 @@ await test("the choice is overridable, because detection is a default and not a 
   assert.match(flashPlan({ kind: "keil", stc: true }).error, /hex/);
 });
 
+await test("a board with no debugger flashes over its own UART bootloader", () => {
+  // This is the board that was actually verified: a C8T6 clone with no SWD debugger, wired PA9/PA10 to a CH340.
+  const plan = flashPlan({ kind: "cmake", flasher: "uart", file: "build/app.bin", port: "COM3", python: "python.exe" });
+  assert.deepEqual(plan.args, ["-m", "stm32loader", "-p", "COM3", "-b", "115200", "-f", "F1", "-e", "-w", "build/app.bin", "-v"]);
+  // The three things it cannot do without, each with its own sentence.
+  assert.match(flashPlan({ kind: "cmake", flasher: "uart", file: "a.bin", port: "COM3" }).error, /python/);
+  assert.match(flashPlan({ kind: "cmake", flasher: "uart", port: "COM3", python: "p" }).error, /固件/);
+  assert.match(flashPlan({ kind: "cmake", flasher: "uart", file: "a.bin", python: "p" }).error, /串口/);
+});
 await test("the newest ELF is the one it picks, not the first one it sees", () => {
   const files = {
     "C:\\w\\build": [{ name: "app.elf", isDirectory: () => false }, { name: "boot.bin", isDirectory: () => false }],
@@ -192,7 +201,7 @@ await test("runPlan hands back the output and the exit code the caller must judg
 
 await test("the vocabularies are declared, so a typo is caught rather than passed through", () => {
   assert.deepEqual(TOOLCHAINS, ["keil", "idf", "cmake", "make"]);
-  assert.deepEqual(FLASHERS, ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool"]);
+  assert.deepEqual(FLASHERS, ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool", "uart"]);
 });
 
 await test("the override is stored only when it is a real choice", () => {

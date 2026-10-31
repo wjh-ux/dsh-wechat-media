@@ -10006,6 +10006,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               chip: String(args?.chip ?? "").trim(),
               target: String(args?.target ?? "").trim() || "stm32f1",
               port: String(args?.port ?? "").trim(),
+              python: serial.which("python", {}) || serial.which("python3", {}) || "",
+              baud: Number(args?.baud) || 0,
+              family: String(args?.chip ?? "").trim() || "F1",
               stc,
             });
             if (planned.delegated) {

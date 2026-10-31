@@ -20,7 +20,7 @@ export const BUILD_TIMEOUT_MS = 900000;
 export const TOOLCHAINS = ["keil", "idf", "cmake", "make"];
 
 /** Which downloaders we know. `uv4` is uVision's own (`-f`), the rest are external. */
-export const FLASHERS = ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool"];
+export const FLASHERS = ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool", "uart"];
 
 /** ST-Link boards people actually have; `openocd` needs a target config and this is the shortlist worth guessing from. */
 export const OPENOCD_TARGETS = {
@@ -134,6 +134,9 @@ export function flashPlan({
   chip = "",
   target = "stm32f1x",
   port = "",
+  python = "",
+  baud = 0,
+  family = "F1",
   stc = false,
 } = {}) {
   const wanted = String(flasher || "auto").toLowerCase();
@@ -182,6 +185,19 @@ export function flashPlan({
   if (resolved === "stflash") {
     if (!stflash) return { error: "没找到 st-flash —— 装上 stlink-tools" };
     return { tool: stflash, args: ["write", file, "0x8000000"], note: "st-flash write 0x8000000" };
+  }
+  if (resolved === "uart") {
+    // The STM32 UART bootloader (AN3155) through `stm32loader`: the only path for a board with no SWD debugger, which is
+    // exactly the board this was verified on (a C8T6 clone at 32K). BOOT0 must be 1 and the reset pressed, which is the
+    // price of not owning an ST-Link - so the note says it rather than failing at "no ACK".
+    if (!python) return { error: "没找到 python —— UART 引导烧录要用 python -m stm32loader" };
+    if (!file) return { error: "没有固件：先编译，或指定 file（.bin）" };
+    if (!port) return { error: "UART 引导烧录要给串口（例如 port=\"COM3\"）" };
+    return {
+      tool: python,
+      args: ["-m", "stm32loader", "-p", port, "-b", String(baud || 115200), "-f", String(family || "F1"), "-e", "-w", file, "-v"],
+      note: `stm32loader UART 引导（BOOT0=1 + 复位后才能连上）`,
+    };
   }
   if (resolved === "esptool") return { tool: "esptool", args: ["-p", port, "write_flash", "0x0", file], note: "esptool" };
   // Nothing usable: name the packages, because "不知道" is not an instruction.
