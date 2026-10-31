@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.20.1
+
+- **The smoke test hung CI for 13 minutes, twice.** The plugin starts monitors and a scheduler in `apply()`, so the event
+  loop never drained: `node test/smoke.test.mjs` printed its results and then sat there, and the workflow stalled at
+  "Run every suite" with no further output. It exits on its own terms now (`setImmediate(() => process.exit(...))` after
+  the last test). Locally it had always finished in 5 s - a reminder that "works here" says nothing about a different
+  Node/OS combination, and that a test which starts a long-lived object has to end it explicitly.
 ## 1.20.0
 
 - **A route-level smoke test, and it is proven to catch the bugs it exists for.** `test/smoke.test.mjs` imports

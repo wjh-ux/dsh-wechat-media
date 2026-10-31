@@ -197,3 +197,9 @@ await test("project_build runs through the tool layer without a name that does n
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// The plugin starts monitors and a scheduler inside `apply()`. That is right for the plugin and wrong for a test process:
+// the event loop stays busy, `node test/smoke.test.mjs` never exits, and CI sits at "Run every suite" with no further
+// output (measured: 13 minutes, twice, on the two runs that shipped 1.20.0). One turn is enough for the reporter to flush
+// its summary, then this file leaves on its own terms.
+setImmediate(() => process.exit(process.exitCode ?? 0));
