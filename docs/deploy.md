@@ -19,9 +19,9 @@
 |---|---|---|
 | **Windows 10 1809+ / 11** | 脚本用 winget、目录联接、注册表 PATH | 你（装系统） |
 | **DSH 本身（DeepSeek Harness）** | 插件是 DSH 的扩展，不是独立程序 | 你（装 DSH 并启动一次） |
-| Node.js 18+ | DSH 与插件工具链都要它 | **脚本会装**（`winget install OpenJS.NodeJS.LTS`） |
-| Python 3.12 | 串口烧录依赖它 | **脚本会装** |
-| VS Code + Python 扩展 | 面板/编辑器那条路 | **脚本会装** |
+| Node.js 18+ | DSH 与插件工具链都要它 | **脚本会装**（有 winget 用 winget，没有就下官方 msi） |
+| Python 3.12 | 串口烧录依赖它 | **脚本会装**（官方安装包，当前用户，带 pip） |
+| VS Code + Python 扩展 | 面板/编辑器那条路 | **脚本会装**（官方 User 安装包） |
 
 也就是说：一台**装了 Windows 的空机器**，只要再装好 DSH 并启动一次，剩下的脚本全包。
 
@@ -49,6 +49,33 @@
 
 每一步都是**先检查、再动手、最后用真命令验证**：装完 `winget` 的包会再问一次 `python --version`，
 装完扩展会再 `code --list-extensions --show-versions` 查一遍。文件在不在不等于能用。
+
+### 没有 winget 的机器（Win10 1809 以下、精简版、部分 VM）
+
+脚本会**退回官方安装包**，三条直链都不经过 winget：
+
+| 组件 | 来源 | 静默参数 |
+|---|---|---|
+| Node.js LTS | `nodejs.org/dist/<版本>/node-<版本>-x64.msi` | `msiexec /i … /qn` |
+| Python 3.12 | `python.org/ftp/python/<版本>/python-<版本>-amd64.exe` | `/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1` |
+| VS Code | `update.code.visualstudio.com/latest/win32-x64-user/stable`（302 到真实文件） | `/VERYSILENT /NORESTART /MERGETASKS=!runcode` |
+
+先确认这台机器能连上这三个域名，用 `-ResolveOnly`（只解析地址，不下载、不安装）：
+
+```powershell
+.\deploy.ps1 -ResolveOnly
+```
+
+```
+✔ Node.js v26.13.0
+  https://nodejs.org/dist/v26.13.0/node-v26.13.0-x64.msi
+✔ Python 3.12.16
+  https://www.python.org/ftp/python/3.12.16/python-3.12.16-amd64.exe
+✔ VS Code 1.144.0
+  https://vscode.download.prss.microsoft.com/…/VSCodeUserSetup-x64-1.144.0.exe
+```
+
+三个都 `✔` 就直接去掉 `-ResolveOnly` 跑；有 `✖` 说明那台机器网络到不了那个域名，把失败项的行贴出来。
 
 ### 装到哪
 

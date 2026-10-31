@@ -57,7 +57,8 @@ param(
   [switch]$SkipArduino,
   [switch]$WithEsp32Core,
   [switch]$NoSelfTest,
-  [switch]$Offline
+  [switch]$Offline,
+  [switch]$ResolveOnly
 )
 
 $ErrorActionPreference = "Continue"
@@ -93,6 +94,112 @@ function Install-WithWinget {
   if (Have $Probe) { Ok "$Name 已可用：$((Get-Command $Probe).Source)"; return $true }
   Bad "$Name 装完了但命令还是找不到（可能需要重新登录，或 PATH 里有别的问题）"
   return $false
+}
+
+# ── 没有 winget 时的备用安装 ──────────────────────────────────────────────────
+# 真实踩到：VM 是 Win10 1809 以下（或精简版），没有 winget，于是 Node/Python/VS Code 一个都装不上，
+# 而 arduino-cli 与 ARM 工具链是直链下载、照常成功 —— 结果装了一半。下面用官方安装包补上这条路。
+
+# 三个地址解析（安装器与 -ResolveOnly 共用同一套逻辑，避免两处各写一遍再漂移）
+function Get-NodeMsiUrl {
+  $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -TimeoutSec 60
+  $lts = $index | Where-Object { $_.lts } | Select-Object -First 1
+  if (-not $lts) { throw "拿不到 Node 的 LTS 版本号" }
+  $version = $lts.version
+  return @{ Version = $version; Url = "https://nodejs.org/dist/$version/node-$version-x64.msi" }
+}
+
+function Get-PythonExeUrl {
+  $listing = Invoke-WebRequest -Uri "https://www.python.org/ftp/python/" -TimeoutSec 60 -UseBasicParsing
+  $versions = [regex]::Matches($listing.Content, 'href="(3\.12\.\d+)/"') |
+    ForEach-Object { $_.Groups[1].Value } | Sort-Object { [version]$_ }
+  $latest = $versions | Select-Object -Last 1
+  if (-not $latest) { throw "拿不到 Python 3.12 的版本号" }
+  return @{ Version = $latest; Url = "https://www.python.org/ftp/python/$latest/python-$latest-amd64.exe" }
+}
+
+function Get-VSCodeExeUrl {
+  # 这个地址 302 到当前 stable 的 User 安装包。第一版用 `-MaximumRedirection 0` 想直接读 Location，
+  # 在 PS 5.1 里抛的是 "Operation is not valid due to the current state of the object"，拿不到头；
+  # 改成跟随重定向、从最终 URL 里读（实测 status=200，final=…/VSCodeUserSetup-x64-1.144.0.exe）。
+  $response = Invoke-WebRequest -Uri "https://update.code.visualstudio.com/latest/win32-x64-user/stable" `
+    -Method Head -MaximumRedirection 5 -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+  $final = $response.BaseResponse.ResponseUri.AbsoluteUri
+  if (-not $final) { throw "重定向后拿不到最终地址" }
+  $name = ($final -split "/")[-1]
+  $version = "latest"
+  if ($name -match '(\d+\.\d+\.\d+)') { $version = $Matches[1] }
+  return @{ Version = $version; Url = $final }
+}
+
+function Save-Installer([string]$Url, [string]$FileName) {
+  $path = Join-Path $env:TEMP $FileName
+  Write-Host "    下载 $FileName…" -ForegroundColor DarkGray
+  Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing -TimeoutSec 1800
+  return $path
+}
+
+function Install-NodeFallback {
+  try {
+    $found = Get-NodeMsiUrl
+    Info "Node.js LTS $($found.Version)（官方 msi）"
+    $msi = Save-Installer $found.Url "node-$($found.Version)-x64.msi"
+    $proc = Start-Process msiexec.exe -ArgumentList @("/i", "`"$msi`"", "/qn", "/norestart") -Wait -PassThru
+    Remove-Item $msi -Force -ErrorAction SilentlyContinue
+    Refresh-Path
+    if (Have "node") { Ok "node $(Read-Version 'node' @('--version'))"; return $true }
+    Bad "msiexec 退出码 $($proc.ExitCode)，node 仍不可用"
+    return $false
+  } catch { Bad "Node 安装失败：$($_.Exception.Message)"; return $false }
+}
+
+function Install-PythonFallback {
+  try {
+    $found = Get-PythonExeUrl
+    Info "Python $($found.Version)（官方安装包，当前用户 + 加进 PATH）"
+    $exe = Save-Installer $found.Url "python-$($found.Version)-amd64.exe"
+    # InstallAllUsers=0：不需要管理员；PrependPath=1：装完在 PATH 里；Include_pip=1：带 pip
+    $proc = Start-Process $exe -ArgumentList @("/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_pip=1") -Wait -PassThru
+    Remove-Item $exe -Force -ErrorAction SilentlyContinue
+    Refresh-Path
+    foreach ($candidate in @("python", "python3", "py")) {
+      if (Have $candidate) { Ok "$candidate $(Read-Version $candidate @('--version'))"; return $true }
+    }
+    Bad "安装器退出码 $($proc.ExitCode)，python 仍不可用"
+    return $false
+  } catch { Bad "Python 安装失败：$($_.Exception.Message)"; return $false }
+}
+
+function Install-VSCodeFallback {
+  try {
+    $found = Get-VSCodeExeUrl
+    Info "VS Code（官方 User 安装包）"
+    $exe = Save-Installer $found.Url "VSCodeUserSetup.exe"
+    # /MERGETASKS=!runcode：装完不自动启动；把 code 加进 PATH 由安装器默认任务完成
+    $proc = Start-Process $exe -ArgumentList @("/VERYSILENT", "/NORESTART", "/MERGETASKS=!runcode") -Wait -PassThru
+    Remove-Item $exe -Force -ErrorAction SilentlyContinue
+    Refresh-Path
+    if (Have "code") { Ok "VS Code $((& code --version 2>&1 | Select-Object -First 1))"; return $true }
+    Bad "安装器退出码 $($proc.ExitCode)，code 仍不可用"
+    return $false
+  } catch { Bad "VS Code 安装失败：$($_.Exception.Message)"; return $false }
+}
+
+# 统一入口：先试 winget（有就用），没有或失败就退回官方安装包。
+function Install-Package {
+  param(
+    [Parameter(Mandatory)][string]$Id,
+    [Parameter(Mandatory)][string]$Probe,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][scriptblock]$Fallback
+  )
+  if (Have "winget") {
+    if (Install-WithWinget -Id $Id -Probe $Probe -Name $Name) { return $true }
+    Info "winget 这条路没成，改用官方安装包"
+  } else {
+    Info "这台机器没有 winget，改用官方安装包"
+  }
+  return (& $Fallback)
 }
 
 function Have($command) {
@@ -150,6 +257,30 @@ Info "目标 profile : $Profile"
 $total = 10
 $failures = 0
 
+# ── -ResolveOnly：只解析地址 ──────────────────────────────────────────────────
+if ($ResolveOnly) {
+  Write-Host "`n解析官方安装包地址（不下载、不安装）" -ForegroundColor Cyan
+  $anyFail = $false
+  foreach ($spec in @(
+      @{ Name = "Node.js"; Get = { Get-NodeMsiUrl } },
+      @{ Name = "Python";  Get = { Get-PythonExeUrl } },
+      @{ Name = "VS Code"; Get = { Get-VSCodeExeUrl } }
+    )) {
+    try {
+      $found = & $spec.Get
+      Ok "$($spec.Name) $($found.Version)"
+      Info $found.Url
+    } catch {
+      Bad "$($spec.Name) 地址解析失败：$($_.Exception.Message)"
+      $anyFail = $true
+    }
+  }
+  Write-Host ""
+  if ($anyFail) { Write-Host "有解析失败的项 —— 检查这台机器能不能访问 nodejs.org / python.org / update.code.visualstudio.com" -ForegroundColor Yellow }
+  else { Write-Host "地址都拿到了。去掉 -ResolveOnly 就会真的下载并安装。" -ForegroundColor Green }
+  exit ([int]$anyFail)
+}
+
 # ── 1. 前置 ───────────────────────────────────────────────────────────────────
 Step 1 $total "前置条件"
 if ($env:OS -ne "Windows_NT") { Bad "这个脚本只支持 Windows"; $failures++; }
@@ -159,7 +290,7 @@ else { Ok "Windows" }
 if (-not (Have "node")) {
   if ($CheckOnly -or $Offline) {
     Miss "没找到 node（Node.js 18+）$(if ($Offline) { '；离线模式不装' } else { '' })"
-  } elseif (Install-WithWinget -Id "OpenJS.NodeJS.LTS" -Probe "node" -Name "Node.js LTS") {
+  } elseif (Install-Package -Id "OpenJS.NodeJS.LTS" -Probe "node" -Name "Node.js LTS" -Fallback { Install-NodeFallback }) {
     Ok "node $((Read-Version "node" @("--version")))"
   } else {
     Info "备选：https://nodejs.org/en/download  （选 LTS 的 .msi，装完重开一个终端）"
@@ -215,7 +346,7 @@ if ($python) {
   Info "去掉 -CheckOnly 后脚本会用 winget 装 Python（winget install Python.Python.3.12）"
 } else {
   Miss "没找到 python，尝试安装"
-  if (Install-WithWinget -Id "Python.Python.3.12" -Probe "python" -Name "Python 3.12") {
+  if (Install-Package -Id "Python.Python.3.12" -Probe "python" -Name "Python 3.12" -Fallback { Install-PythonFallback }) {
     $python = "python"
     Ok "python：$((& python --version 2>&1))"
   } else {
@@ -269,7 +400,7 @@ if ($code) {
   Miss "没装 VS Code"
 } else {
   Miss "没装 VS Code，尝试安装"
-  if (Install-WithWinget -Id "Microsoft.VisualStudioCode" -Probe "code" -Name "VS Code") {
+  if (Install-Package -Id "Microsoft.VisualStudioCode" -Probe "code" -Name "VS Code" -Fallback { Install-VSCodeFallback }) {
     $code = Get-Command "code"
   } else {
     Info "备选：https://code.visualstudio.com/Download  （选 User Installer，装时勾选 Add to PATH）"

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.23.4
+
+- **No winget is no longer a dead end.** On a VM without winget (Win10 before 1809, trimmed images, some servers) the
+  first version could install nothing through winget while `arduino-cli` and the ARM toolchain downloaded fine - a
+  half-installed machine. Node.js, Python and VS Code now fall back to their official installers, silently:
+  `node-<ver>-x64.msi` (`msiexec /qn`), `python-<ver>-amd64.exe` (`/quiet InstallAllUsers=0 PrependPath=1 Include_pip=1`),
+  and the VS Code user installer (`/VERYSILENT /NORESTART /MERGETASKS=!runcode`).
+- **`-ResolveOnly` prints the three URLs without downloading anything**, so a machine with an awkward network can be
+  checked in seconds: it resolves the Node LTS version from `nodejs.org/dist/index.json`, the newest 3.12 from the
+  python.org listing, and the VS Code redirect target. Verified with `winget` removed from PATH: all three resolve.
+- Two of my own mistakes, both from editing this file with string plumbing rather than rewriting it wholesale: a
+  block-replace hit the *helper* functions instead of the installers (their bodies contain the same URLs), which briefly
+  left `Get-NodeMsiUrl` calling itself; and the VS Code redirect read the response headers the way PowerShell 7 does,
+  which throws in 5.1. Both are now one clean region with a comment saying why.
 ## 1.23.3
 
 - **`docs/deploy.pdf` is in the repo** (390 KB, six pages), so a clone already has the manual in a form that survives being
