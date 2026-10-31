@@ -96,7 +96,7 @@ export function keilFamily(xml) {
  * `idf` builds through `idf.py -C <dir> build` - the same -C discipline as flashing, because building "the project in
  * whatever directory the plugin happens to be" is how a green build belongs to something else.
  */
-export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", uv4 = "", arduinoCli = "", fqbn = "", target = "" } = {}) {
+export function buildPlan({ kind, dir = "", project = "", idfPy = "", idf = null, cmake = "", make = "", uv4 = "", arduinoCli = "", fqbn = "", target = "" } = {}) {
   // Every tool path comes in resolved where possible: a long-running process never re-reads PATH, so `cmake` installed
   // while DSH was running would spawn-fail even though the folder has it (which() is what found it).
   if (kind === "keil") {
@@ -110,7 +110,10 @@ export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = ""
     const args = ["-C", dir];
     if (target) args.push(`-DIDF_TARGET=${target}`);
     args.push("build");
-    return { tool: idfPy, args, note: "idf.py build" };
+    // `idf.py` is a .py file, so spawning it fails with EFTYPE, and even with an interpreter it needs cmake / ninja / the
+    // xtensa toolchain on PATH - which only ESP-IDF's export.ps1 sets up. One PowerShell session sources it first.
+    const wrapped = idfWrap({ idf, idfPy, argv: args });
+    return wrapped ? { ...wrapped, note: "idf.py build（经 export.ps1）" } : { tool: idfPy, args, note: "idf.py build" };
   }
   if (kind === "arduino") {
     // arduino-cli is the scriptable face of the Arduino IDE: same cores, same board manager, no GUI. The FQBN
@@ -144,6 +147,7 @@ export function flashPlan({
   project = "",
   file = "",
   idfPy = "",
+  idf = null,
   uv4 = "",
   openocd = "",
   stflash = "",
@@ -185,10 +189,16 @@ export function flashPlan({
   }
   if (resolved === "idf") {
     if (!idfPy) return { error: "没找到 idf.py" };
+    if (!port) return { error: "ESP-IDF 烧录要给串口（例如 port=\"COM6\"）" };
     const args = ["-C", dir];
-    if (port) args.push("-p", port);
+    // Not `target`: that is the openocd target name ("stm32f1x") and it leaked into an ESP-IDF command as
+    // `-DIDF_TARGET=stm32f1x`. The IDF target is `esp32` and belongs in `chip`.
+    if (chip) args.push(`-DIDF_TARGET=${chip}`);
+    args.push("-p", port);
+    if (baud) args.push("-b", String(baud));
     args.push("flash");
-    return { tool: idfPy, args, note: "idf.py flash（会先编译）" };
+    const wrapped = idfWrap({ idf, idfPy, argv: args });
+    return wrapped ? { ...wrapped, note: "idf.py flash（经 export.ps1，会先编译）" } : { tool: idfPy, args, note: "idf.py flash（会先编译）" };
   }
   if (resolved === "arduino") {
     if (!arduinoCli) return { error: "没找到 arduino-cli" };
@@ -245,6 +255,32 @@ export function flashPlan({
  * is the person overriding it; and `arduino-cli board list --format json` is the last resort, because it can only
  * recognise a board that is plugged in - which is exactly right for `upload` and useless for `compile`.
  */
+/**
+ * `idf.py` inside the environment that makes it work.
+ *
+ * Two separate problems, both real: the file is `.py`, so `spawn` fails with EFTYPE, and idf.py needs cmake / ninja / the
+ * xtensa toolchain on PATH, which only ESP-IDF's `export.ps1` sets up. One PowerShell session that sources the script and
+ * then runs the interpreter solves both - the same shape serial.js has always used for flashing.
+ */
+export function idfWrap({ idf, idfPy = "", python = "", argv = [] } = {}) {
+  const framework = String(idf?.framework ?? "").replace(/[\\/]+$/, "");
+  if (!framework) return null;
+  // The script is the *first argument* to the interpreter: `python idf.py -C dir build`. Passing the script where the
+  // interpreter belongs made python read `-C` as its own option ("Unknown option: -C").
+  const script = String(idf?.idfPy ?? idfPy ?? "");
+  if (!script) return null;
+  const interpreter = String(idf?.python ?? python ?? "") || "python";
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  // PATH is left alone deliberately: export.ps1 itself calls `python`, so emptying PATH first makes the export fail
+  // ("python is not recognized") and then idf.py reports "'cmake' must be available on the PATH". The "Not using an
+  // unsupported version of tool cmake found in PATH" lines this machine prints are harmless - export.ps1 prepends
+  // ESP-IDF's own tools, so those win.
+  const command = [
+    `& ${quote(`${framework}\\export.ps1`)}`,
+    `& ${quote(interpreter)} ${[script, ...argv].map(quote).join(" ")}`,
+  ].join("; ");
+  return { tool: "powershell.exe", args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command] };
+}
 /**
  * Intel HEX → `{ base, bytes }`.
  *

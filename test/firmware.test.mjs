@@ -20,6 +20,7 @@ import {
   flashPlan,
   fqbnFromSketchYaml,
   hexToBin,
+  idfWrap,
   keilFamily,
   normalizeBuildPrefs,
   runPlan,
@@ -236,6 +237,21 @@ await test("Keil output is found in Objects/, and a named flasher overrides UV4"
   assert.match(String(plan.tool), /python/, "the python interpreter that has stm32loader");
   assert.ok(plan.args.includes("stm32loader"));
   assert.ok(plan.args.includes(`${dir}\\Objects\\blink.hex`));
+});
+await test("idf.py runs inside export.ps1, with the script as the interpreter's first argument", () => {
+  const idf = { framework: "D:\\Espressif\\frameworks\\esp-idf-v4.4.8", python: "D:\\Espressif\\py\\python.exe" };
+  const wrapped = idfWrap({ idf, idfPy: "D:\\Espressif\\frameworks\\esp-idf-v4.4.8\\tools\\idf.py", argv: ["-C", "C:\\hw", "build"] });
+  assert.equal(wrapped.tool, "powershell.exe");
+  const command = wrapped.args[wrapped.args.length - 1];
+  // Export first: idf.py needs cmake/ninja/the toolchain on PATH.
+  assert.match(command, /export\.ps1/);
+  // The script comes after the interpreter, or python reads `-C` as its own option ("Unknown option: -C").
+  assert.match(command, /python\.exe' 'D:\\Espressif\\frameworks\\esp-idf-v4\.4\.8\\tools\\idf\.py' '-C' 'C:\\hw' 'build'/);
+  // PATH is not touched: export.ps1 calls `python` itself, so emptying PATH breaks the export.
+  assert.ok(!/\$env:PATH/.test(command));
+
+  // No framework → no wrapper, and the caller falls back to the plain plan.
+  assert.equal(idfWrap({ idf: null, idfPy: "x.py", argv: [] }), null);
 });
 await test("the newest ELF is the one it picks, not the first one it sees", () => {
   const files = {

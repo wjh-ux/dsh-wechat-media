@@ -754,6 +754,30 @@ installed by this README's instructions and the ESP32 core that was already on t
 **Install notes are in [docs/keil-arm-install.md](docs/keil-arm-install.md)**: the download page and its direct link, the
 installer's size and SHA256, the device pack URL, the licence activation, and the four traps this install produced.
 
+**ESP-IDF, on the same board (v1.19.6):** an unmodified `examples/get-started/hello_world`, copied out of the IDF tree.
+`project_build(action="build")` → `Project build complete` in 162 s; `action="flash", port="COM6", baud=115200` →
+`Hash of data verified` three times, `Hard resetting via RTS pin`. The board then printed its own banner:
+
+```
+Hello world!
+This is esp32 chip with 2 CPU core(s), WiFi/BT/BLE, silicon revision v3.1, 2MB external flash
+Minimum free heap size: 300936 bytes
+```
+
+Four things this cost, all now handled in `idfWrap()`:
+
+- **`idf.py` cannot be spawned at all** - it is a `.py` file, so `spawn` fails with `EFTYPE`. It also needs cmake, ninja and
+  the xtensa toolchain on PATH, which only ESP-IDF's `export.ps1` provides, so the command runs inside one PowerShell
+  session that sources it first.
+- **The script must be the interpreter's first argument.** `python -C dir build` makes python read `-C` as its own option
+  (`Unknown option: -C`); it has to be `python <idf.py> -C dir build`.
+- **Do not clear PATH to get rid of the "Not using an unsupported version of tool cmake found in PATH" lines.**
+  `export.ps1` calls `python` itself, so emptying PATH makes the export fail and then idf.py says
+  `'cmake' must be available on the PATH`. Those warnings are harmless: export.ps1 prepends ESP-IDF's own tools.
+- **460800 baud is too fast for this CP210x board.** The first flash wrote the app and failed on the next image with
+  `Invalid head of packet (0x78): Possible serial noise or corruption`; `-b 115200` completed. The very first attempt also
+  hit `Wrong boot mode detected (0x13)` and simply needed a retry.
+
 **ESP32, on the real board (v1.19.5):** a CP210x board on COM6, `project_build(action="flash", port="COM6")` →
 `arduino-cli compile --upload` → `Wrote 298160 bytes (158774 compressed) at 0x00010000 in 2.4 seconds`,
 `Hash of data verified`, `Hard resetting via RTS pin`. The sketch printed its own evidence over the same port:

@@ -9929,6 +9929,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
 
         // Arduino needs one more fact than "which folder": the board (FQBN). Three places can state it - sketch.yaml
         // wins (it is what arduino-cli itself writes), then the argument, then whatever is actually plugged in.
+        // The IDF environment (`framework` + its own python) is needed by the planner: `idf.py` is a .py file and only
+        // works inside a session that has sourced export.ps1.
+        const idfInfo = serial.findEspIdf();
         const arduinoCli = serial.which("arduino-cli", {}) || "";
         let fqbn = String(args?.board ?? args?.fqbn ?? "").trim();
         if (kind === "arduino" && !fqbn) {
@@ -10039,7 +10042,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 }
               }
 
-              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make, uv4, arduinoCli, fqbn });
+              const built = firmware.buildPlan({ kind, dir, project, idfPy, idf: idfInfo, cmake, make, uv4, arduinoCli, fqbn });
               const ran = await firmware.runPlan(built, {
                 timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
               });
@@ -10068,6 +10071,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               project,
               file,
               idfPy,
+              idf: idfInfo,
               uv4,
               openocd,
               stflash,

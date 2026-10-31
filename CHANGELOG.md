@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.19.6
+
+- **ESP-IDF projects through `project_build`, verified on the ESP32 board.** `hello_world` built in 162 s and flashed with
+  `Hash of data verified` ×3, then printed `Hello world! / This is esp32 chip with 2 CPU core(s) … 2MB external flash`.
+- **`idf.py` is now wrapped properly.** It is a `.py` file (`spawn` → `EFTYPE`) and needs cmake/ninja/the toolchain from
+  `export.ps1`, so it runs inside one PowerShell session that sources it. The script is the interpreter's first argument -
+  `python -C dir build` made python reject `-C` as its own option - and PATH is deliberately left alone, because
+  `export.ps1` calls `python` itself and the "unsupported version of tool cmake" warnings are harmless.
+- **The openocd target no longer leaks into ESP-IDF.** `-DIDF_TARGET=stm32f1x` was being sent because the flash plan
+  reused its `target` argument; the IDF target is `chip` now.
+- Recorded for the board: 460800 baud fails with `Invalid head of packet (0x78)` (use `-b 115200`), and the first attempt
+  can report `Wrong boot mode detected (0x13)` and succeed on a retry.
 ## 1.19.5
 
 - **Arduino flashing is `compile --upload`, not `upload`.** `arduino-cli upload` looks for an already-compiled sketch by
