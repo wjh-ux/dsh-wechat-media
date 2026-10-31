@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.17.8
+
+- **`project_build` on a fresh CMake checkout no longer fails with `does not appear to contain CMakeCache.txt`.** A new
+  clone has no `build/`, and `cmake --build` alone cannot invent one - which reads like a broken project rather than an
+  unconfigured one. The tool now configures first (`-S <dir> -B <dir>/build -G Ninja`, and `-DCMAKE_TOOLCHAIN_FILE=` when
+  `cmake/arm-none-eabi.cmake`, `cmake/toolchain.cmake` or `toolchain.cmake` exists), reports a configuration failure with
+  its own last lines instead of a build failure, and only then builds.
 ## 1.17.7
 
 - **The README now reads like the thing that was built.** Four gaps: the capability table had no row for `project_build`

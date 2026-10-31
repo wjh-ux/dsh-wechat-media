@@ -9975,6 +9975,34 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               // UV4 has to be a real path: `spawn("uv4")` fails in milliseconds and looks like a build failure.
               const keilEnv = keil.keilSupport();
               const uv4 = keilEnv.ok ? keilEnv.uv4.program : "";
+
+              // A fresh clone has no build/ directory, and `cmake --build` alone fails on it with "does not appear to
+              // contain CMakeCache.txt" - which reads like a broken project rather than an unconfigured one. Configure
+              // once, then build, so "point it at a fresh checkout" works.
+              if (kind === "cmake" && cmake) {
+                const cache = join(dir, "build", "CMakeCache.txt");
+                if (!existsSync(cache)) {
+                  const toolchainFile = ["cmake/arm-none-eabi.cmake", "cmake/toolchain.cmake", "toolchain.cmake"]
+                    .map((candidate) => join(dir, candidate))
+                    .find((candidate) => existsSync(candidate));
+                  const configureArgs = ["-S", dir, "-B", join(dir, "build")];
+                  const ninja = serial.which("ninja", {}) || "";
+                  if (ninja) configureArgs.push("-G", "Ninja");
+                  if (toolchainFile) configureArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${toolchainFile}`);
+                  const configured = await firmware.runPlan(
+                    { tool: cmake, args: configureArgs, note: "cmake 配置" },
+                    { timeoutMs: 300000 },
+                  );
+                  noteRoute("/project", { action: "configure", kind, ok: configured.ok, code: configured.code });
+                  if (!configured.ok) {
+                    return [
+                      `❌ 配置失败（${toolchainFile ? `toolchain=${toolchainFile}` : "没找到 toolchain 文件"}，退出码 ${configured.code}）`,
+                      (configured.output || "").trim().split(/\r?\n/).slice(-12).join("\n"),
+                    ].filter(Boolean).join("\n");
+                  }
+                }
+              }
+
               const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make, uv4 });
               const ran = await firmware.runPlan(built, {
                 timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
