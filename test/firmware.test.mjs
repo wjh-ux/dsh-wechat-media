@@ -218,16 +218,19 @@ await test("the override is stored only when it is a real choice", () => {
 });
 await test("newlib's nosys noise is counted, not printed", () => {
   const noisy = [
+    // The real output is a three-line group per stub: header, warning, note.
+    "C:/tools/armgcc/bin/../arm-none-eabi/bin/ld.exe: C:/tools/libc_nano.a(libc_a-closer.o): in function `_close_r':",
     "closer.c:(.text._close_r+0xc): warning: _close is not implemented and will always fail",
     "... note: the message above does not take linker garbage collection into account",
     "   text\t   data\t    bss\t    dec\t    hex\tfilename",
     "    212\t      0\t      0\t    212\t     d4\tstm32_template.elf",
   ].join("\n");
   const tidy = tidyOutput(noisy);
-  assert.equal(tidy.dropped, 2);
+  assert.equal(tidy.dropped, 3, "header + warning + note");
   assert.match(tidy.text, /text.*data.*bss/);
   assert.match(tidy.text, /212/);
   assert.ok(!/not implemented/.test(tidy.text), "the noise is gone");
+  assert.ok(!/in function/.test(tidy.text), "and so is the orphaned header");
 
   // A real error survives, because it is not on the noise list.
   const failed = tidyOutput("Error: undefined reference to `main'\n_close is not implemented and will always fail");

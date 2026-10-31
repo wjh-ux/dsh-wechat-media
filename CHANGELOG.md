@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.10
+
+- **The noise filter only caught two of the three lines each warning is made of.** A newlib stub warning is a group:
+  the ld header (`libc_nano.a(libc_a-closer.o): in function `_close_r':`), the warning, and the garbage-collection note.
+  1.17.9 dropped the last two and left a column of orphaned headers - still unreadable, just shorter. All three shapes go
+  now, and the test asserts the header is gone rather than only counting two drops.
 ## 1.17.9
 
 - **A bare-metal link's output was 12 lines of harmless noise and 2 lines of information.** `--specs=nosys.specs` makes

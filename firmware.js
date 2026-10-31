@@ -267,7 +267,11 @@ export function normalizeBuildPrefs(value = {}) {
  * they drown the two lines that matter: the errors and the `text data bss` summary. Counting them is better than
  * hiding them, so the caller can say "12 known warnings filtered".
  */
-const NOSYS_NOISE = /(not implemented and will always fail|does not take linker garbage collection into account)/i;
+// Three shapes, because one warning is a three-line group: the ld header naming the object and symbol
+// (`libc_nano.a(libc_a-closer.o): in function `_close_r':`), the warning itself, and the linker's garbage-collection
+// note. Filtering only the last two leaves a column of orphaned headers, which is how the first version of this looked.
+const NOSYS_NOISE =
+  /(not implemented and will always fail|does not take linker garbage collection into account|libc_nano\.a\(libc_a-[a-z]+\.o\): in function `_[a-z]+_r':)/i;
 
 export function tidyOutput(text, { maxLines = 14 } = {}) {
   const lines = String(text ?? "").split(/\r?\n/);
