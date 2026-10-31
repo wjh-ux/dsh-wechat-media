@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.24.9
+
+- **The "does it really compile" check failed on the first clean machine, and the reason was mine.** Step 11 put only
+  `armgcc` and `cmake` on the child PATH, so cmake could not find ninja:
+  `CMake was unable to find a build program corresponding to "Ninja"`. On this machine ninja was already on PATH, which is
+  why the check passed here and failed there. It now adds every tool's `bin` directory **and** passes
+  `-DCMAKE_MAKE_PROGRAM=<ninja.exe>`. Reproduced the failure by stripping the tools from PATH (`PATH 里有 ninja 吗: False`
+  then the same CMake error) and confirmed the flag fixes it (`-- Configuring done`).
+- The CH340 line no longer prints a dangling colon when `pnputil` reports a WCH driver without a recognisable INF name.
 ## 1.24.8
 
 - **Downloads retry three times** (3 s, then 6 s, deleting the partial file each time). A VM run died on

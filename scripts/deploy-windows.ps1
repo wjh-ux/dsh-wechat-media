@@ -86,7 +86,7 @@ param(
 # ── 脚本版本 ────────────────────────────────────────────────────────────────
 # 为什么要写在脚本里：没有版本号时，"我拿到的到底是哪一版"只能靠猜参数在不在（ToolsArchiveDir 只说明 ≥1.24.3），
 # 而 jsDelivr 的 @main 会缓存 12 小时，拿旧版是最容易发生的事。
-$scriptVersion = "1.24.8"
+$scriptVersion = "1.24.9"
 
 $total = 11          # 步骤总数（-Version 与各步标题共用）
 
@@ -700,7 +700,7 @@ if ($SkipCh340) {
   if ($wchBlocks) {
     $infNames = [regex]::Matches(($wchBlocks -join "`n"), '(?im)^Original Name:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
     $signed = [bool](($wchBlocks -join "`n") -match 'Microsoft Windows Hardware Compatibility Publisher')
-    Ok "CH34x 驱动已装：$($infNames -join ', ')$(if ($signed) { '（签名者 Microsoft，来自 Windows Update）' })"
+    Ok "CH34x 驱动已装$(if ($infNames) { ': ' + ($infNames -join ', ') } else { '（pnputil 里有 wch.cn 的记录）' })$(if ($signed) { '（签名者 Microsoft，来自 Windows Update）' })"
     $installed = $true
   }
 
@@ -1074,17 +1074,25 @@ if ($CheckOnly) {
   $template = Join-Path $checkout "scripts\stm32-template"
   $gcc = Get-ChildItem $ToolsRoot -Filter "arm-none-eabi-gcc.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
   $cmake = Get-ChildItem $ToolsRoot -Filter "cmake.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  $ninja = Get-ChildItem $ToolsRoot -Filter "ninja.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
   if ((Test-Path $template) -and $gcc -and $cmake) {
     Info "用 scripts\stm32-template 真编一个固件（这是'工具链能用'的证据）"
     $buildDir = Join-Path $env:TEMP ("dsh-toolchain-check-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
-    # 工具链得在这个子进程的 PATH 上：把它们各自的 bin 目录拼进来
+    # 工具链得在这个子进程的 PATH 上：把**每个**工具的 bin 目录拼进来。
+    # 第一版只加了 armgcc 与 cmake，漏了 ninja —— 在这台机器上没暴露（ninja 早就在 PATH 上），
+    # 到干净机器上就成 `CMake was unable to find a build program corresponding to "Ninja"`。
+    # 同时显式给 CMAKE_MAKE_PROGRAM，双保险。
     $before = $env:PATH
-    foreach ($tool in @($gcc, $cmake)) {
+    foreach ($tool in @($gcc, $cmake, $ninja)) {
+      if (-not $tool) { continue }
       $bin = Split-Path $tool.FullName -Parent
       if ($env:PATH -notlike "*$bin*") { $env:PATH = "$bin;$env:PATH" }
     }
+    $makeArg = @()
+    if ($ninja) { $makeArg = @("-DCMAKE_MAKE_PROGRAM=$($ninja.FullName)") }
+    elseif (-not $SkipToolchain) { Info "没找到 ninja.exe，配置阶段可能会失败（第 7 步应该装过它）" }
     try {
-      $configure = & $cmake.FullName -S $template -B $buildDir -G Ninja -DCMAKE_TOOLCHAIN_FILE="$template\cmake\arm-none-eabi.cmake" 2>&1
+      $configure = & $cmake.FullName -S $template -B $buildDir -G Ninja -DCMAKE_TOOLCHAIN_FILE="$template\cmake\arm-none-eabi.cmake" @makeArg 2>&1
       if ($LASTEXITCODE -eq 0) {
         $build = & $cmake.FullName --build $buildDir 2>&1
         $sizeLine = ($build | Select-String -Pattern '^\s*\d+\s+\d+\s+\d+\s+\d+\s+\w+\s+.*stm32_template\.elf' | Select-Object -Last 1)

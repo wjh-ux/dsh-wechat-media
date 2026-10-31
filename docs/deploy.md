@@ -131,6 +131,10 @@ Select-String -Path .\deploy.ps1 -Pattern 'ToolsArchiveDir' -Quiet      # True =
 
 这一条是吃了亏才加的：装完工具链、每个 `--version` 都对，但第一次真编译才发现问题。
 
+它会把 **armgcc / cmake / ninja 三个 bin 目录都放进子进程 PATH**，并显式传 `-DCMAKE_MAKE_PROGRAM=<ninja.exe>`。
+只加 armgcc 和 cmake 是不够的——干净机器上 ninja 不在 PATH 里，cmake 会直接报
+`CMake was unable to find a build program corresponding to "Ninja"`（VM 上真实发生）。
+
 每一步都是**先检查、再动手、最后用真命令验证**：装完 `winget` 的包会再问一次 `python --version`，
 装完扩展会再 `code --list-extensions --show-versions` 查一遍。文件在不在不等于能用。
 
