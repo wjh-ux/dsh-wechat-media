@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.24.13
+
+- **`repair-profile-json.ps1 -All`** scans the whole `~/.dsh` (skipping `node_modules`, `browser-profile`, `dsh-runtimes`) instead
+  of only the profile directory, because "the profile's package.json is clean but DSH still will not start" is exactly the
+  situation where the bad file is somewhere else. Tested on this machine: it walked 12 plugin state files and reported each
+  one's first three bytes and parseability.
+- Paths are printed relative to `~/.dsh` in `-All` mode so a long list stays readable.
 ## 1.24.12
 
 - **`scripts/repair-profile-json.ps1`**: the recovery path for a profile that DSH refuses to load. It reports every JSON in the

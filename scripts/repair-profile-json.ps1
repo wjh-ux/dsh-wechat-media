@@ -21,6 +21,7 @@
 param(
   [string]$Profile = "desktop",
   [string]$DshHome = $(Join-Path $env:USERPROFILE ".dsh"),
+  [switch]$All,          # 扫整个 .dsh（除 node_modules / browser-profile / dsh-runtimes）
   [switch]$CheckOnly,
   [switch]$RestoreBackup
 )
@@ -40,7 +41,7 @@ function Get-Head([string]$path) {
   return (($bytes[0..($n - 1)]) -join ',')
 }
 
-if (-not (Test-Path $profileDir)) {
+if (-not $All -and -not (Test-Path $profileDir)) {
   Write-Host "没有这个 profile：$profileDir" -ForegroundColor Red
   Write-Host "现有的 profile：" -ForegroundColor Yellow
   Get-ChildItem (Join-Path $DshHome "profiles") -Directory -ErrorAction SilentlyContinue | ForEach-Object { "  $($_.Name)" }
@@ -48,9 +49,14 @@ if (-not (Test-Path $profileDir)) {
 }
 
 Write-Host "profile：$profileDir" -ForegroundColor Cyan
-$target = Join-Path $profileDir "package.json"
-$files = @(Get-ChildItem $profileDir -Filter *.json -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -notlike "*.bak-*" })
+if ($All) {
+  Write-Host "扫描整个 $DshHome（跳过 node_modules / browser-profile / dsh-runtimes）" -ForegroundColor Cyan
+  $files = @(Get-ChildItem $DshHome -Recurse -Include *.json -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch 'node_modules|browser-profile|dsh-runtimes' -and $_.Name -notlike "*.bak-*" })
+} else {
+  $files = @(Get-ChildItem $profileDir -Filter *.json -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notlike "*.bak-*" })
+}
 
 if (-not $files) { Write-Host "这个 profile 下没有 .json 文件" -ForegroundColor Yellow; exit 0 }
 
@@ -64,7 +70,8 @@ foreach ($file in $files) {
   $result = Test-JsonText $text
 
   $state = if ($result.Ok) { "可解析" } else { "不可解析" }
-  Write-Host ("  {0,-16} 头3字节={1,-12} BOM={2,-5} {3}" -f $file.Name, $head, $hasBom, $state) -ForegroundColor $(if ($result.Ok -and -not $hasBom) { "Green" } else { "Yellow" })
+  $label = if ($All) { $file.FullName.Replace($DshHome, "~") } else { $file.Name }
+  Write-Host ("  {0,-52} 头3字节={1,-12} BOM={2,-5} {3}" -f $label, $head, $hasBom, $state) -ForegroundColor $(if ($result.Ok -and -not $hasBom) { "Green" } else { "Yellow" })
 
   if (-not $result.Ok) {
     $problems++
