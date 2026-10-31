@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.17.7
+
+- **The README now reads like the thing that was built.** Four gaps: the capability table had no row for `project_build`
+  (so "can it do STM32?" was answerable only by scrolling to a section 700 lines down); the requirements never mentioned
+  the optional firmware toolchains; the *What was actually verified* table had nothing about Keil or STM32 despite both
+  being run on real hardware today; and the release history stopped at 1.15. All four are filled in, with the numbers
+  that came back - `code=3129` for the STC project, `text 212 B` and `0x412 / 32 KiB / 10 KiB` for the STM32 clone,
+  `Verification OK` plus a matching read-back hash for the UART flash, and `TEMP:27.x` for the board after it ran.
 ## 1.17.6
 
 - **A clone chip lied about its memory, and that is now written down.** The verified board reports `Chip id 0x412`

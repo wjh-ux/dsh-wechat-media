@@ -28,6 +28,7 @@ service or real hardware at least once (see *What was actually verified*).
 | Scraping | **Scrapling**: browser-shaped TLS fingerprint and headers, so a page that rejects a plain `fetch` (`403`, a Cloudflare challenge, a UA check) can still be read - CSS selectors, link extraction, per-call proxy, and a **real-browser mode that drives the Chrome you already have** (no 1.25 GB download) with Cloudflare solving. |
 | Lead collection & outreach | **`collect_leads`** turns a goal and a market (`de`, `us`, `ae`…) into a scored, de-duplicated list with contacts, reading the page rather than trusting the search snippet, and telling a buyer from a seller. **`outreach_plan` / `outreach_send`** turn that list into messages over email, WeChat or WeCom - with a cooldown per address, a human confirmation slot, and a stop at the first hard channel failure. |
 | Embedded build | **Keil uVision5** through the UV4.exe already installed: `keil_build` runs build / rebuild / clean / flash, and returns every error as `file(line): error C141: message` plus the Program Size and the .hex - so a failed build says *where*. The same module also installs a Tools-menu entry, so the same build is one click inside uVision. |
+| Firmware: any board | **`project_build`** reads the folder and picks the toolchain: `.uvprojx` → Keil (C51 through UV4, or MDK-ARM), `sdkconfig` → `idf.py`, `CMakeLists.txt` / `Makefile` → `cmake --build` / `make` with `arm-none-eabi-gcc`. Flashing follows the same logic: stcgal for an STC part, `UV4 -f` for an MDK project, `openocd` / `st-flash` for an ELF, and **`flasher="uart"` (`stm32loader`) for a board with no debugger at all**. `toolchain` and `flasher` override the guess. |
 | Multi-agent | With one switch, **each conversation can mount its own agent preset** - its own prompt, tools and model wiring - instead of every chat sharing the host default. Off by default; `/multiagent on`, then `/agent <preset>` per chat. |
 | Integrations | `POST /inbound` lets a NAS/CI/monitor speak into a conversation, an outbound **webhook** posts every finished turn (HMAC-signed), and `/dashboard` shows sessions, failures and token spend. |
 | Persistence | Accounts, receive cursor, per-peer context tokens, chat→session routes, allowlist and preferences all live under `$DSH_HOME/dsh-wechat-media/`. |
@@ -39,6 +40,11 @@ service or real hardware at least once (see *What was actually verified*).
 - **A WeChat account that can scan a QR code.** A spare account is strongly recommended: personal WeChat
   automation is against WeChat's terms of service and carries a ban risk, whichever library you use.
 - Outbound access to `ilinkai.weixin.qq.com` and `novac2c.cdn.weixin.qq.com`.
+- **Optional, for firmware work:** Keil (C51 and/or MDK-ARM) for `.uvprojx` projects; ESP-IDF for `sdkconfig` ones;
+  `arm-none-eabi-gcc` + `cmake` + `ninja` for CMake/Make projects; `openocd` or `st-flash` to download them over SWD;
+  and `python` with `pyserial` + `stm32loader` for a board that only has a UART. Each one is detected by path, so a
+  portable install under `%USERPROFILE%\tools\<pkg>\bin` is found even by a long-running process that never re-read the
+  PATH.
 - **Optional, for the "act as you" half of Feishu:** the official `lark-cli` (`npx @larksuite/cli@latest install`,
   then `lark-cli config init --new` and `lark-cli auth login --recommend` once). Without it the app-identity tools
   (messaging, docs, sheets, bitables) work normally, and the knowledge-base tools and `feishu_cli` say what is
@@ -1487,6 +1493,11 @@ came back. Anything not on this list is covered by tests but not by a real devic
 | SSH | `ssh -V` 56 ms; a named-but-absent port refused with the list of the present ones |
 | Serial: STC | `DS18B20_TM1650.hex` written to an STC8H1K08 over COM3 - 3129 bytes loaded, 3648 written, `Target UID: F734C3FC31F408` - then `TEMP:27.6C` read back |
 | Serial: ESP-IDF | `hello_world` built through the same `export.ps1` wrapper the flash uses (`hello_world.bin`, 175 kB, 83% partition free). The write itself needs the board |
+| Keil: real project | `DS18B20_TM1650` (STC8H1K08, C51 V9.61) rebuilt: `data=76.2 xdata=0 code=3129`, 1.5 s, `creating hex file from ".\Objects\…"`; one broken line produced `BLINKY.C(38): error C141` with exit code 2 on both the chat tool and the Keil-side CLI |
+| Keil: flash honesty | `UV4 -f` on that STC project exits 0 in 1.4 s with a **0-byte log** and touches nothing - which is why the verdict now requires `Erase Done` / `Programming Done` in the log, and why an STC part is sent to `stcgal` instead |
+| STM32: build | `arm-none-eabi-gcc` 15.2.1 + CMake + Ninja built `scripts/stm32-template` to `text 212 B` (`Chip id 0x412`, 32 KiB flash, 10 KiB RAM) |
+| STM32: flash over UART | No ST-Link. PA9/PA10 wired to the CH340, `BOOT0=1` + reset, `stm32loader` wrote 212 bytes at `0x8000000`, `Verification OK`, and the bytes read back hashed identical to the source. `BOOT0=0` + reset → the PC13 LED blinked |
+| STM32: the cost of no debugger | Moving BOOT0 to 1 does nothing until the chip is reset (`Can't init into bootloader` during that window); sized from the silkscreen (64K/20K) instead of the chip's own report, the firmware flashed, verified, and hard-faulted in a silent reset loop |
 | Scrapling | `example.com` 200; `quotes.toscrape.com` + `span.text` -> three items; `baidu.com` + `links` -> eight anchors; HN fails in 21 s without a proxy and answers in 1.8 s with one |
 | Scrapling stealth | Real Chrome UA; `nowsecure.nl` (Cloudflare) -> 200 in 11 s with `cloudflare: true` |
 | Office | Word/Excel/PowerPoint written, converted to PDF, rendered to PNG |
@@ -1527,6 +1538,8 @@ each era added, with the releases that mattered most:
 | 1.13 | Outreach: `outreach_plan` / `outreach_send` over three channels, with cooldown, a confirmation step, and a stop at the first hard failure |
 | 1.14 | Lead quality: a company name from the domain when the headline is a sentence, a twenty-country phone prefix table, and one human confirmation slot before a cold email leaves |
 | 1.15 | Keil uVision5: `keil_build` drives the installed UV4 (build / rebuild / clean / flash) and answers with `file(line): error`, plus a Tools-menu entry so the same module is one click inside uVision |
+| 1.16 | The same build from VS Code: Browse for the project, Target as a dropdown read from the `.uvprojx`, one line naming the `UV4.exe` that was found - and a sidebar layout that works at 300 px |
+| 1.17 | `project_build`: one entry for Keil / ESP-IDF / CMake+Make, with `toolchain` and `flasher` overrides. Verified on a real STM32F103C8T6 clone flashed over its UART bootloader with no debugger attached |
 
 Each era ended with the same discipline: a release only goes out after the suite passes, and a claim only goes in the README
 after something real produced the number.
