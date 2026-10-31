@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.24.6
+
+- **`@latest` on jsDelivr served a stale file, so the manual no longer recommends it.** Measured at the same moment:
+  `@latest` and `@main` both returned 47,537 bytes with no `$scriptVersion` (the 1.24.4 content), while `@v1.24.5`
+  returned 48,248 bytes with the version constant and `-Version`. The new advice is a pinned tag, plus a snippet that
+  downloads, checks `$scriptVersion` against the wanted version, and falls through to raw.githubusercontent.com when the
+  file is not the one asked for.
+- Pinning per release has a cost - the number in the URL goes stale - so the verification snippet exists to make the *file*
+  the source of truth instead of the URL.
 ## 1.24.5
 
 - **`.\deploy.ps1 -Version`** answers "which version did I actually get?" - printed before the banner, with the step count

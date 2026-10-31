@@ -18,18 +18,36 @@
 三条路，第一条最快（国内一般都能通）：
 
 ```powershell
-# 1. jsDelivr CDN（推荐；@latest = 最新发布标签，内容不可变）
-irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@latest/scripts/deploy-windows.ps1 -OutFile deploy.ps1
+# 1. jsDelivr + 具体版本号（推荐。用 @vX.Y.Z，不要用 @latest 或 @main）
+irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@v1.24.6/scripts/deploy-windows.ps1 -OutFile deploy.ps1
 
-# 2. 要精确到某个版本（排查问题、复现旧行为时用）
-irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@v1.24.3/scripts/deploy-windows.ps1 -OutFile deploy.ps1
-
-# 3. GitHub 原地址（有时会断流："基础连接已经关闭: 接收时发生错误"）
+# 2. GitHub 原地址（有时会断流："基础连接已经关闭: 接收时发生错误"）
 irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deploy-windows.ps1 -OutFile deploy.ps1
 ```
 
-jsDelivr 的缓存规则值得知道：`@main` 在边缘节点上**最多缓存 12 小时**（`s-maxage=43200`），
-所以刚发布后可能拿到旧内容；`@latest` 或 `@vX.Y.Z` 指向发布标签，不会出现这个情况。
+**别用 `@latest` 或 `@main`**——实测它们会给你缓存的旧文件：
+
+```
+@latest    47537 字节   无版本号      ← 1.24.4 的旧内容
+@main      47537 字节   无版本号      ← 同上（边缘缓存 s-maxage=43200，最长 12 小时）
+@v1.24.5   48248 字节   1.24.5      ← 正确
+raw        48248 字节   1.24.5      ← 正确
+```
+
+想要一条命令既要拿对版本、又能自动换路：
+
+```powershell
+$want = '1.24.6'
+$urls = @(
+  "https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@v$want/scripts/deploy-windows.ps1",
+  "https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deploy-windows.ps1"
+)
+foreach ($u in $urls) {
+  try { Invoke-WebRequest $u -OutFile deploy.ps1 -UseBasicParsing -TimeoutSec 30 } catch { continue }
+  if (Select-String -Path deploy.ps1 -Pattern "\`$scriptVersion = `"$want`"" -Quiet) { "拿到 v$want ← $u"; break }
+  "这条给的不是 v$want，换下一条…"
+}
+```
 
 拿到脚本后，**问它自己**：
 
