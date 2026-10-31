@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.23.1
+
+- **The manual has a Word/PDF path.** `scripts/md-to-docx.py` converts `docs/deploy.md` into a `.docx` (headings, bullets,
+  shaded code blocks, tables, bold and inline code), and `office_convert` takes it to PDF - six pages, verified by
+  rendering them. Three defects were fixed by looking at the output rather than the code: `**bold**` printed its
+  asterisks, fenced code indented inside a numbered list was not recognised as a block, and `[text](url)` links printed
+  raw.
+- The same text is also in a Feishu document (`RlVtdc0UoohoLIx9nI9c0s6cnpc`, 65 paragraphs in five appends). No link yet:
+  the plugin needs `tenantHost` (or `FEISHU_TENANT_HOST`) to know which host to build it for, and a made-up one would not
+  open.
 ## 1.23.0
 
 - **`-Offline`**: no network at all - it reports what is missing and links what is already there, instead of downloading.
