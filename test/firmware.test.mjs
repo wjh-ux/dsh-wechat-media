@@ -19,6 +19,7 @@ import {
   findFirmware,
   flashPlan,
   fqbnFromSketchYaml,
+  hexToBin,
   keilFamily,
   normalizeBuildPrefs,
   runPlan,
@@ -197,6 +198,43 @@ await test("the plugged-in board names itself when nobody else did", () => {
   assert.equal(boardFromList(two), "");
   assert.equal(boardFromList(two, { port: "COM7" }), "esp32:esp32:esp32");
   assert.equal(boardFromList("not json"), "");
+});
+await test("a Keil hex becomes the binary the bootloader wants, and its size can be checked", () => {
+  // Records at 0x08000000, which is exactly what stm32loader refuses (`assert addresses[0] == 0`).
+  const hex = [
+    ":020000040800F2",
+    ":0400000001020304F2",
+    ":0400040005060708DE",
+    ":00000001FF",
+  ].join("\n");
+  const parsed = hexToBin(hex);
+  assert.equal(parsed.base, 0x08000000);
+  assert.equal(parsed.size, 8);
+  assert.deepEqual([...parsed.bytes], [1, 2, 3, 4, 5, 6, 7, 8]);
+
+  // A hex with no data records is an error, not an empty firmware.
+  assert.match(hexToBin(":00000001FF").error, /没有任何数据/);
+  // Garbage is refused rather than producing a half image.
+  assert.match(hexToBin(":04000000ZZ010203F2").error, /非十六进制/);
+});
+
+await test("Keil output is found in Objects/, and a named flasher overrides UV4", () => {
+  const dir = "C:\\work\\blink";
+  // findFirmware walks with `withFileTypes`, so the fake readdir has to answer with Dirent-shaped entries.
+  const tree = { [`${dir}\\Objects`]: ["blink.hex", "blink.axf", "blink.lnp"] };
+  const found = findFirmware(dir, {
+    exists: () => true,
+    readdir: (path) => (tree[path] ?? []).map((name) => ({ name, isDirectory: () => false })),
+    stat: () => ({ mtimeMs: 1 }),
+  });
+  assert.match(found, /Objects.blink\.hex$/, "the hex uVision produced, not a random file");
+
+  // `flasher: "uart"` on a Keil project must build a stm32loader command, because that is the only way to program a
+  // board with no debugger attached.
+  const plan = flashPlan({ kind: "keil", flasher: "uart", dir, file: `${dir}\\Objects\\blink.hex`, port: "COM3", python: "python.exe" });
+  assert.match(String(plan.tool), /python/, "the python interpreter that has stm32loader");
+  assert.ok(plan.args.includes("stm32loader"));
+  assert.ok(plan.args.includes(`${dir}\\Objects\\blink.hex`));
 });
 await test("the newest ELF is the one it picks, not the first one it sees", () => {
   const files = {

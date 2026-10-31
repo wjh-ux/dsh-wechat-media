@@ -242,6 +242,56 @@ export function flashPlan({
  * is the person overriding it; and `arduino-cli board list --format json` is the last resort, because it can only
  * recognise a board that is plugged in - which is exactly right for `upload` and useless for `compile`.
  */
+/**
+ * Intel HEX → `{ base, bytes }`.
+ *
+ * `stm32loader` refuses a hex that does not start at address 0 (`assert addresses[0] == 0`) and needs the `intelhex`
+ * package to read one at all - while the STM32 bootloader wants a raw binary at 0x08000000 anyway. Converting here means
+ * one code path for both compilers, no python package, and a length that can be checked against the Program Size line.
+ */
+export function hexToBin(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const chunks = [];
+  let base = 0;
+  let upper = 0;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line.startsWith(":")) continue;
+    const bytes = [];
+    for (let i = 1; i + 1 < line.length; i += 2) {
+      const value = Number.parseInt(line.slice(i, i + 2), 16);
+      if (!Number.isFinite(value)) return { error: `hex 行里有非十六进制字符：${line.slice(0, 20)}…` };
+      bytes.push(value);
+    }
+    if (bytes.length < 5) continue;
+    const count = bytes[0];
+    const address = (bytes[1] << 8) | bytes[2];
+    const type = bytes[3];
+    const data = bytes.slice(4, 4 + count);
+    if (data.length !== count) return { error: "hex 行的长度和声明的字节数不一致" };
+    if (type === 0x00) {
+      chunks.push({ address: (upper << 16) + address, data });
+      continue;
+    }
+    if (type === 0x01) break; // EOF
+    if (type === 0x02 && data.length >= 2) {
+      upper = ((data[0] << 8) | data[1]) >>> 12;
+      continue;
+    }
+    if (type === 0x04 && data.length >= 2) {
+      upper = (data[0] << 8) | data[1];
+      continue;
+    }
+    // 0x03 / 0x05 are start addresses: irrelevant to what gets written.
+  }
+  if (!chunks.length) return { error: "hex 里没有任何数据记录" };
+
+  const start = Math.min(...chunks.map((chunk) => chunk.address));
+  const end = Math.max(...chunks.map((chunk) => chunk.address + chunk.data.length));
+  const buffer = Buffer.alloc(end - start);
+  for (const chunk of chunks) chunk.data.forEach((value, index) => { buffer[chunk.address - start + index] = value; });
+  return { base: start, bytes: buffer, size: buffer.length };
+}
 export function fqbnFromSketchYaml(text) {
   // `default_fqbn:` at the top level is the plain case; a `profiles:` block also carries `fqbn:` lines, and taking the
   // first one is right for the common sketch with a single profile. The answer is printed in the tool's output either
@@ -299,7 +349,10 @@ export function findFirmware(dir, { exists = existsSync, readdir = readdirSync, 
       }
     }
   };
+  // `build` is what CMake/Make/IDF produce; `Objects` is where uVision puts its .hex and .axf. Trying only the first one
+  // meant a Keil project always reported "没有固件" even with Objects\blink.hex sitting there.
   walk(join(dir, "build"), depth);
+  walk(join(dir, "Objects"), Math.max(depth - 1, 1));
   if (!found.length) walk(dir, depth);
   found.sort((a, b) => b.mtime - a.mtime);
   return found[0]?.path ?? "";

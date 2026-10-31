@@ -130,6 +130,30 @@ uVision → File → License Management → User-Based License
 
 ## 7. 烧录
 
+**没有调试器也能烧：Keil 的 hex 走 UART 引导。** 2026-10-31 实测：`blink.hex` → `stm32loader` 写进芯片，
+`Verification OK`，读回 696 字节 SHA256 与源文件一致。
+
+中间有两个硬限制，插件已经替你处理掉：
+
+1. `stm32loader` 读 `.hex` 需要 `intelhex` 包——**现在不需要装**，插件自己把 hex 转成 bin
+2. 就算装了也不行：`stm32loader/hexfile.py:27` 有 `assert addresses[0] == 0`，而 Keil 的 hex 从 `0x08000000` 起
+
+所以插件在烧之前做一次 `hexToBin()`，并检查两件事：
+
+```
+起始地址必须是 0x08000000（不是就拒绝，说明这不是能直接烧的 STM32 固件）
+字节数应等于 Program Size 的 Code + RO-data（本机 696 = 444 + 252）
+```
+
+**这条对账最值得看**：scatter 文件或链接脚本写错时，灯不闪只是"没反应"，而这行数字会立刻对不上。
+
+```powershell
+# 有 ST-Link 时
+project_build(action="flash")                      # → UV4 -f
+# 没有调试器时（BOOT0=1 + 复位）
+project_build(action="flash", flasher="uart", port="COM3")
+```
+
 `UV4 -f` 用的是工程里 `Options → Debug` 配的调试器（ST-Link / J-Link / ULINK）。
 没配调试器时 `UV4 -f` 会**退出 0 但什么都没写**——插件因此要求日志里出现
 `Erase Done` / `Programming Done` 才算成功（这条规则是 STC 8061 那次假成功换来的）。

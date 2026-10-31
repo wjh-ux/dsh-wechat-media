@@ -21,10 +21,10 @@
  * broke an earlier plugin of mine), so optional harness modules are pulled in at
  * runtime through the Cordis loader, and every use is guarded.
  */
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9987,7 +9987,11 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // A Keil project goes to keil_build, always: it passes `-o` and parses the log, and without that a bare
             // `UV4 -b` exits 0 with an empty console - which is indistinguishable from a successful build. One
             // implementation of "build a Keil project" is also why the Program Size and file(line) errors come free.
-            if (kind === "keil") {
+            // ... unless the downloader was named explicitly and is not uVision's: an ARM hex goes over the UART
+            // bootloader perfectly well, and that is the only way to program a board with no debugger attached.
+            const explicitFlasher = String(args?.flasher ?? "").trim();
+            const keilViaFirmware = kind === "keil" && explicitFlasher && explicitFlasher !== "uv4";
+            if (kind === "keil" && !keilViaFirmware) {
               if (!project) return `project_build 失败：识别为 Keil 工程，但没找到 .uvprojx（${detected.evidence ?? ""}）`;
               return await keilBuildTool.execute({
                 project,
@@ -10051,7 +10055,9 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             if (action !== "flash") return `未知动作：${action}（build / flash）`;
 
             const stc = /^STC/i.test(firmware.keilFamily(xml));
-            const file = String(args?.file ?? "").trim() || (kind === "cmake" || kind === "make" ? firmware.findFirmware(dir) : "");
+            // Every family is asked where its firmware is: a Keil project keeps the hex in `Objects\`, and that is
+            // exactly the file an ARM chip takes over its UART bootloader.
+            const file = String(args?.file ?? "").trim() || firmware.findFirmware(dir);
             const planned = firmware.flashPlan({
               kind,
               flasher: String(args?.flasher ?? prefs?.build?.flasher ?? "auto"),
@@ -10093,14 +10099,39 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               const note = result.code === 0 ? `⚡ 烧录完成（idf.py，${chosen}）` : `❌ 烧录失败（idf.py，${chosen}）`;
               return `${note}\n工程：${dir}\n${serialReport(result, "idf.py 输出")}`;
             }
-            const ran = await firmware.runPlan(planned, {
+            // `stm32loader` refuses a hex that does not start at address 0 (`assert addresses[0] == 0`) and needs the
+            // `intelhex` package to read one - while the STM32 bootloader takes a raw binary at 0x08000000 anyway. Both
+            // compilers emit a hex, so convert here instead of asking the board's owner to install a python package.
+            let flashRun = planned;
+            let convertedNote = "";
+            if (!planned.error && String(planned.tool ?? "").includes("python") && /\\.hex$/i.test(file)) {
+              try {
+                const parsed = firmware.hexToBin(readFileSync(file, "utf8"));
+                if (parsed.error) return `hex 转换失败：${parsed.error}`;
+                if (parsed.base !== 0x08000000) {
+                  return `hex 的起始地址是 0x${parsed.base.toString(16)}，不是 0x08000000：这不是一份能直接烧的 STM32 固件`;
+                }
+                const bin = join(tmpdir(), `dsh-flash-${Date.now()}.bin`);
+                writeFileSync(bin, parsed.bytes);
+                flashRun = {
+                  ...planned,
+                  args: planned.args.map((arg) => (arg === file ? bin : arg)),
+                  note: `${planned.note}（hex → bin ${parsed.size} 字节）`,
+                };
+                convertedNote = `hex 已转成 bin：${parsed.size} 字节（应与 Program Size 的 Code + RO-data 相符）`;
+              } catch (error) {
+                return `hex 转换失败：${String(error?.message ?? error)}`;
+              }
+            }
+            const ran = await firmware.runPlan(flashRun, {
               timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
             });
-            noteRoute("/project", { action: "flash", kind, tool: planned.tool, ok: ran.ok, code: ran.code });
+            noteRoute("/project", { action: "flash", kind, tool: flashRun.tool, ok: ran.ok, code: ran.code, converted: Boolean(convertedNote) });
             return [
-              `${ran.ok ? "⚡ 烧录完成" : "❌ 烧录失败"}（${planned.note ?? planned.tool}，退出码 ${ran.code}，${ran.ms}ms）`,
+              `${ran.ok ? "⚡ 烧录完成" : "❌ 烧录失败"}（${flashRun.note ?? flashRun.tool}，退出码 ${ran.code}，${ran.ms}ms）`,
               planned.error ? `原因：${planned.error}` : "",
-              planned.tool ? `$ ${planned.tool} ${planned.args.join(" ")}` : "",
+              flashRun.tool ? `$ ${flashRun.tool} ${flashRun.args.join(" ")}` : "",
+              convertedNote,
               (() => { const tidy = firmware.tidyOutput(ran.output); return [tidy.text, tidy.dropped ? `（已过滤 ${tidy.dropped} 条 nosys 警告）` : ""].filter(Boolean).join("\n"); })(),
             ].filter(Boolean).join("\n");
           } catch (error) {

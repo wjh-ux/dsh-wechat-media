@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.19.2
+
+- **A Keil ARM hex now reaches the chip over the UART bootloader.** Nothing about the tool's own path was wrong; two
+  things in the middle were: `findFirmware` only searched `build/` and uVision puts its output in `Objects/`, and
+  `project_build` handed every `.uvprojx` to `keil_build`, so an explicit `flasher="uart"` never arrived. Both fixed.
+- **The hex is converted to a binary before flashing.** `stm32loader` refuses a hex that does not start at address 0
+  (`assert addresses[0] == 0`) and needs the `intelhex` package to read one at all, while the bootloader wants a raw
+  image at `0x08000000` anyway. `hexToBin()` handles the extended-linear-address records, refuses a base other than
+  `0x08000000`, and its byte count must equal `Code + RO-data` from the Program Size line - 696 = 444 + 252 on the
+  verified project, which is the cheapest way to catch a wrong scatter file.
+- Verified end to end on the STM32F103C8T6 clone: Keil-built hex → `Write 3 chunks at 0x8000000` → `Verification OK`
+  → 696 bytes read back with a matching SHA256.
 ## 1.19.1
 
 - **The MDK install is written down, including the download URL.** `docs/keil-arm-install.md`: the form page
