@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.23.10
+
+- **`stcgal` was never installed on a fresh machine.** Its check had been deferred to the plugin's own resolver (step 10),
+  which reports but does not install - so a clean VM ended with `pyserial` and `stm32loader` and no way to flash an STC
+  part. Step 3 now treats it like the others: absent from PATH *and* absent from every known python `Scripts` directory
+  means install it.
+- **The user scripts directory is added to PATH.** `pip install --user` puts `stcgal.exe` in
+  `%APPDATA%\Python\PythonXY\Scripts`, which is not on PATH - pip says so in a WARNING that is easy to scroll past. Since
+  the plugin resolves tools with `which()`, "installed" and "usable" differed by exactly that directory. The script adds it
+  to the **user** PATH and re-checks with the same command lookup the plugin uses.
+- **`-CheckOnly` and `-Offline` no longer modify PATH.** Found while testing the above: the PATH block sat outside the
+  read-only guard, so a "check" was quietly changing the system. It now reports which directories *would* be added.
+- pip's WARNING noise is captured and only shown when pip actually fails.
 ## 1.23.9
 
 - **The self-check now compiles a real firmware.** Step 10 builds `scripts/stm32-template` with the just-installed

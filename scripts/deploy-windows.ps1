@@ -448,36 +448,80 @@ if (-not $python) {
   Miss "没找到 python —— STC 烧录（stcgal）与 STM32 UART 引导（stm32loader）需要它"
   Info "第 2 步没装上 python，跳过这一节"
 } else {
-  # pyserial 用 import 验（插件以 `serial` 引用它）；stcgal / stm32loader 只验"能不能找到"。
-  # 这台机器上 stcgal 就装在 ESP-IDF 的 python 环境里，是个独立 exe —— 用系统 python `import stcgal` 会误报缺失，
-  # 而实际烧录一切正常。所以最终判断交给第 7 步：用插件自己的解析器（serial.js）来回答。
+  # pip --user 会把 console script 放进 %APPDATA%\Python\PythonXY\Scripts，而那个目录**通常不在 PATH 上**
+  # （pip 自己会打 WARNING 说这件事）。插件靠 which() 找 stcgal.exe，所以这个目录必须在 PATH 里，
+  # 否则"装成功"和"用得上"之间差了整整一层。VM 上真实踩到过。
+  $scriptDirs = @()
+  $sysScripts = & $python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>&1
+  if ($sysScripts -and (Test-Path $sysScripts)) { $scriptDirs += $sysScripts }
+  foreach ($root in @("$env:APPDATA\Python", "$env:LOCALAPPDATA\Programs\Python")) {
+    Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+      $candidate = Join-Path $_.FullName "Scripts"
+      if (Test-Path $candidate) { $scriptDirs += $candidate }
+    }
+  }
+  $scriptDirs = $scriptDirs | Select-Object -Unique
+
+  # "能用"= PATH 上有，或某个 python 的 Scripts 目录里有（插件 which() 会扫 PATH，所以稍后要把目录加进 PATH）
+  $resolvable = {
+    param($name)
+    if (Have $name) { return $true }
+    foreach ($dir in $scriptDirs) { if (Test-Path (Join-Path $dir "$name.exe")) { return $true } }
+    return $false
+  }
+
   $missing = @()
   if (((& $python -c "import serial; print('ok')" 2>&1) -notmatch "ok")) { $missing += "pyserial" }
-  # stcgal 可能是独立 exe，也可能装在别的 python 环境里（本机就在 ESP-IDF 的环境里）——
-  # 第 7 步用插件自己的 which() 回答，那才是运行时真正看到的。
-  Info "stcgal / esptool 的可用性留到第 7 步由插件自己确认"
   if (((& $python -c "import stm32loader; print('ok')" 2>&1) -notmatch "ok")) { $missing += "stm32loader" }
+  if (-not (& $resolvable "stcgal")) { $missing += "stcgal" }
 
   if (-not $missing) {
     Ok "串口烧录依赖齐：pyserial / stcgal / stm32loader"
-  } elseif ($CheckOnly) {
-    Miss "缺：$($missing -join ', ')"
+  } elseif ($CheckOnly -or $Offline) {
+    Miss "缺：$($missing -join ', ')$(if ($Offline) { '；离线模式不装' } else { '' })"
   } else {
     Info "安装 $($missing -join ', ')（当前用户，不需要管理员）"
-    & $python -m pip install --user --quiet @missing
+    $pipOut = & $python -m pip install --user --quiet @missing 2>&1
+    if ($LASTEXITCODE -ne 0) { Info "pip 报错（最后几行）："; ($pipOut | Select-Object -Last 4) | ForEach-Object { Info ("" + $_) } }
     $still = @()
     if (($missing -contains "pyserial") -and (((& $python -c "import serial; print('ok')" 2>&1) -notmatch "ok"))) { $still += "pyserial" }
     if (($missing -contains "stm32loader") -and (((& $python -c "import stm32loader; print('ok')" 2>&1) -notmatch "ok"))) { $still += "stm32loader" }
-    if ($missing -contains "stcgal" -and -not (Have "stcgal")) {
-      # pip 把 stcgal.exe 放进 python 的 Scripts 目录，那个目录不一定在 PATH 上
-      $scripts = & $python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>&1
-      if ($scripts -and (Test-Path (Join-Path $scripts "stcgal.exe"))) {
-        Ok "stcgal 在 $scripts（插件按路径找得到，PATH 里没有也不影响）"
-      } else { $still += "stcgal" }
-    }
-    if ($still) { Bad "装完还缺：$($still -join ', ')"; $failures++ } else { Ok "装好：$($missing -join ', ')" }
+    if ($still) { Bad "装完还缺：$($still -join ', ')"; $failures++ } else { Ok "pip 包装好：$($missing -join ', ')" }
+  }
+
+  # 把装到东西的 Scripts 目录加进用户 PATH —— 不管上面装没装，都检查一遍，
+  # 因为可能是别的步骤/别的 python 环境放进去的。
+  # 注意：体检模式（-CheckOnly）与离线模式不许改系统，只报告"本该加什么"。
+  $needDirs = @()
+  foreach ($dir in $scriptDirs) {
+    $hasOurExe = @("stcgal.exe", "stm32loader.exe", "esptool.exe") | Where-Object { Test-Path (Join-Path $dir $_) }
+    if (-not $hasOurExe) { continue }
+    $userPathNow = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $userPathNow) { $userPathNow = "" }
+    if ($userPathNow -notlike "*$dir*") { $needDirs += $dir }
+  }
+  if ($needDirs.Count -eq 0) {
+    # 已经在 PATH 上，不用动
+  } elseif ($CheckOnly) {
+    Miss "这些目录不在 PATH 上（体检模式不改）：$($needDirs -join '; ')"
+  } elseif ($Offline) {
+    Miss "这些目录不在 PATH 上（离线模式不改）：$($needDirs -join '; ')"
+  } else {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $userPath) { $userPath = "" }
+    foreach ($dir in $needDirs) { $userPath = ($userPath.TrimEnd(";") + ";" + $dir).TrimStart(";") }
+    [Environment]::SetEnvironmentVariable("Path", $userPath, "User")
+    Refresh-Path
+    Ok "已把 pip 脚本目录加进用户 PATH：$($needDirs -join '; ')"
+  }
+
+  # 加完 PATH 再确认一次，这次用和插件一样的方式（命令能不能找到）
+  foreach ($name in @("stcgal", "stm32loader")) {
+    if (Have $name) { Ok "$name：$((Get-Command $name).Source)" }
+    elseif (-not $CheckOnly -and -not $Offline) { Miss "$name 仍不在 PATH（插件可能找不到，第 10 步会再确认一次）" }
   }
 }
+
 # ── 4. VS Code 与 Python 扩展 ─────────────────────────────────────────────────
 Step 4 $total "VS Code 与 Python 扩展"
 $code = Get-Command "code" -ErrorAction SilentlyContinue

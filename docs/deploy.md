@@ -23,6 +23,11 @@
 | Python 3.12 | 串口烧录依赖它 | **脚本会装**（官方安装包，当前用户，带 pip） |
 | VS Code + Python 扩展 | 面板/编辑器那条路 | **脚本会装**（官方 User 安装包） |
 
+> **pip 有个坑**：`pip install --user` 会把 `stcgal.exe` / `stm32loader.exe` 放进
+> `%APPDATA%\Python\PythonXY\Scripts`，而那个目录**通常不在 PATH 上**（pip 自己会打 WARNING 提醒）。
+> 插件靠 `which()` 找这些命令，所以脚本在第 3 步会把该目录加进**用户级** PATH —— 不加的话
+> "装成功"和"用得上"之间差着一层。体检模式（`-CheckOnly`）与 `-Offline` 不会改 PATH，只会告诉你要加哪个目录。
+
 也就是说：一台**装了 Windows 的空机器**，只要再装好 DSH 并启动一次，剩下的脚本全包。
 
 **DSH 必须先启动过一次**——它会生成 `%USERPROFILE%\.dsh\profiles\desktop\`，插件要装进那个 profile。
