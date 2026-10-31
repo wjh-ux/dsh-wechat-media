@@ -152,41 +152,67 @@ function Get-VSCodeExeUrl {
   return @{ Version = $version; Url = $final }
 }
 
-function Save-Installer([string]$Url, [string]$FileName) {
-  $path = Join-Path $env:TEMP $FileName
-  Write-Host "    下载 $FileName…" -ForegroundColor DarkGray
-  Invoke-WebRequest -Uri $Url -OutFile $path -UseBasicParsing -TimeoutSec 1800
-  return $path
+# 下载工具的通用实现：流式写入 + 进度/速度/剩余时间。
+# 为什么要自己写：Invoke-WebRequest 的进度条慢得离谱（所以最早把它关了），关掉之后又什么都看不见。
+# 这里用 HttpWebRequest 的流，自己按 500ms 刷新一行，两边都不吃亏。
+function Format-Bytes([double]$bytes) {
+  if ($bytes -ge 1GB) { return "{0:N2} GB" -f ($bytes / 1GB) }
+  if ($bytes -ge 1MB) { return "{0:N1} MB" -f ($bytes / 1MB) }
+  if ($bytes -ge 1KB) { return "{0:N0} KB" -f ($bytes / 1KB) }
+  return "{0:N0} B" -f $bytes
 }
 
-function Install-ZipNode {
-  <#
-    Node 的免管理员安装：官方 zip + 只改进程与用户 PATH，不碰系统和 HKLM。
-    MSI 是机器级安装，msiexec /qn 在非管理员会话里会以 1603 失败（真实 VM 上就是这样）。
-  #>
-  param([Parameter(Mandatory)][string]$Version)
-  $url = "https://nodejs.org/dist/$Version/node-$Version-win-x64.zip"
-  $zip = Save-Installer $url "node-$Version-win-x64.zip"
-  $dest = Join-Path $ToolsRoot "node"
-  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-  New-Item -ItemType Directory -Force $dest | Out-Null
-  Expand-Archive -Path $zip -DestinationPath $dest -Force
-  Remove-Item $zip -Force -ErrorAction SilentlyContinue
-  # 解压出来是一层 node-vX-win-x64，把内容提上来，路径才稳定
-  $inner = Get-ChildItem $dest -Directory | Select-Object -First 1
-  if ($inner -and -not (Get-ChildItem $dest -File)) {
-    Get-ChildItem $inner.FullName | Move-Item -Destination $dest -Force
-    Remove-Item $inner.FullName -Recurse -Force
+function Save-Installer([string]$Url, [string]$FileName) {
+  $path = Join-Path $env:TEMP $FileName
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  $request = [Net.HttpWebRequest]::Create($Url)
+  $request.UserAgent = "dsh-deploy"
+  $request.Timeout = 60000
+  $request.ReadWriteTimeout = 300000
+  $response = $request.GetResponse()
+  $total = $response.ContentLength
+  $stream = $response.GetResponseStream()
+  $file = [IO.File]::Create($path)
+  $buffer = New-Object byte[] 131072
+  $done = 0L
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $lastTick = -1000
+  $lastBytes = 0L
+  try {
+    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $file.Write($buffer, 0, $read)
+      $done += $read
+      if ($clock.ElapsedMilliseconds - $lastTick -ge 500) {
+        $speed = 0
+        $elapsedMs = $clock.ElapsedMilliseconds - $lastTick
+        if ($elapsedMs -gt 0) { $speed = ($done - $lastBytes) / ($elapsedMs / 1000.0) }
+        $lastTick = $clock.ElapsedMilliseconds
+        $lastBytes = $done
+        $line = "      "
+        if ($total -gt 0) {
+          $percent = [Math]::Min(100, [int](100 * $done / $total))
+          $filled = [int]($percent / 4)                       # 25 格的进度条
+          $bar = ("#" * $filled) + ("-" * (25 - $filled))
+          $eta = ""
+          if ($speed -gt 0 -and $done -lt $total) {
+            $eta = "  还剩 {0:N0}s" -f (($total - $done) / $speed)
+          }
+          $line += "[$bar] {0,3}%  {1} / {2}  {3}/s{4}" -f $percent, (Format-Bytes $done), (Format-Bytes $total), (Format-Bytes $speed), $eta
+        } else {
+          $line += "{0}  {1}/s（服务器没给总大小）" -f (Format-Bytes $done), (Format-Bytes $speed)
+        }
+        Write-Host "`r$line" -NoNewline
+      }
+    }
+  } finally {
+    $file.Close()
+    $stream.Close()
+    $response.Close()
   }
-  # 用户级 PATH（不需要管理员），插件自己的 which() 也会扫 ~\tools\node
-  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if (-not $userPath) { $userPath = "" }
-  if ($userPath -notlike "*$dest*") {
-    [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $dest).TrimStart(";"), "User")
-    Info "已把 $dest 加进用户 PATH（不需要管理员）"
-  }
-  Refresh-Path
-  return (Test-Path (Join-Path $dest "node.exe"))
+  $clock.Stop()
+  $finalLine = "      {0} 用时 {1:N1}s（平均 {2}/s）" -f (Format-Bytes $done), $clock.Elapsed.TotalSeconds, (Format-Bytes ($done / [Math]::Max($clock.Elapsed.TotalSeconds, 0.1)))
+  Write-Host "`r$finalLine" -ForegroundColor DarkGray
+  return $path
 }
 
 function Install-NodeFallback {
@@ -282,11 +308,10 @@ function Install-PortableZip {
     [Parameter(Mandatory)][string]$Destination,
     [string]$AssetPattern = "win32-x64\.zip$"
   )
-  $zip = Join-Path $env:TEMP "$Name.zip"
-  Write-Host "    下载 $Name…" -ForegroundColor DarkGray
-  Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing -TimeoutSec 1800
+  $zip = Save-Installer $Url "$Name.zip"          # 同一个下载器：带进度、速度、剩余时间
   if (Test-Path $Destination) { Remove-Item $Destination -Recurse -Force }
   New-Item -ItemType Directory -Force $Destination | Out-Null
+  Write-Host "    解压 $Name…" -ForegroundColor DarkGray
   Expand-Archive -Path $zip -DestinationPath $Destination -Force
   # 解开后通常是一层同名目录：把内容提上来，路径才稳定
   $inner = Get-ChildItem $Destination -Directory | Select-Object -First 1
@@ -297,7 +322,6 @@ function Install-PortableZip {
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
 }
 
-# 从 GitHub 的 releases/latest 里挑资产
 function Get-LatestAsset($repo, $pattern) {
   $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "dsh-deploy" } -TimeoutSec 60
   return $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
@@ -615,7 +639,7 @@ if (-not (Test-Path (Join-Path $checkout "package.json"))) {
     Info "没有 git，改用 zip 下载"
     try {
       $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
-      Invoke-WebRequest -Uri ($Source -replace '\.git$', '')/archive/refs/heads/main.zip -OutFile $zip -UseBasicParsing -TimeoutSec 600
+      $null = Save-Installer (($Source -replace '\.git$', '') + '/archive/refs/heads/main.zip') "dsh-wechat-media.zip"; $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
       Expand-Archive $zip -DestinationPath $env:TEMP -Force
       $inner = Get-ChildItem $env:TEMP -Directory -Filter "dsh-wechat-media-*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
       Move-Item $inner.FullName $InstallDir -Force

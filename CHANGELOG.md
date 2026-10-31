@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.23.7
+
+- **Downloads show progress, speed and time left.** The first version set `$ProgressPreference = "SilentlyContinue"`
+  because `Invoke-WebRequest`'s bar is slow - and then showed nothing at all for a 320 MB toolchain. `Save-Installer` now
+  streams with `HttpWebRequest` and prints one line every 500 ms:
+  `[#######------]  27%  6.9 MB / 25.7 MB  12.3 MB/s  还剩 2s`, then a summary
+  (`25.7 MB 用时 1.8s（平均 14.2 MB/s）`). Every download goes through it - Node / Python / VS Code installers, the xpack
+  archives, arduino-cli, and the source zip - so nothing is silent any more. Measured on the 25.7 MB Python installer.
 ## 1.23.6
 
 - **The Python link was a 404, and the reason is worth remembering.** python.org's ftp tree has directories for
