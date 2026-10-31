@@ -55,19 +55,26 @@ service or real hardware at least once (see *What was actually verified*).
 **On a fresh Windows machine, one script does the environment and the plugin:**
 
 ```powershell
-# 体检：只看缺什么，不改任何东西
-.\scripts\deploy-windows.ps1 -CheckOnly
+# 先拿脚本。jsDelivr 这条一般最快；GitHub 原地址有时会断流，见 docs/deploy.md 第零节
+irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@latest/scripts/deploy-windows.ps1 -OutFile deploy.ps1
 
-# 部署：九步依次是
-#   1 前置（node / DSH profile）        2 Python 本体（缺了用 winget 装）
-#   3 Python 包（pyserial/stcgal/stm32loader）  4 VS Code + ms-python.python 扩展
-#   5 arduino-cli + 核心                6 arm-none-eabi-gcc / cmake / ninja / openocd
-#   7 Keil 与 ESP-IDF（只检测）          8 插件装进 profile
-#   9 插件自带的 VS Code 扩展（vsix）     10 自检（插件自己的解析器 + 冒烟测试）
-.\scripts\deploy-windows.ps1
+# 体检：只看缺什么，不改任何东西
+.\deploy.ps1 -CheckOnly
+
+# 部署，十一步依次是
+#   1 前置（Node.js 缺则装 / DSH profile）      2 Python 本体（winget 或官方安装包）
+#   3 Python 包（pyserial / stcgal / stm32loader，并把 pip 的 Scripts 加进 PATH）
+#   4 VS Code + ms-python.python 扩展            5 CH340 串口驱动（验签后静默装）
+#   6 arduino-cli + 核心                         7 arm-none-eabi-gcc / cmake / ninja / openocd
+#   8 Keil 与 ESP-IDF（只检测）                   9 插件装进 profile
+#  10 插件自带的 VS Code 扩展（vsix）            11 自检（真编一个 STM32 固件 + 冒烟测试）
+.\deploy.ps1
 
 # 只要插件（环境已就绪）
-.\scripts\deploy-windows.ps1 -SkipTools -LocalPath D:\src\dsh-wechat-media
+.\deploy.ps1 -SkipTools -LocalPath D:\src\dsh-wechat-media
+
+# GitHub 慢 / 完全离线：用已经下好的 zip
+.\deploy.ps1 -ToolsArchiveDir D:\downloads\tools
 ```
 
 It is safe to re-run: installed tools are skipped, an existing `package.json` is backed up before it is merged, and a

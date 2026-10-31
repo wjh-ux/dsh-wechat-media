@@ -13,6 +13,30 @@
 
 ---
 
+## 零、怎么把脚本拿到机器上
+
+三条路，第一条最快（国内一般都能通）：
+
+```powershell
+# 1. jsDelivr CDN（推荐；@latest = 最新发布标签，内容不可变）
+irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@latest/scripts/deploy-windows.ps1 -OutFile deploy.ps1
+
+# 2. 要精确到某个版本（排查问题、复现旧行为时用）
+irm https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@v1.24.3/scripts/deploy-windows.ps1 -OutFile deploy.ps1
+
+# 3. GitHub 原地址（有时会断流："基础连接已经关闭: 接收时发生错误"）
+irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deploy-windows.ps1 -OutFile deploy.ps1
+```
+
+jsDelivr 的缓存规则值得知道：`@main` 在边缘节点上**最多缓存 12 小时**（`s-maxage=43200`），
+所以刚发布后可能拿到旧内容；`@latest` 或 `@vX.Y.Z` 指向发布标签，不会出现这个情况。
+
+拿到脚本后先确认是新版（新参数存在才算）：
+
+```powershell
+Select-String -Path .\deploy.ps1 -Pattern 'ToolsArchiveDir' -Quiet      # True = 1.24.3 及以后
+```
+
 ## 一、先决条件
 
 | 需要 | 为什么 | 谁负责 |

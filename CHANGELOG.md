@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.24.4
+
+- **jsDelivr is now the documented way to fetch the script.** `raw.githubusercontent.com` dropped mid-download on the VM
+  ("基础连接已经关闭: 接收时发生错误"), and `cdn.jsdelivr.net` served the same 47 KB file in a fraction of the time:
+  `https://cdn.jsdelivr.net/gh/wjh-ux/dsh-wechat-media@latest/scripts/deploy-windows.ps1`. Checked that `@latest`,
+  `@main` and `@v1.24.3` all resolve (and that `@v1.24.0` correctly yields the older file without `-ToolsArchiveDir`,
+  which is how version pinning was confirmed to work rather than assumed).
+- **The caching caveat is written down, because it will bite someone:** jsDelivr caches `@main` at the edge for up to 12
+  hours (`s-maxage=43200`, observed `age: 90`), so right after a release `@main` can be stale. `@latest` and `@vX.Y.Z`
+  point at immutable tags and avoid it. The manual also gives the one-liner that proves which version you actually have
+  (`Select-String -Path .\deploy.ps1 -Pattern 'ToolsArchiveDir' -Quiet`).
+- README's install block was a release behind (nine steps, no Node/CH340/PATH notes); rewritten to the eleven steps.
 ## 1.24.3
 
 - **`-ToolsArchiveDir`: install the tools from zips you already have.** GitHub at 1 KB/s makes the 320 MB toolchain
