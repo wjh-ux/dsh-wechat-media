@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.17.6
+
+- **A clone chip lied about its memory, and that is now written down.** The verified board reports `Chip id 0x412`
+  (low density, **32 KiB flash / 10 KiB RAM**) while its silkscreen says C8T6 (64/20). Sized from the silkscreen, the
+  firmware flashed, verified, and then hard-faulted in a silent reset loop: a 20 KiB stack top is past the end of 10 KiB
+  RAM. The README says to size from what the chip reports, and `scripts/stm32-template/` ships that project - a 212-byte
+  bare-metal blink with the 32K/10K linker script and `cmake/mcu.cmake` naming the three things a different chip needs.
+- Also recorded: moving BOOT0 to 1 does nothing until the chip is reset, and `stm32loader`'s
+  `Can't init into bootloader` in that window reads like a wiring fault even though nothing is wrong.
 ## 1.17.5
 
 - **A board with no SWD debugger can now be flashed by the tool, not by hand.** Verified today on an STM32F103C8T6 clone

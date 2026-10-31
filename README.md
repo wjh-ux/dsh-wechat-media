@@ -722,6 +722,7 @@ its `python_env` interpreter - and reported "no serial ports" when no board was 
 | `sdkconfig` (or `CMakeLists.txt` + `main/`) | `idf.py -C <dir> build` | `idf.py -C <dir> -p COMx flash` (builds first) |
 | `CMakeLists.txt` | `cmake --build build` | `openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program x.elf verify reset exit"` |
 | `Makefile` | `make -C <dir> -j` | same as CMake; `st-flash write x.bin 0x8000000` when stlink-tools is what is installed |
+| any of the above, **no debugger at all** | as above | `flasher="uart"` → `python -m stm32loader -p COMx -b 115200 -f F1 -e -w x.bin -v`, with `BOOT0=1` and a reset first |
 
 ```text
 project_build(dir="D:\\work\\my_f4", action="build")
@@ -731,6 +732,20 @@ project_build(dir="D:\\work\\my_esp32", action="flash", port="COM3")
 
 `/prefs` takes a `build` block (`{"toolchain":"idf","flasher":"openocd","dir":"…"}`) and an unknown value is refused
 rather than silently stored as `auto`, so "which compiler does this use" has one answer a script can read.
+
+**Verified on a real board (STM32F103C8T6 clone, no ST-Link):** wired PA9/PA10 to the CH340 that was already on COM3,
+`BOOT0=1` + reset, `flasher="uart"` wrote 212 bytes, `Verification OK`, the 212 bytes were read back and hashed
+identical, and the LED blinked after `BOOT0=0` + reset. Two things that board taught that no datasheet would have:
+
+- **The silkscreen lied about the memory.** `C8T6` means 64 KiB flash / 20 KiB RAM, but the chip reports
+  `Chip id 0x412` (low density) with `Flash size: 32 KiB` — a clone. A 20 KiB stack top (`0x20005000`) is past the end
+  of 10 KiB RAM, so the firmware flashed cleanly, verified, and then hard-faulted in a reset loop with no LED. The linker
+  script must be sized from what the chip *says* (`0x412` → 32K/10K), not from what is printed on it.
+- **A cloned bootloader needs the reset, not just the jumper.** Moving BOOT0 to 1 does nothing until the chip is reset;
+  `stm32loader` reports `Can't init into bootloader` during that window, which reads like a wiring fault and is not one.
+
+`scripts/stm32-template/` is that project: a 212-byte bare-metal blink (C vector table, register-level GPIO, 32K/10K
+linker script) with `cmake/mcu.cmake` holding the three things a different chip needs.
 
 **What this machine can do right now** is part of the answer, not something to discover by failing: this box has
 ESP-IDF v4.4.8 and Keil **C51 only** (no `ARM/` folder), and no `arm-none-eabi-gcc`, `openocd` or `st-flash` - so an
