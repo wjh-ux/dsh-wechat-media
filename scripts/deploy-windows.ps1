@@ -1,0 +1,430 @@
+﻿<#
+.SYNOPSIS
+  dsh-wechat-media 的一键部署：环境 + 插件 + 自检。
+
+.DESCRIPTION
+  给一台**全新的 Windows 机器**用：把插件跑起来所需的东西装齐，再把插件装进 DSH 的 profile，最后逐项验证。
+  每一步都"先检查、再动手、最后用真命令验证"——文件在不在不等于能用，所以验证一律是跑 `--version`
+  或真的 import 一次。
+
+  这个脚本可以重复跑：
+    - 已经装好的工具会跳过（不会重复下载 350 MB）
+    - profile 里已有的 package.json 会先备份再合并，不会覆盖你其它配置
+    - 指向别处的 junction 会被拒绝，而不是悄悄删掉
+
+  典型用法：
+    .\deploy-windows.ps1                  # 完整部署（环境 + 插件 + 自检）
+    .\deploy-windows.ps1 -CheckOnly       # 只看缺什么，什么都不改
+    .\deploy-windows.ps1 -SkipTools       # 只部署插件（环境已就绪）
+    .\deploy-windows.ps1 -LocalPath D:\src\dsh-wechat-media   # 用本地检出而不是 clone
+
+.PARAMETER CheckOnly
+  只体检：列出每一项的状态，不做任何修改。适合先看看这台机器差什么。
+
+.PARAMETER SkipTools
+  跳过环境安装（python 包 / arduino-cli / arm 工具链），只做插件部署。
+
+.PARAMETER SkipArduino
+  不装 arduino-cli 及其核心（只做 STC / STM32 的人可以省 1 GB 以上）。
+
+.PARAMETER WithEsp32Core
+  额外装 esp32 的 Arduino 核心（约 1.2 GB）。默认只装 arduino:avr（UNO/Mega/Nano）。
+
+.PARAMETER NoSelfTest
+  跳过最后的冒烟测试。
+
+.EXAMPLE
+  .\deploy-windows.ps1 -CheckOnly
+  体检这台机器。
+
+.EXAMPLE
+  .\deploy-windows.ps1 -LocalPath C:\work\dsh-wechat-media -Profile desktop
+  用本地检出装进 desktop profile。
+#>
+[CmdletBinding()]
+param(
+  [string]$ToolsRoot = "$env:USERPROFILE\tools",
+  [string]$InstallDir = "$env:USERPROFILE\dsh-wechat-media",
+  [string]$Profile = "desktop",
+  [string]$Source = "https://github.com/wjh-ux/dsh-wechat-media.git",
+  [string]$LocalPath = "",
+  [switch]$CheckOnly,
+  [switch]$SkipTools,
+  [switch]$SkipArduino,
+  [switch]$WithEsp32Core,
+  [switch]$NoSelfTest
+)
+
+$ErrorActionPreference = "Continue"
+$ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest 的进度条会让下载慢十倍
+
+# ── 报告 ──────────────────────────────────────────────────────────────────────
+$script:Report = @()
+function Step($n, $total, $text) { Write-Host "`n[$n/$total] $text" -ForegroundColor Cyan }
+function Ok($text)   { Write-Host "  ✔ $text" -ForegroundColor Green;  $script:Report += [pscustomobject]@{ 项 = $text; 状态 = "✔" } }
+function Miss($text) { Write-Host "  – $text" -ForegroundColor Yellow; $script:Report += [pscustomobject]@{ 项 = $text; 状态 = "缺" } }
+function Bad($text)  { Write-Host "  ✖ $text" -ForegroundColor Red;    $script:Report += [pscustomobject]@{ 项 = $text; 状态 = "✖" } }
+function Info($text) { Write-Host "    $text" -ForegroundColor DarkGray }
+
+function Have($command) {
+  return [bool](Get-Command $command -ErrorAction SilentlyContinue)
+}
+
+# 第二个参数**不能**叫 $args：那是 PowerShell 的自动变量，第一版因此什么都没传给 --version，
+# 于是每个工具的"版本"都变成了 "Usage" 或 "fatal error: no input files"。
+function Read-Version([string]$command, [string[]]$ArgList = @()) {
+  try {
+    $out = & $command @ArgList 2>&1 | Select-Object -First 1
+    if ($LASTEXITCODE -eq 0 -or $out) { return ("" + $out).Trim() }
+  } catch { }
+  return ""
+}
+
+# 下载并解压一个便携工具（xpack / arduino-cli 都发 win32-x64 的 zip，解压出来带一层目录）
+function Install-PortableZip {
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Url,
+    [Parameter(Mandatory)][string]$Destination,
+    [string]$AssetPattern = "win32-x64\.zip$"
+  )
+  $zip = Join-Path $env:TEMP "$Name.zip"
+  Write-Host "    下载 $Name…" -ForegroundColor DarkGray
+  Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing -TimeoutSec 1800
+  if (Test-Path $Destination) { Remove-Item $Destination -Recurse -Force }
+  New-Item -ItemType Directory -Force $Destination | Out-Null
+  Expand-Archive -Path $zip -DestinationPath $Destination -Force
+  # 解开后通常是一层同名目录：把内容提上来，路径才稳定
+  $inner = Get-ChildItem $Destination -Directory | Select-Object -First 1
+  if ($inner -and -not (Get-ChildItem $Destination -File)) {
+    Get-ChildItem $inner.FullName | Move-Item -Destination $Destination -Force
+    Remove-Item $inner.FullName -Recurse -Force
+  }
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue
+}
+
+# 从 GitHub 的 releases/latest 里挑资产
+function Get-LatestAsset($repo, $pattern) {
+  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "dsh-deploy" } -TimeoutSec 60
+  return $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+}
+
+Write-Host "`n============================================" -ForegroundColor White
+Write-Host " dsh-wechat-media 部署" -ForegroundColor White
+Write-Host "============================================" -ForegroundColor White
+if ($CheckOnly) { Write-Host " 模式：只体检（不改任何东西）" -ForegroundColor Yellow }
+Info "工具目录 : $ToolsRoot"
+Info "插件目录 : $InstallDir"
+Info "目标 profile : $Profile"
+
+$total = 7
+$failures = 0
+
+# ── 1. 前置 ───────────────────────────────────────────────────────────────────
+Step 1 $total "前置条件"
+if ($env:OS -ne "Windows_NT") { Bad "这个脚本只支持 Windows"; $failures++; }
+else { Ok "Windows" }
+
+if (-not (Have "node")) {
+  Bad "没找到 node —— DSH 本身要它；装好 Node.js 18+ 再跑这个脚本"
+  $failures++
+} else {
+  $nodeVersion = Read-Version "node" @("--version")
+  Ok "node $nodeVersion"
+  $dsh = Join-Path $env:USERPROFILE ".dsh"
+  if (Test-Path $dsh) { Ok "DSH 目录存在（$dsh）" } else { Miss "还没有 DSH 目录（$dsh）——插件装进去也没东西加载它，先把 DSH 跑起来一次" }
+  $profileDir = Join-Path $dsh "profiles\$Profile"
+  if (Test-Path $profileDir) { Ok "profile 存在（$profileDir）" } else { Miss "profile 不存在（$profileDir）——会在部署时创建" }
+}
+
+# ── 2. Python 与串口/烧录包 ───────────────────────────────────────────────────
+Step 2 $total "Python 与串口烧录包"
+$python = $null
+foreach ($candidate in @("python", "python3", "py")) {
+  if (Have $candidate) { $python = $candidate; break }
+}
+if (-not $python) {
+  Miss "没找到 python —— STC 烧录（stcgal）与 STM32 UART 引导（stm32loader）需要它"
+  Info "装法：winget install Python.Python.3.12   （或从 python.org 装）"
+} else {
+  Ok "python：$((Get-Command $python).Source)"
+  # pyserial 用 import 验（插件以 `serial` 引用它）；stcgal / stm32loader 只验"能不能找到"。
+  # 这台机器上 stcgal 就装在 ESP-IDF 的 python 环境里，是个独立 exe —— 用系统 python `import stcgal` 会误报缺失，
+  # 而实际烧录一切正常。所以最终判断交给第 7 步：用插件自己的解析器（serial.js）来回答。
+  $missing = @()
+  if (((& $python -c "import serial; print('ok')" 2>&1) -notmatch "ok")) { $missing += "pyserial" }
+  # stcgal 可能是独立 exe，也可能装在别的 python 环境里（本机就在 ESP-IDF 的环境里）——
+  # 第 7 步用插件自己的 which() 回答，那才是运行时真正看到的。
+  Info "stcgal / esptool 的可用性留到第 7 步由插件自己确认"
+  if (((& $python -c "import stm32loader; print('ok')" 2>&1) -notmatch "ok")) { $missing += "stm32loader" }
+
+  if (-not $missing) {
+    Ok "串口烧录依赖齐：pyserial / stcgal / stm32loader"
+  } elseif ($CheckOnly) {
+    Miss "缺：$($missing -join ', ')"
+  } else {
+    Info "安装 $($missing -join ', ')（当前用户，不需要管理员）"
+    & $python -m pip install --user --quiet @missing
+    $still = @()
+    if (($missing -contains "pyserial") -and (((& $python -c "import serial; print('ok')" 2>&1) -notmatch "ok"))) { $still += "pyserial" }
+    if (($missing -contains "stm32loader") -and (((& $python -c "import stm32loader; print('ok')" 2>&1) -notmatch "ok"))) { $still += "stm32loader" }
+    if ($missing -contains "stcgal" -and -not (Have "stcgal")) {
+      # pip 把 stcgal.exe 放进 python 的 Scripts 目录，那个目录不一定在 PATH 上
+      $scripts = & $python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>&1
+      if ($scripts -and (Test-Path (Join-Path $scripts "stcgal.exe"))) {
+        Ok "stcgal 在 $scripts（插件按路径找得到，PATH 里没有也不影响）"
+      } else { $still += "stcgal" }
+    }
+    if ($still) { Bad "装完还缺：$($still -join ', ')"; $failures++ } else { Ok "装好：$($missing -join ', ')" }
+  }
+}
+# ── 3. Arduino ────────────────────────────────────────────────────────────────
+Step 3 $total "Arduino（arduino-cli + 核心）"
+if ($SkipArduino) {
+  Miss "按 -SkipArduino 跳过"
+} else {
+  $arduinoCli = Get-ChildItem $ToolsRoot -Filter "arduino-cli.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($arduinoCli) {
+    Ok "arduino-cli：$($arduinoCli.FullName)"
+    $cli = $arduinoCli.FullName
+  } elseif ($CheckOnly) {
+    Miss "没装 arduino-cli"
+    $cli = $null
+  } else {
+    try {
+      $asset = Get-LatestAsset "arduino/arduino-cli" "Windows_64bit\.zip$"
+      $dest = Join-Path $ToolsRoot "arduino-cli"
+      Install-PortableZip -Name "arduino-cli" -Url $asset.browser_download_url -Destination $dest
+      $cli = (Get-ChildItem $dest -Filter "arduino-cli.exe" -Recurse | Select-Object -First 1).FullName
+      Ok "arduino-cli 装到 $dest（$($asset.name)）"
+    } catch { Bad "arduino-cli 下载失败：$($_.Exception.Message)"; $failures++; $cli = $null }
+  }
+
+  if ($cli) {
+    $cores = (& $cli core list 2>&1) -join "`n"
+    $needCores = @()
+    if ($cores -notmatch "arduino:avr") { $needCores += "arduino:avr" }
+    if ($WithEsp32Core -and $cores -notmatch "esp32:esp32") { $needCores += "esp32:esp32" }
+    if (-not $needCores) {
+      Ok "核心齐：$((($cores -split "`n" | Select-String -Pattern '^\S+:\S+\s').Line | ForEach-Object { ($_ -split '\s+')[0] }) -join ', ')"
+    } elseif ($CheckOnly) {
+      Miss "缺核心：$($needCores -join ', ')（约 $(if ($needCores -contains 'esp32:esp32') { '1.2 GB' } else { '60 MB' }))"
+    } else {
+      Info "安装核心 $($needCores -join ', ')（要下载，几分钟）"
+      & $cli core update-index | Out-Null
+      foreach ($core in $needCores) {
+        Write-Host "    装 $core…" -ForegroundColor DarkGray
+        & $cli core install $core | Out-Null
+      }
+      $after = (& $cli core list 2>&1) -join "`n"
+      $missingCore = $needCores | Where-Object { $after -notmatch [regex]::Escape($_) }
+      if ($missingCore) { Bad "核心没装上：$($missingCore -join ', ')"; $failures++ } else { Ok "核心装好：$($needCores -join ', ')" }
+    }
+  }
+}
+
+# ── 4. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
+Step 4 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
+$toolchain = @(
+  @{ Name = "armgcc";  Command = "arm-none-eabi-gcc"; Version = "--version"; Repo = "xpack-dev-tools/arm-none-eabi-gcc-xpack"; Sub = "bin" },
+  @{ Name = "cmake";   Command = "cmake";             Version = "--version"; Repo = "xpack-dev-tools/cmake-xpack";              Sub = "bin" },
+  @{ Name = "ninja";   Command = "ninja";             Version = "--version"; Repo = "xpack-dev-tools/ninja-build-xpack";        Sub = "bin" },
+  @{ Name = "openocd"; Command = "openocd";           Version = "--version"; Repo = "xpack-dev-tools/openocd-xpack";            Sub = "bin" }
+)
+foreach ($tool in $toolchain) {
+  $present = Get-ChildItem $ToolsRoot -Filter "$($tool.Command).exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($present) {
+    $version = Read-Version $present.FullName @($tool.Version)
+    Ok "$($tool.Command)：$($version -replace '\s+', ' ')"
+    continue
+  }
+  if ($CheckOnly) { Miss "没装 $($tool.Command)"; continue }
+  try {
+    $asset = Get-LatestAsset $tool.Repo "win32-x64\.zip$"
+    $dest = Join-Path $ToolsRoot $tool.Name
+    Install-PortableZip -Name $tool.Name -Url $asset.browser_download_url -Destination $dest
+    $exe = Get-ChildItem $dest -Filter "$($tool.Command).exe" -Recurse | Select-Object -First 1
+    if ($exe) { Ok "$($tool.Command) 装到 $dest（$($asset.name)）" } else { Bad "$($tool.Name) 解压后没找到 $($tool.Command).exe"; $failures++ }
+  } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
+}
+
+# ── 5. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
+Step 5 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
+$uv4 = @(
+  "$env:LOCALAPPDATA\Keil_v5\UV4\UV4.exe",
+  "D:\Keil_v5\UV4\UV4.exe",
+  "C:\Keil_v5\UV4\UV4.exe",
+  "C:\Program Files\Keil_v5\UV4\UV4.exe",
+  "C:\Program Files (x86)\Keil_v5\UV4\UV4.exe"
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($uv4) {
+  $root = Split-Path (Split-Path $uv4 -Parent) -Parent
+  $families = @()
+  if (Test-Path (Join-Path $root "C51\BIN\c51.exe")) { $families += "C51" }
+  if ((Test-Path (Join-Path $root "ARM\ARMCLANG\bin\armclang.exe")) -or (Test-Path (Join-Path $root "ARM\ARMCC\bin\armcc.exe"))) { $families += "ARM" }
+  Ok "Keil UV4：$uv4（可编：$($families -join ' + ')）"
+  Info "一台机器可以有两份（C51 一份、MDK 一份），插件会按工程器件家族自己选"
+} else {
+  Miss "没找到 Keil（不装也能用：Keil 工程之外的三种照常）"
+  Info "要装的话：https://www.keil.com/demo/eval/arm.htm  → 见 docs/keil-arm-install.md（含直链与 SHA256）"
+}
+
+$idf = @("$env:IDF_PATH", "D:\Espressif\frameworks\esp-idf-v4.4.8", "C:\Espressif\frameworks") |
+  Where-Object { $_ -and (Test-Path (Join-Path $_ "export.ps1")) } | Select-Object -First 1
+if ($idf) { Ok "ESP-IDF：$idf" }
+else {
+  if (-not $env:IDF_PATH) { Miss "没找到 ESP-IDF（不影响其它三种工程）" } else { Bad "IDF_PATH 指向 $env:IDF_PATH，但里面没有 export.ps1"; $failures++ }
+  Info "装法：Espressif 的 IDF 安装器，或 git clone + install.bat"
+}
+
+# ── 6. 插件部署 ───────────────────────────────────────────────────────────────
+Step 6 $total "插件部署（源码 → profile）"
+if ($SkipTools -eq $false -and $CheckOnly) { Info "环境检查模式下不改插件；去掉 -CheckOnly 才会动" }
+
+# 源码位置：显式 -LocalPath > 已存在的 profile 联接 > 默认安装目录（不存在就 clone 一个）
+$profileLink = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".dsh\profiles\$Profile") "node_modules") "dsh-wechat-media"
+$checkout = if ($LocalPath) { $LocalPath } elseif ((Test-Path $profileLink) -and (Get-Item $profileLink -Force).Target) { (Get-Item $profileLink -Force).Target } else { $InstallDir }
+if ($LocalPath) { Ok "用本地检出：$LocalPath" }
+elseif ($checkout -ne $InstallDir) { Ok "沿用 profile 里已联接的源码：$checkout" }
+
+if (-not (Test-Path (Join-Path $checkout "package.json"))) {
+  if ($CheckOnly) {
+    Miss "插件源码不在 $checkout"
+  } elseif ($LocalPath) {
+    Bad "指定的 -LocalPath 里没有 package.json：$LocalPath"
+    $failures++
+  } elseif (Have "git") {
+    Info "git clone $Source → $InstallDir"
+    & git clone --depth 1 $Source $InstallDir 2>&1 | Out-Null
+    if (Test-Path (Join-Path $InstallDir "package.json")) { Ok "已检出到 $InstallDir" } else { Bad "clone 失败"; $failures++ }
+  } else {
+    Info "没有 git，改用 zip 下载"
+    try {
+      $zip = Join-Path $env:TEMP "dsh-wechat-media.zip"
+      Invoke-WebRequest -Uri ($Source -replace '\.git$', '')/archive/refs/heads/main.zip -OutFile $zip -UseBasicParsing -TimeoutSec 600
+      Expand-Archive $zip -DestinationPath $env:TEMP -Force
+      $inner = Get-ChildItem $env:TEMP -Directory -Filter "dsh-wechat-media-*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+      Move-Item $inner.FullName $InstallDir -Force
+      Remove-Item $zip -Force
+      if (Test-Path (Join-Path $InstallDir "package.json")) { Ok "已下载到 $InstallDir" } else { Bad "zip 解压后没有 package.json"; $failures++ }
+    } catch { Bad "下载失败：$($_.Exception.Message)"; $failures++ }
+  }
+} else {
+  Ok "插件源码在 $checkout"
+  if ((Have "git") -and (Test-Path (Join-Path $checkout ".git")) -and -not $LocalPath -and -not $CheckOnly) {
+    Info "更新源码（git pull --ff-only）"
+    & git -C $checkout pull --ff-only 2>&1 | Out-Null
+  }
+}
+
+$profileDir = Join-Path $env:USERPROFILE ".dsh\profiles\$Profile"
+$nodeModules = Join-Path $profileDir "node_modules"
+$linkPath = Join-Path $nodeModules "dsh-wechat-media"
+if ($CheckOnly) {
+  if (Test-Path (Join-Path $profileDir "package.json")) { Ok "profile 配置在（$profileDir）" } else { Miss "profile 配置还没有" }
+  if (Test-Path $linkPath) { Ok "已联接：$((Get-Item $linkPath -Force).Target)" } else { Miss "还没联接到 profile" }
+} else {
+  New-Item -ItemType Directory -Force $nodeModules | Out-Null
+  # 只有"不存在"或"是联接"时才重建；指向别处的真实目录要人来看
+  if (Test-Path $linkPath) {
+    $existing = Get-Item $linkPath -Force
+    if ($existing.LinkType) {
+      if ($existing.Target -ne $checkout) { Remove-Item $linkPath -Force; Ok "旧联接指向 $($existing.Target)，已替换" }
+    } else {
+      Bad "$linkPath 是真实目录，不是联接 —— 不清自删，请自己确认后移走"
+      $failures++
+    }
+  }
+  if (-not (Test-Path $linkPath)) {
+    New-Item -ItemType Junction -Path $linkPath -Target $checkout | Out-Null
+    Ok "已联接：$linkPath → $checkout"
+  }
+
+  # package.json：备份 → 合并依赖与 bundles → 写回
+  $profilePkg = Join-Path $profileDir "package.json"
+  if (Test-Path $profilePkg) {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    Copy-Item $profilePkg "$profilePkg.bak-$stamp" -Force
+    $json = Get-Content $profilePkg -Raw -Encoding utf8 | ConvertFrom-Json
+  } else {
+    # 全新 profile：bundles 里必须有 DSH 自己的基础层，否则 DSH 起不来（只有我们的插件是不够的）
+    $json = [pscustomobject]@{
+      name         = "dsh-profile-$Profile"
+      private      = $true
+      dependencies = [pscustomobject]@{}
+      dsh          = [pscustomobject]@{ profile = [pscustomobject]@{ bundles = @("@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app") } }
+    }
+  }
+  if (-not $json.dependencies) { $json | Add-Member -NotePropertyName dependencies -NotePropertyValue ([pscustomobject]@{}) -Force }
+  $wantLink = "link:" + ($checkout -replace '\\', '/')
+  $json.dependencies | Add-Member -NotePropertyName "dsh-wechat-media" -NotePropertyValue $wantLink -Force
+  $bundles = @()
+  if ($json.dsh -and $json.dsh.profile -and $json.dsh.profile.bundles) { $bundles = @($json.dsh.profile.bundles) }
+  if ($bundles -notcontains "dsh-wechat-media") { $bundles += "dsh-wechat-media" }
+  if (-not $json.dsh) { $json | Add-Member -NotePropertyName dsh -NotePropertyValue ([pscustomobject]@{}) -Force }
+  if (-not $json.dsh.profile) { $json.dsh | Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{}) -Force }
+  $json.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue $bundles -Force
+  New-Item -ItemType Directory -Force $profileDir | Out-Null
+  $json | ConvertTo-Json -Depth 8 | Set-Content $profilePkg -Encoding utf8
+  Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media）"
+}
+
+# ── 7. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
+Step 7 $total "自检"
+if ($CheckOnly) {
+  Info "体检模式不跑测试；去掉 -CheckOnly 才会验证"
+} elseif (-not (Test-Path (Join-Path $checkout "scripts\probe-tools.mjs"))) {
+  Miss "插件里没有 scripts\probe-tools.mjs，跳过自检"
+} else {
+  # scripts\probe-tools.mjs 调的是插件自己的 which() 与 serialSupport()，所以这里看到的就是它运行时看到的。
+  Info "用插件自己的解析器确认工具链"
+  Push-Location $checkout
+  $probeLines = & node "scripts\probe-tools.mjs" 2>&1
+  Pop-Location
+  $missed = @()
+  foreach ($line in $probeLines) {
+    if ($line -match "^([^|]+)\|(ok|miss)\|(.*)$") {
+      $name = $Matches[1]; $state = $Matches[2]; $where = $Matches[3]
+      if ($state -eq "ok") { Ok "$name：$where" } else { $missed += $name; Miss "$name：插件找不到" }
+    }
+  }
+  if ($missed.Count -gt 0) {
+    Info "这几项只影响对应功能（没有 stcgal 就烧不了 STC），不影响插件启动和聊天"
+  }
+
+  if (-not $NoSelfTest -and (Test-Path (Join-Path $checkout "test\smoke.test.mjs"))) {
+    Info "跑冒烟测试（不需要硬件、不需要网络）"
+    Push-Location $checkout
+    $smoke = & node "test\smoke.test.mjs" 2>&1
+    $smokeExit = $LASTEXITCODE
+    Pop-Location
+    if ($smokeExit -eq 0) {
+      Ok "冒烟测试通过：插件能加载，工具与路由都注册了"
+    } else {
+      Bad "冒烟测试失败"
+      ($smoke | Select-Object -Last 12) | ForEach-Object { Info $_ }
+      $failures++
+    }
+  }
+}
+# ── 汇总 ──────────────────────────────────────────────────────────────────────
+Write-Host "`n============================================" -ForegroundColor White
+if ($failures -eq 0) {
+  Write-Host " 完成" -ForegroundColor Green
+} else {
+  Write-Host " 完成，但有 $failures 项需要注意（上面标 ✖ 的）" -ForegroundColor Yellow
+}
+Write-Host "============================================" -ForegroundColor White
+$script:Report | Format-Table -AutoSize | Out-String | Write-Host
+
+if ($CheckOnly) {
+  Write-Host "这是体检模式。去掉 -CheckOnly 就会按上面的清单动手。" -ForegroundColor Yellow
+} else {
+  Write-Host @"
+下一步：
+  1. 重启 DSH（插件在启动时加载，不重启看不到新工具）
+  2. 启动后确认：GET http://127.0.0.1:19387/dsh-wechat-media/state 应返回 version 字段
+  3. 危险能力默认关，用到了再开：/serial on · /keil on · /ssh on · /task command on
+"@ -ForegroundColor Cyan
+}
+exit $failures

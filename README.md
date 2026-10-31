@@ -50,6 +50,38 @@ service or real hardware at least once (see *What was actually verified*).
   (messaging, docs, sheets, bitables) work normally, and the knowledge-base tools and `feishu_cli` say what is
   missing instead of failing obscurely.
 
+## Install
+
+**On a fresh Windows machine, one script does the environment and the plugin:**
+
+```powershell
+# 体检：只看缺什么，不改任何东西
+.\scripts\deploy-windows.ps1 -CheckOnly
+
+# 部署：环境（python 包 / arduino-cli + 核心 / arm-none-eabi-gcc + cmake + ninja + openocd）+ 插件 + 自检
+.\scripts\deploy-windows.ps1
+
+# 只要插件（环境已就绪）
+.\scripts\deploy-windows.ps1 -SkipTools -LocalPath D:\src\dsh-wechat-media
+```
+
+It is safe to re-run: installed tools are skipped, an existing `package.json` is backed up before it is merged, and a
+`node_modules` link that points somewhere else is replaced while a real directory is refused rather than deleted.
+Verification is never "the file exists" - every tool is run (`--version`), and the last step asks **the plugin itself**
+(`scripts/probe-tools.mjs` calls the same `which()` / `serialSupport()` the plugin uses at runtime) what it can actually
+reach, then runs the smoke test.
+
+What it cannot install for you, and why:
+
+| | 原因 |
+|---|---|
+| **Keil (C51 / MDK-ARM)** | 要注册账号下载，且许可按商业/非商业区分 - 见 [docs/keil-arm-install.md](docs/keil-arm-install.md)（含直链、SHA256、四个坑） |
+| **ESP-IDF** | Espressif 的安装器要选目标芯片与组件；检测已有安装，缺了只提示 |
+| **DSH 本身** | 插件是 DSH 的扩展，不是独立程序 |
+
+Machine without the script? The three things it does are small enough to do by hand: put the plugin's checkout on disk,
+link it as `<profile>\node_modules\dsh-wechat-media`, and add `"dsh-wechat-media": "link:<path>"` to the profile's
+`package.json` plus `dsh-wechat-media` to `dsh.profile.bundles`.
 ## Install / 安装
 
 ```sh

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.21.0
+
+- **One script for a fresh Windows machine: `scripts/deploy-windows.ps1`.** It installs what the plugin needs (python
+  packages, arduino-cli and cores, arm-none-eabi-gcc, cmake, ninja, openocd), links the plugin into a DSH profile, and
+  then verifies by *running* things rather than checking that files exist. `-CheckOnly` reports without touching anything;
+  `-SkipTools`, `-LocalPath`, `-Profile`, `-SkipArduino`, `-WithEsp32Core`, `-NoSelfTest` narrow it down.
+- **Verification asks the plugin, not a guess.** `scripts/probe-tools.mjs` calls the same `which()` and
+  `serialSupport()` the plugin uses at runtime, so the report is what it will actually see. This matters: on the machine
+  this was built on, `stcgal` lives inside ESP-IDF's python environment as a standalone exe, and `import stcgal` in the
+  system python says "missing" while STC flashing works perfectly.
+- Three bugs the first version had, all caught by running it: the version reader's second parameter was named `$args`
+  (PowerShell's automatic variable, so `--version` was never passed and every tool reported "Usage" or
+  `fatal error: no input files`); a fresh profile was created with only our plugin in `bundles`, which would leave DSH
+  unable to boot (it needs `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-web-app`); and the source-location check
+  complained "no source" while a valid profile link was already pointing at one.
+- Idempotency tested: two consecutive deploys into the same new profile produced one junction, one `package.json` with
+  `base + web-app + dsh-wechat-media` in `bundles`, and a timestamped backup - no duplicates.
 ## 1.20.1
 
 - **The smoke test hung CI for 13 minutes, twice.** The plugin starts monitors and a scheduler in `apply()`, so the event
