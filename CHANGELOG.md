@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.23.2
+
+- **Node.js is installed by the script too** (`winget install OpenJS.NodeJS.LTS`), so a Windows machine with nothing but
+  DSH on it is enough. Verified by hiding `node` from PATH: the check reported `– 没找到 node（Node.js 18+）` and the DSH
+  block skipped instead of crashing, which is what the offline/check modes need.
+- The manual's prerequisite table now says who is responsible for each row: Windows and DSH are yours, Node.js / Python /
+  VS Code are the script's. Regenerated the Word and PDF from it (six pages, page 1 verified).
 ## 1.23.1
 
 - **The manual has a Word/PDF path.** `scripts/md-to-docx.py` converts `docs/deploy.md` into a `.docx` (headings, bullets,

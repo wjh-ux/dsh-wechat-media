@@ -155,12 +155,22 @@ Step 1 $total "前置条件"
 if ($env:OS -ne "Windows_NT") { Bad "这个脚本只支持 Windows"; $failures++; }
 else { Ok "Windows" }
 
+# Node.js：DSH 的运行时和插件自己的工具（冒烟测试、probe-tools）都要它。缺了就装 LTS。
 if (-not (Have "node")) {
-  Bad "没找到 node —— DSH 本身要它；装好 Node.js 18+ 再跑这个脚本"
-  $failures++
+  if ($CheckOnly -or $Offline) {
+    Miss "没找到 node（Node.js 18+）$(if ($Offline) { '；离线模式不装' } else { '' })"
+  } elseif (Install-WithWinget -Id "OpenJS.NodeJS.LTS" -Probe "node" -Name "Node.js LTS") {
+    Ok "node $((Read-Version "node" @("--version")))"
+  } else {
+    Info "备选：https://nodejs.org/en/download  （选 LTS 的 .msi，装完重开一个终端）"
+    $failures++
+  }
 } else {
   $nodeVersion = Read-Version "node" @("--version")
   Ok "node $nodeVersion"
+}
+
+if (Have "node") {
   # DSH 本体：只查 ~/.dsh 目录是不够的（那个目录可能是空的，或者从别的机器拷来的）。
   # 这里按实际安装布局找：PATH 里的 dsh.cmd、或 %LOCALAPPDATA%\Programs\DeepSeek Harness\DeepSeek Harness.exe。
   $dshExe = $null

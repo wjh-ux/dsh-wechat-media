@@ -10,13 +10,17 @@
 
 ---
 
-## 一、先决条件（脚本装不了的三件事）
+## 一、先决条件
 
-| 需要 | 为什么 | 怎么确认 |
+| 需要 | 为什么 | 谁负责 |
 |---|---|---|
-| **Windows 10 1809+ / 11** | 脚本用 winget、目录联接、注册表 PATH | `winget --version` 有输出 |
-| **Node.js 18+** | DSH 的运行时要它 | `node --version` |
-| **DSH 本身（DeepSeek Harness）** | 插件是 DSH 的扩展，不是独立程序 | `%LOCALAPPDATA%\Programs\DeepSeek Harness\DeepSeek Harness.exe` 存在，或 PATH 里有 `dsh` |
+| **Windows 10 1809+ / 11** | 脚本用 winget、目录联接、注册表 PATH | 你（装系统） |
+| **DSH 本身（DeepSeek Harness）** | 插件是 DSH 的扩展，不是独立程序 | 你（装 DSH 并启动一次） |
+| Node.js 18+ | DSH 与插件工具链都要它 | **脚本会装**（`winget install OpenJS.NodeJS.LTS`） |
+| Python 3.12 | 串口烧录依赖它 | **脚本会装** |
+| VS Code + Python 扩展 | 面板/编辑器那条路 | **脚本会装** |
+
+也就是说：一台**装了 Windows 的空机器**，只要再装好 DSH 并启动一次，剩下的脚本全包。
 
 **DSH 必须先启动过一次**——它会生成 `%USERPROFILE%\.dsh\profiles\desktop\`，插件要装进那个 profile。
 脚本会检查这两点，缺了会明确报 `✖` 而不是继续往下装。
@@ -28,7 +32,7 @@
 ## 二、一条命令做的十件事
 
 ```
-[1/10] 前置条件        Windows / node / DSH 本体 / ~/.dsh / profile
+[1/10] 前置条件        Windows / Node.js（缺则装）/ DSH 本体 / ~/.dsh / profile
 [2/10] Python 本体     没有就用 winget 装 Python 3.12
 [3/10] Python 包       pyserial / stcgal / stm32loader（串口烧录用）
 [4/10] VS Code         没有就用 winget 装 VS Code，再装 ms-python.python 扩展
