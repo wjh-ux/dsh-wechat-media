@@ -24,6 +24,11 @@
 .PARAMETER SkipTools
   跳过环境安装（python 包 / arduino-cli / arm 工具链），只做插件部署。
 
+.PARAMETER ToolsArchiveDir
+  已下载好的压缩包目录。GitHub 太慢时，在浏览器里（或用镜像站）把
+  arduino-cli / arm-none-eabi-gcc / cmake / ninja / openocd 的 zip 下到这里，
+  脚本按文件名认领、解压到 ToolsRoot 对应位置，不再联网。
+
 .PARAMETER GitHubProxy
   GitHub 加速前缀（可选），例如 https://ghproxy.net 。给"直连 GitHub 慢到用不了"的网络用：
   脚本会把 arduino-cli / arm 工具链 / 源码 zip 的下载地址改写成 <前缀>/<原地址>。
@@ -60,6 +65,7 @@ param(
   [string]$Profile = "desktop",
   [string]$Source = "https://github.com/wjh-ux/dsh-wechat-media.git",
   [string]$GitHubProxy = "",
+  [string]$ToolsArchiveDir = "",
   [string]$LocalPath = "",
   [switch]$CheckOnly,
   [switch]$SkipTools,
@@ -341,6 +347,44 @@ function Resolve-DownloadUrl([string]$Url) {
   if ($Url -notmatch '^https://(github\.com|codeload\.github\.com|objects\.githubusercontent\.com)/') { return $Url }
   $prefix = $GitHubProxy.TrimEnd("/")
   return "$prefix/$Url"
+}
+
+# 从"已经下好的 zip 目录"里装工具 —— 给 GitHub 慢到不能用、或完全离线的机器。
+# 认领规则按文件名（这些工具的名字都很好认），装完仍然用 --version 验证。
+function Install-FromArchives {
+  if (-not $ToolsArchiveDir) { return 0 }
+  if (-not (Test-Path $ToolsArchiveDir)) { Bad "压缩包目录不存在：$ToolsArchiveDir"; return 0 }
+  $map = @(
+    @{ Pattern = 'arduino-cli';            Dir = 'arduino-cli'; Exe = 'arduino-cli.exe' },
+    @{ Pattern = 'arm-none-eabi-gcc|armgcc|gnu-arm-embedded'; Dir = 'armgcc'; Exe = 'arm-none-eabi-gcc.exe' },
+    @{ Pattern = 'cmake';                  Dir = 'cmake';      Exe = 'cmake.exe' },
+    @{ Pattern = 'ninja';                  Dir = 'ninja';      Exe = 'ninja.exe' },
+    @{ Pattern = 'openocd';                Dir = 'openocd';    Exe = 'openocd.exe' }
+  )
+  $installed = 0
+  foreach ($entry in $map) {
+    $existing = Get-ChildItem $ToolsRoot -Filter $entry.Exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) { Info "$($entry.Exe) 已存在，跳过压缩包"; continue }
+    $zip = Get-ChildItem $ToolsArchiveDir -Filter "*.zip" -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match $entry.Pattern } | Select-Object -First 1
+    if (-not $zip) { Miss "没在 $ToolsArchiveDir 里找到匹配 $($entry.Pattern) 的 zip"; continue }
+    $dest = Join-Path $ToolsRoot $entry.Dir
+    try {
+      Info "解压 $($zip.Name) → $dest"
+      if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+      New-Item -ItemType Directory -Force $dest | Out-Null
+      Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
+      $inner = Get-ChildItem $dest -Directory | Select-Object -First 1
+      if ($inner -and -not (Get-ChildItem $dest -File)) {
+        Get-ChildItem $inner.FullName | Move-Item -Destination $dest -Force
+        Remove-Item $inner.FullName -Recurse -Force
+      }
+      $exe = Get-ChildItem $dest -Filter $entry.Exe -Recurse | Select-Object -First 1
+      if ($exe) { Ok "$($entry.Exe)：$($exe.FullName)"; $installed++ }
+      else { Bad "$($zip.Name) 解开后没找到 $($entry.Exe)"; $failures++ }
+    } catch { Bad "解压 $($zip.Name) 失败：$($_.Exception.Message)"; $failures++ }
+  }
+  return $installed
 }
 
 function Get-LatestAsset($repo, $pattern) {
@@ -686,6 +730,10 @@ if ($SkipCh340) {
   }
 }
 
+if ($ToolsArchiveDir) {
+  Info "先从本地压缩包安装（-ToolsArchiveDir）：$ToolsArchiveDir"
+  $null = Install-FromArchives
+}
 # ── 6. Arduino ────────────────────────────────────────────────────────────────
 Step 6 $total "Arduino（arduino-cli + 核心）"
 if ($SkipArduino) {

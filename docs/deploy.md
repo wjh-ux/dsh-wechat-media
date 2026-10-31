@@ -218,6 +218,36 @@ https://github.moeyy.xyz
 
 都不行的话，两个退路：
 
+**退路一：在浏览器里把 zip 下下来，交给脚本解压（推荐）**
+
+镜像站能切镜像源，比在 PowerShell 里试前缀直观，比如 [hiwiki 的 GitHub Store](https://git.hiwiki.org/zh-CN/repo/arduino/arduino-cli)
+（它按仓库聚合、给 SHA256、能翻历史版本）。把下好的 zip 丢进一个目录，然后：
+
+```powershell
+.\deploy.ps1 -ToolsArchiveDir D:\downloads\tools -ToolsRoot C:\Users\<你>\tools
+```
+
+脚本按**文件名**认领（认领规则见下表），解压到 `ToolsRoot\<名字>`，解开的目录会自动提平，最后仍然跑 `--version` 验证：
+
+| zip 文件名里包含 | 装到 | 验证 |
+|---|---|---|
+| `arduino-cli` | `tools\arduino-cli` | `arduino-cli version` |
+| `arm-none-eabi-gcc` / `armgcc` / `gnu-arm-embedded` | `tools\armgcc` | `arm-none-eabi-gcc --version` |
+| `cmake` | `tools\cmake` | `cmake --version` |
+| `ninja` | `tools\ninja` | `ninja --version` |
+| `openocd` | `tools\openocd` | `openocd --version` |
+
+已经装好的会自动跳过，所以这个开关可以反复用。
+
+**退路二：整体拷贝**
+
+```powershell
+# 在别的机器上跑过一次 deploy，把整个 %USERPROFILE%\tools 拷进这台机器
+.\deploy.ps1 -Offline -ToolsRoot D:\tools
+```
+
+原来的两个退路：
+
 ```powershell
 # 先只要"插件能用"（跳过 320 MB 的 arm-gcc 与 70 MB 的 Arduino）
 .\deploy.ps1 -SkipToolchain -SkipArduino

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.24.3
+
+- **`-ToolsArchiveDir`: install the tools from zips you already have.** GitHub at 1 KB/s makes the 320 MB toolchain
+  unusable, and mirror sites (like [hiwiki's GitHub Store](https://git.hiwiki.org/zh-CN/repo/arduino/arduino-cli)) are easier
+  to drive from a browser - they let you switch mirrors, show SHA256 and keep old versions. Drop the downloaded zips in one
+  folder and the script claims them by file name, extracts each to `ToolsRoot\<name>` (flattening the extra directory), and
+  still verifies with `--version`. Already-installed tools are skipped, so it is safe to re-run.
+- The claim table is documented: `arduino-cli`, `arm-none-eabi-gcc`/`armgcc`/`gnu-arm-embedded`, `cmake`, `ninja`,
+  `openocd`. Verified end to end by downloading `arduino-cli_1.5.1_Windows_64bit.zip` into a temp folder and installing it
+  into a temp `ToolsRoot`: `arduino-cli version` says 1.5.1, and a second run skipped it.
 ## 1.24.2
 
 - **`-GitHubProxy`**: a mirror prefix for the downloads that come from GitHub. Measured on a VM: VS Code from Microsoft's
