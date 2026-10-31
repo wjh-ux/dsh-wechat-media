@@ -20,6 +20,7 @@ import {
   keilFamily,
   normalizeBuildPrefs,
   runPlan,
+  tidyOutput,
   toolchainReport,
 } from "../firmware.js";
 
@@ -214,6 +215,26 @@ await test("the override is stored only when it is a real choice", () => {
   // A typo must not silently become "auto": `keil` is a choice, `keill` is a mistake and is dropped to auto.
   assert.equal(normalizeBuildPrefs({ toolchain: "keill", flasher: "stlink" }).toolchain, "auto");
   assert.equal(normalizeBuildPrefs({ flasher: "stlink" }).flasher, "auto");
+});
+await test("newlib's nosys noise is counted, not printed", () => {
+  const noisy = [
+    "closer.c:(.text._close_r+0xc): warning: _close is not implemented and will always fail",
+    "... note: the message above does not take linker garbage collection into account",
+    "   text\t   data\t    bss\t    dec\t    hex\tfilename",
+    "    212\t      0\t      0\t    212\t     d4\tstm32_template.elf",
+  ].join("\n");
+  const tidy = tidyOutput(noisy);
+  assert.equal(tidy.dropped, 2);
+  assert.match(tidy.text, /text.*data.*bss/);
+  assert.match(tidy.text, /212/);
+  assert.ok(!/not implemented/.test(tidy.text), "the noise is gone");
+
+  // A real error survives, because it is not on the noise list.
+  const failed = tidyOutput("Error: undefined reference to `main'\n_close is not implemented and will always fail");
+  assert.match(failed.text, /undefined reference/);
+  assert.equal(failed.dropped, 1);
+  // And an empty build prints nothing rather than a blank block.
+  assert.equal(tidyOutput("").text, "");
 });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -259,6 +259,27 @@ export function normalizeBuildPrefs(value = {}) {
   return next;
 }
 
+/**
+ * Drop newlib's `nosys` stub warnings from a build's output.
+ *
+ * `--specs=nosys.specs` makes every libc syscall wrapper complain (`_close is not implemented and will always fail`)
+ * and the linker add a note about garbage collection. A bare-metal link produces a dozen of these, all harmless, and
+ * they drown the two lines that matter: the errors and the `text data bss` summary. Counting them is better than
+ * hiding them, so the caller can say "12 known warnings filtered".
+ */
+const NOSYS_NOISE = /(not implemented and will always fail|does not take linker garbage collection into account)/i;
+
+export function tidyOutput(text, { maxLines = 14 } = {}) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const kept = lines.filter((line) => !NOSYS_NOISE.test(line));
+  const dropped = lines.length - kept.length;
+  const tail = kept
+    .map((line) => line.replace(/\s+$/, ""))
+    .filter((line) => line.trim())
+    .slice(-maxLines);
+  return { text: tail.join("\n"), dropped };
+}
+
 /** One sentence about what this machine can do, so "why did it not build" is answerable before trying. */
 export function toolchainReport({ keilArm = false, keilC51 = false, idfPy = "", cmake = "", make = "", openocd = "", stflash = "", armGcc = "" } = {}) {
   return [

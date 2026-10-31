@@ -9997,7 +9997,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                   if (!configured.ok) {
                     return [
                       `❌ 配置失败（${toolchainFile ? `toolchain=${toolchainFile}` : "没找到 toolchain 文件"}，退出码 ${configured.code}）`,
-                      (configured.output || "").trim().split(/\r?\n/).slice(-12).join("\n"),
+                      firmware.tidyOutput(configured.output, { maxLines: 12 }).text,
                     ].filter(Boolean).join("\n");
                   }
                 }
@@ -10009,11 +10009,13 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               });
               noteRoute("/project", { action: "build", kind, ok: ran.ok, code: ran.code });
               const head = ran.ok ? "✅ 编译通过" : "❌ 编译失败";
+              const tidy = firmware.tidyOutput(ran.output);
               return [
                 `${head}（${built.note ?? kind}，退出码 ${ran.code}，${ran.ms}ms）`,
                 `工程：${detected.project ?? dir}（识别为 ${detected.kind}${detected.evidence ? `，依据 ${detected.evidence}` : ""}）`,
                 built.error ? `原因：${built.error}` : "",
-                (ran.output || "").trim().split(/\r?\n/).slice(-14).join("\n"),
+                tidy.text,
+                tidy.dropped ? `（已过滤 ${tidy.dropped} 条 newlib nosys 警告：裸机没有系统调用，属常态）` : "",
               ].filter(Boolean).join("\n");
             }
 
@@ -10068,7 +10070,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               `${ran.ok ? "⚡ 烧录完成" : "❌ 烧录失败"}（${planned.note ?? planned.tool}，退出码 ${ran.code}，${ran.ms}ms）`,
               planned.error ? `原因：${planned.error}` : "",
               planned.tool ? `$ ${planned.tool} ${planned.args.join(" ")}` : "",
-              (ran.output || "").trim().split(/\r?\n/).slice(-14).join("\n"),
+              (() => { const tidy = firmware.tidyOutput(ran.output); return [tidy.text, tidy.dropped ? `（已过滤 ${tidy.dropped} 条 nosys 警告）` : ""].filter(Boolean).join("\n"); })(),
             ].filter(Boolean).join("\n");
           } catch (error) {
             noteRoute("/project", { action, ok: false, error: String(error?.message ?? error) });

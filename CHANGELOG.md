@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.17.9
+
+- **A bare-metal link's output was 12 lines of harmless noise and 2 lines of information.** `--specs=nosys.specs` makes
+  every libc wrapper complain (`_close is not implemented and will always fail`) and the linker add a note about garbage
+  collection, so "✅ 编译通过" was followed by a wall of warnings that buried `text 212 data 0 bss 0`. `tidyOutput` drops
+  those two shapes, keeps everything else (a real `undefined reference` still shows), and the answer says how many were
+  filtered rather than hiding them.
+- `docs/TODO.md` collects the known debt - `index.js` at 12k lines, the missing route-level smoke test, the README split,
+  and the dead deploy key - each with why it matters and how to tell it is done. It also lists the behaviours that were
+  hard-won today and must not be "fixed" back.
 ## 1.17.8
 
 - **`project_build` on a fresh CMake checkout no longer fails with `does not appear to contain CMakeCache.txt`.** A new
