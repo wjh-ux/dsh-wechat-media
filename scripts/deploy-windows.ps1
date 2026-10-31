@@ -24,6 +24,10 @@
 .PARAMETER SkipTools
   跳过环境安装（python 包 / arduino-cli / arm 工具链），只做插件部署。
 
+.PARAMETER SkipToolchain
+  跳过 ARM 工具链（arm-none-eabi-gcc 约 320 MB + cmake / ninja / openocd）。
+  只想先确认"插件能装进 DSH 并启动"时用；之后想编 STM32 再去掉这个开关重跑即可。
+
 .PARAMETER SkipArduino
   不装 arduino-cli 及其核心（只做 STC / STM32 的人可以省 1 GB 以上）。
 
@@ -55,6 +59,7 @@ param(
   [switch]$CheckOnly,
   [switch]$SkipTools,
   [switch]$SkipArduino,
+  [switch]$SkipToolchain,
   [switch]$WithEsp32Core,
   [switch]$NoSelfTest,
   [switch]$Offline,
@@ -559,29 +564,33 @@ if ($SkipArduino) {
 
 # ── 6. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
 Step 6 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
-$toolchain = @(
-  @{ Name = "armgcc";  Command = "arm-none-eabi-gcc"; Version = "--version"; Repo = "xpack-dev-tools/arm-none-eabi-gcc-xpack"; Sub = "bin" },
-  @{ Name = "cmake";   Command = "cmake";             Version = "--version"; Repo = "xpack-dev-tools/cmake-xpack";              Sub = "bin" },
-  @{ Name = "ninja";   Command = "ninja";             Version = "--version"; Repo = "xpack-dev-tools/ninja-build-xpack";        Sub = "bin" },
-  @{ Name = "openocd"; Command = "openocd";           Version = "--version"; Repo = "xpack-dev-tools/openocd-xpack";            Sub = "bin" }
-)
-foreach ($tool in $toolchain) {
-  $present = Get-ChildItem $ToolsRoot -Filter "$($tool.Command).exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($present) {
-    $version = Read-Version $present.FullName @($tool.Version)
-    Ok "$($tool.Command)：$($version -replace '\s+', ' ')"
-    continue
+if ($SkipToolchain) {
+  Miss "按 -SkipToolchain 跳过（去掉这个开关会装 arm-none-eabi-gcc 320 MB + cmake / ninja / openocd）"
+} else {
+  $toolchain = @(
+    @{ Name = "armgcc";  Command = "arm-none-eabi-gcc"; Version = "--version"; Repo = "xpack-dev-tools/arm-none-eabi-gcc-xpack"; Sub = "bin" },
+    @{ Name = "cmake";   Command = "cmake";             Version = "--version"; Repo = "xpack-dev-tools/cmake-xpack";              Sub = "bin" },
+    @{ Name = "ninja";   Command = "ninja";             Version = "--version"; Repo = "xpack-dev-tools/ninja-build-xpack";        Sub = "bin" },
+    @{ Name = "openocd"; Command = "openocd";           Version = "--version"; Repo = "xpack-dev-tools/openocd-xpack";            Sub = "bin" }
+  )
+  foreach ($tool in $toolchain) {
+    $present = Get-ChildItem $ToolsRoot -Filter "$($tool.Command).exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($present) {
+      $version = Read-Version $present.FullName @($tool.Version)
+      Ok "$($tool.Command)：$($version -replace '\s+', ' ')"
+      continue
+    }
+    if ($CheckOnly -or $Offline) { Miss "没装 $($tool.Command)"; continue }
+    try {
+      $asset = Get-LatestAsset $tool.Repo "win32-x64\.zip$"
+      $dest = Join-Path $ToolsRoot $tool.Name
+      Install-PortableZip -Name $tool.Name -Url $asset.browser_download_url -Destination $dest
+      $exe = Get-ChildItem $dest -Filter "$($tool.Command).exe" -Recurse | Select-Object -First 1
+      if ($exe) { Ok "$($tool.Command) 装到 $dest（$($asset.name)）" } else { Bad "$($tool.Name) 解压后没找到 $($tool.Command).exe"; $failures++ }
+    } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
   }
-  if ($CheckOnly -or $Offline) { Miss "没装 $($tool.Command)"; continue }
-  try {
-    $asset = Get-LatestAsset $tool.Repo "win32-x64\.zip$"
-    $dest = Join-Path $ToolsRoot $tool.Name
-    Install-PortableZip -Name $tool.Name -Url $asset.browser_download_url -Destination $dest
-    $exe = Get-ChildItem $dest -Filter "$($tool.Command).exe" -Recurse | Select-Object -First 1
-    if ($exe) { Ok "$($tool.Command) 装到 $dest（$($asset.name)）" } else { Bad "$($tool.Name) 解压后没找到 $($tool.Command).exe"; $failures++ }
-  } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
-}
 
+}
 # ── 7. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
 Step 7 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
 $uv4 = @(

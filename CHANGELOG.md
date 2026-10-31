@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.23.8
+
+- **`-SkipToolchain`**: skips the ARM toolchain (arm-none-eabi-gcc alone is 320 MB). For "I only want to see whether the
+  plugin installs into DSH and starts", that is the difference between a minute and ten. Step 6 still prints its header
+  and says it was skipped, so the numbering stays 1..10 instead of jumping 5 → 7.
 ## 1.23.7
 
 - **Downloads show progress, speed and time left.** The first version set `$ProgressPreference = "SilentlyContinue"`

@@ -127,6 +127,9 @@ Python 与 VS Code 本来就不需要管理员：前者 `InstallAllUsers=0`，�
 # 不装 Arduino（省 70 MB；只做 STC / STM32 的人可以这样）
 .\scripts\deploy-windows.ps1 -SkipArduino
 
+# 不装 ARM 工具链（省 320 MB；只想先确认插件能装进 DSH 并启动）
+.\scripts\deploy-windows.ps1 -SkipToolchain
+
 # 连 ESP32 的 Arduino 核心一起装（多 1.2 GB）
 .\scripts\deploy-windows.ps1 -WithEsp32Core
 
