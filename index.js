@@ -10107,7 +10107,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             // compilers emit a hex, so convert here instead of asking the board's owner to install a python package.
             let flashRun = planned;
             let convertedNote = "";
-            if (!planned.error && String(planned.tool ?? "").includes("python") && /\\.hex$/i.test(file)) {
+            if (!planned.error && String(planned.tool ?? "").includes("python") && /\.hex$/i.test(file)) {
               try {
                 const parsed = firmware.hexToBin(readFileSync(file, "utf8"));
                 if (parsed.error) return `hex 转换失败：${parsed.error}`;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.19.4
+
+- **The hex-to-bin conversion never ran, because the regex had two backslashes.** `/\.hex$/i` was written as
+  `/\\.hex$/i` (a literal backslash followed by any character, then `hex`), so it matched nothing and `stm32loader` was
+  handed the hex it refuses: `assert addresses[0] == 0`. The tool reported it honestly - the plan line showed
+  `blink.hex` and the traceback came through - which is how the doubled escape was found in one look. A scan of the
+  three modules for the same shape came back clean.
 ## 1.19.3
 
 - **`project_build(action="flash")` threw `uv4 is not defined`.** The flash branch built its plan with a variable that was
