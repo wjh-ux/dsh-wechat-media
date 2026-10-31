@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.19.3
+
+- **`project_build(action="flash")` threw `uv4 is not defined`.** The flash branch built its plan with a variable that was
+  declared inside the build branch, so the first attempt to program a chip through the tool died before touching the
+  port - while the same command worked when the plan was assembled by hand. `uv4` is resolved once above both branches
+  now. The flash itself was verified the same minute through the module's own `findFirmware` → `hexToBin` →
+  `runPlan` chain (`Write 3 chunks`, `Verification OK`), which is the code the tool calls.
 ## 1.19.2
 
 - **A Keil ARM hex now reaches the chip over the UART bootloader.** Nothing about the tool's own path was wrong; two

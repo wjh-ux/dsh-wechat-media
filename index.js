@@ -10002,12 +10002,15 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               });
             }
 
+            // `uv4` is needed by build *and* flash (`UV4 -f`), so it is resolved once, above both branches. It used to be
+            // declared inside the build branch, and the flash branch referenced it - a ReferenceError at exactly the
+            // moment somebody asks to program a chip.
+            const keilEnv = keil.keilSupport();
+            const uv4 = keilEnv.ok ? keilEnv.uv4.program : "";
+
             if (action === "build") {
               const cmake = serial.which("cmake", {}) || "";
               const make = serial.which("make", {}) || serial.which("gmake", {}) || "";
-              // UV4 has to be a real path: `spawn("uv4")` fails in milliseconds and looks like a build failure.
-              const keilEnv = keil.keilSupport();
-              const uv4 = keilEnv.ok ? keilEnv.uv4.program : "";
 
               // A fresh clone has no build/ directory, and `cmake --build` alone fails on it with "does not appear to
               // contain CMakeCache.txt" - which reads like a broken project rather than an unconfigured one. Configure
