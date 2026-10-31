@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.24.8
+
+- **Downloads retry three times** (3 s, then 6 s, deleting the partial file each time). A VM run died on
+  `arm-none-eabi-gcc 下载失败：使用"0"个参数调用"GetResponse"时发生异常:"无法连接到远程服务器"` - a transient connection
+  failure that marked the whole 320 MB step as failed. The same retry now wraps `Get-LatestAsset` (api.github.com is a
+  separate route and fails separately), and a hard failure finally suggests the three real workarounds: run again,
+  `-GitHubProxy`, or `-ToolsArchiveDir`. Verified against an unreachable host: 3 attempts, ~13 s, partial file removed.
+- **A missing `-ToolsArchiveDir` no longer counts as a failure.** The VM pointed at `C:\downloads\tools`, which did not
+  exist, and the run reported `✖ 压缩包目录不存在` even though it then downloaded everything fine at 9.9 MB/s. It now says
+  "跳过（之后从网上下载）" and continues; the exit code stays 0.
+- The same run showed CH340 working end to end for the first time on that machine: `✔ 签名已验证：Nanjing Qinheng
+  Microelectronics（Valid）` then `✔ 驱动已装（安装器退出码 0）`.
 ## 1.24.7
 
 - **Fetch advice corrected again, because the previous two attempts were both wrong.** Measured, back to back:

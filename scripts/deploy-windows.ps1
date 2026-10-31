@@ -86,7 +86,7 @@ param(
 # ── 脚本版本 ────────────────────────────────────────────────────────────────
 # 为什么要写在脚本里：没有版本号时，"我拿到的到底是哪一版"只能靠猜参数在不在（ToolsArchiveDir 只说明 ≥1.24.3），
 # 而 jsDelivr 的 @main 会缓存 12 小时，拿旧版是最容易发生的事。
-$scriptVersion = "1.24.7"
+$scriptVersion = "1.24.8"
 
 $total = 11          # 步骤总数（-Version 与各步标题共用）
 
@@ -193,56 +193,79 @@ function Format-Bytes([double]$bytes) {
 }
 
 function Save-Installer([string]$Url, [string]$FileName) {
+  <#
+    流式下载 + 进度/速度/剩余时间，且**失败会重试**。
+
+    为什么要重试：VM 上真实出现过 `无法连接到远程服务器`（GitHub 的 releases 域名偶发连不上），
+    而一次失败就让整个 ARM 工具链（320 MB）那一步记 ✖ —— 这类错误九成是瞬时的，重试一次往往就过了。
+    每次重试前删掉半截文件，避免把断掉的下载当成完成品。
+  #>
   $path = Join-Path $env:TEMP $FileName
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  $request = [Net.HttpWebRequest]::Create($Url)
-  $request.UserAgent = "dsh-deploy"
-  $request.Timeout = 60000
-  $request.ReadWriteTimeout = 300000
-  $response = $request.GetResponse()
-  $total = $response.ContentLength
-  $stream = $response.GetResponseStream()
-  $file = [IO.File]::Create($path)
-  $buffer = New-Object byte[] 131072
-  $done = 0L
-  $clock = [Diagnostics.Stopwatch]::StartNew()
-  $lastTick = -1000
-  $lastBytes = 0L
-  try {
-    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-      $file.Write($buffer, 0, $read)
-      $done += $read
-      if ($clock.ElapsedMilliseconds - $lastTick -ge 500) {
-        $speed = 0
-        $elapsedMs = $clock.ElapsedMilliseconds - $lastTick
-        if ($elapsedMs -gt 0) { $speed = ($done - $lastBytes) / ($elapsedMs / 1000.0) }
-        $lastTick = $clock.ElapsedMilliseconds
-        $lastBytes = $done
-        $line = "      "
-        if ($total -gt 0) {
-          $percent = [Math]::Min(100, [int](100 * $done / $total))
-          $filled = [int]($percent / 4)                       # 25 格的进度条
-          $bar = ("#" * $filled) + ("-" * (25 - $filled))
-          $eta = ""
-          if ($speed -gt 0 -and $done -lt $total) {
-            $eta = "  还剩 {0:N0}s" -f (($total - $done) / $speed)
+  $attempts = 3
+  for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+    if (Test-Path $path) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+    try {
+      $request = [Net.HttpWebRequest]::Create($Url)
+      $request.UserAgent = "dsh-deploy"
+      $request.Timeout = 60000
+      $request.ReadWriteTimeout = 300000
+      $response = $request.GetResponse()
+      $total = $response.ContentLength
+      $stream = $response.GetResponseStream()
+      $file = [IO.File]::Create($path)
+      $buffer = New-Object byte[] 131072
+      $done = 0L
+      $clock = [Diagnostics.Stopwatch]::StartNew()
+      $lastTick = -1000
+      $lastBytes = 0L
+      try {
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+          $file.Write($buffer, 0, $read)
+          $done += $read
+          if ($clock.ElapsedMilliseconds - $lastTick -ge 500) {
+            $speed = 0
+            $elapsedMs = $clock.ElapsedMilliseconds - $lastTick
+            if ($elapsedMs -gt 0) { $speed = ($done - $lastBytes) / ($elapsedMs / 1000.0) }
+            $lastTick = $clock.ElapsedMilliseconds
+            $lastBytes = $done
+            $line = "      "
+            if ($total -gt 0) {
+              $percent = [Math]::Min(100, [int](100 * $done / $total))
+              $filled = [int]($percent / 4)
+              $bar = ("#" * $filled) + ("-" * (25 - $filled))
+              $eta = ""
+              if ($speed -gt 0 -and $done -lt $total) { $eta = "  还剩 {0:N0}s" -f (($total - $done) / $speed) }
+              $line += "[$bar] {0,3}%  {1} / {2}  {3}/s{4}" -f $percent, (Format-Bytes $done), (Format-Bytes $total), (Format-Bytes $speed), $eta
+            } else {
+              $line += "{0}  {1}/s（服务器没给总大小）" -f (Format-Bytes $done), (Format-Bytes $speed)
+            }
+            Write-Host "`r$line" -NoNewline
           }
-          $line += "[$bar] {0,3}%  {1} / {2}  {3}/s{4}" -f $percent, (Format-Bytes $done), (Format-Bytes $total), (Format-Bytes $speed), $eta
-        } else {
-          $line += "{0}  {1}/s（服务器没给总大小）" -f (Format-Bytes $done), (Format-Bytes $speed)
         }
-        Write-Host "`r$line" -NoNewline
+      } finally {
+        $file.Close(); $stream.Close(); $response.Close()
+      }
+      $clock.Stop()
+      # 服务器声明了长度却不符 → 当成断流，重试
+      if ($total -gt 0 -and $done -ne $total) {
+        throw "只收到 $done / $total 字节"
+      }
+      $finalLine = "      {0} 用时 {1:N1}s（平均 {2}/s）" -f (Format-Bytes $done), $clock.Elapsed.TotalSeconds, (Format-Bytes ($done / [Math]::Max($clock.Elapsed.TotalSeconds, 0.1)))
+      Write-Host "`r$finalLine`n" -ForegroundColor DarkGray
+      return $path
+    } catch {
+      if ($attempt -lt $attempts) {
+        $wait = $attempt * 3
+        Write-Host "`r      第 $attempt 次失败：$($_.Exception.Message)" -ForegroundColor DarkYellow
+        Write-Host "      ${wait}s 后重试（$attempt/$($attempts)）" -ForegroundColor DarkYellow
+        Start-Sleep -Seconds $wait
+      } else {
+        if (Test-Path $path) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+        throw "$($attempts) 次尝试都失败：$($_.Exception.Message)"
       }
     }
-  } finally {
-    $file.Close()
-    $stream.Close()
-    $response.Close()
   }
-  $clock.Stop()
-  $finalLine = "      {0} 用时 {1:N1}s（平均 {2}/s）" -f (Format-Bytes $done), $clock.Elapsed.TotalSeconds, (Format-Bytes ($done / [Math]::Max($clock.Elapsed.TotalSeconds, 0.1)))
-  Write-Host "`r$finalLine" -ForegroundColor DarkGray
-  return $path
 }
 
 function Install-NodeFallback {
@@ -365,7 +388,7 @@ function Resolve-DownloadUrl([string]$Url) {
 # 认领规则按文件名（这些工具的名字都很好认），装完仍然用 --version 验证。
 function Install-FromArchives {
   if (-not $ToolsArchiveDir) { return 0 }
-  if (-not (Test-Path $ToolsArchiveDir)) { Bad "压缩包目录不存在：$ToolsArchiveDir"; return 0 }
+  if (-not (Test-Path $ToolsArchiveDir)) { Miss "压缩包目录不存在，跳过（之后从网上下载）：$ToolsArchiveDir"; return 0 }
   $map = @(
     @{ Pattern = 'arduino-cli';            Dir = 'arduino-cli'; Exe = 'arduino-cli.exe' },
     @{ Pattern = 'arm-none-eabi-gcc|armgcc|gnu-arm-embedded'; Dir = 'armgcc'; Exe = 'arm-none-eabi-gcc.exe' },
@@ -400,8 +423,21 @@ function Install-FromArchives {
 }
 
 function Get-LatestAsset($repo, $pattern) {
-  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "dsh-deploy" } -TimeoutSec 60
-  return $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+  # 查最新版本要打 api.github.com；这台机器上偶发连不上（和 releases 域名是两条路）。
+  # 失败重试三次，报错时把"可以用 -GitHubProxy 或 -ToolsArchiveDir 绕开"一起说清楚。
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "dsh-deploy" } -TimeoutSec 60
+      $asset = $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+      if (-not $asset) { throw "$repo 的最新发布里没有匹配 $pattern 的文件" }
+      return $asset
+    } catch {
+      $lastError = $_.Exception.Message
+      if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 3) }
+    }
+  }
+  throw "查 $repo 的最新版本失败（试了 3 次）：$lastError"
 }
 
 # -Version 要在横幅之前处理：否则一进来先刷一堆方块字符，最后才说版本，读起来是反的。
@@ -825,7 +861,7 @@ if ($SkipToolchain) {
       Install-PortableZip -Name $tool.Name -Url (Resolve-DownloadUrl $asset.browser_download_url) -Destination $dest
       $exe = Get-ChildItem $dest -Filter "$($tool.Command).exe" -Recurse | Select-Object -First 1
       if ($exe) { Ok "$($tool.Command) 装到 $dest（$($asset.name)）" } else { Bad "$($tool.Name) 解压后没找到 $($tool.Command).exe"; $failures++ }
-    } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; $failures++ }
+    } catch { Bad "$($tool.Command) 下载失败：$($_.Exception.Message)"; Info "可以：① 重跑一次（多半是瞬时） ② -GitHubProxy 加镜像前缀 ③ 把 zip 放进 -ToolsArchiveDir 再跑"; $failures++ }
   }
 
 }
