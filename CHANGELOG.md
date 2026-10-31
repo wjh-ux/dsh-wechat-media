@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.18.0
+
+- **Arduino is now the fourth family `project_build` drives.** A sketch is recognised the way `arduino-cli` recognises
+  one - a folder containing a `.ino` of the same name - and compiles with `arduino-cli compile --fqbn <fqbn>`, uploads
+  with `arduino-cli upload --fqbn <fqbn> -p COMx`. The board (FQBN) is read from `sketch.yaml`'s `default_fqbn:`, then
+  the `board` argument, then `arduino-cli board list --format json` - which only answers for a board that is plugged in,
+  so it is right for `upload` and useless for `compile`, and that asymmetry is the reason for the order.
+- Verified without hardware: the AVR core (`arduino:avr@1.8.8`) plus a 220-byte Blink sketch compiled to
+  `Sketch uses 924 bytes (2%) of program storage space` / `Global variables use 9 bytes (0%)`. The machine already had
+  `arduino:esp32` and `esp32:esp32` cores installed, so ESP32 sketches work through the same entry.
 ## 1.17.10
 
 - **The noise filter only caught two of the three lines each warning is made of.** A newlib stub warning is a group:

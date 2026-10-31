@@ -17,10 +17,10 @@ import { join } from "node:path";
 export const BUILD_TIMEOUT_MS = 900000;
 
 /** Which build systems we know how to drive, in the order detection prefers them. */
-export const TOOLCHAINS = ["keil", "idf", "cmake", "make"];
+export const TOOLCHAINS = ["keil", "idf", "arduino", "cmake", "make"];
 
 /** Which downloaders we know. `uv4` is uVision's own (`-f`), the rest are external. */
-export const FLASHERS = ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool", "uart"];
+export const FLASHERS = ["uv4", "stcgal", "idf", "arduino", "openocd", "stflash", "esptool", "uart"];
 
 /** ST-Link boards people actually have; `openocd` needs a target config and this is the shortlist worth guessing from. */
 export const OPENOCD_TARGETS = {
@@ -60,6 +60,15 @@ export function detectProject({ dir = ".", exists = existsSync, readdir = readdi
   const uvision = list.find((entry) => /\.uvprojx?$/i.test(String(entry)));
   if (uvision) return { kind: "keil", project: join(dir, String(uvision)), evidence: String(uvision) };
 
+  // An Arduino sketch is a folder whose name matches a `.ino` inside it - that is the rule arduino-cli itself enforces,
+  // and it is checked before CMake because a sketch often carries a CMakeLists.txt from some other tool.
+  const sketch = list.find((entry) => /\.ino$/i.test(String(entry)));
+  if (sketch) {
+    const name = String(sketch).replace(/\.ino$/i, "");
+    const folder = String(dir).replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+    return { kind: "arduino", dir, sketch: join(dir, String(sketch)), sketchName: name, folderMatch: name === folder, evidence: String(sketch) };
+  }
+
   // ESP-IDF before plain CMake: an IDF project also has a CMakeLists.txt, and the sdkconfig is what makes it an IDF
   // project rather than something a stock toolchain could build.
   if (has("sdkconfig") || has("sdkconfig.defaults")) return { kind: "idf", dir, evidence: "sdkconfig" };
@@ -87,7 +96,7 @@ export function keilFamily(xml) {
  * `idf` builds through `idf.py -C <dir> build` - the same -C discipline as flashing, because building "the project in
  * whatever directory the plugin happens to be" is how a green build belongs to something else.
  */
-export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", uv4 = "", target = "" } = {}) {
+export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = "", make = "", uv4 = "", arduinoCli = "", fqbn = "", target = "" } = {}) {
   // Every tool path comes in resolved where possible: a long-running process never re-reads PATH, so `cmake` installed
   // while DSH was running would spawn-fail even though the folder has it (which() is what found it).
   if (kind === "keil") {
@@ -102,6 +111,13 @@ export function buildPlan({ kind, dir = "", project = "", idfPy = "", cmake = ""
     if (target) args.push(`-DIDF_TARGET=${target}`);
     args.push("build");
     return { tool: idfPy, args, note: "idf.py build" };
+  }
+  if (kind === "arduino") {
+    // arduino-cli is the scriptable face of the Arduino IDE: same cores, same board manager, no GUI. The FQBN
+    // (`arduino:avr:uno`) is what names the board; without it nothing can be compiled, so it is an explicit error.
+    if (!arduinoCli) return { error: "没找到 arduino-cli —— 装上它（单文件，放到 %USERPROFILE%\\tools\\arduino-cli\\）" };
+    if (!fqbn) return { error: "不知道板子型号：给 board 参数（如 arduino:avr:uno），或在 sketch.yaml 里写 default_fqbn" };
+    return { tool: arduinoCli, args: ["compile", "--fqbn", fqbn, dir], note: `arduino-cli compile · ${fqbn}` };
   }
   if (kind === "cmake") {
     if (!cmake) return { error: "没找到 cmake —— 装上 cmake（或改用 make）" };
@@ -135,6 +151,8 @@ export function flashPlan({
   target = "stm32f1x",
   port = "",
   python = "",
+  arduinoCli = "",
+  fqbn = "",
   baud = 0,
   family = "F1",
   stc = false,
@@ -145,6 +163,8 @@ export function flashPlan({
       ? wanted
       : kind === "idf"
         ? "idf"
+        : kind === "arduino"
+          ? "arduino"
         : stc
           ? "stcgal"
           : kind === "keil"
@@ -169,6 +189,16 @@ export function flashPlan({
     if (port) args.push("-p", port);
     args.push("flash");
     return { tool: idfPy, args, note: "idf.py flash（会先编译）" };
+  }
+  if (resolved === "arduino") {
+    if (!arduinoCli) return { error: "没找到 arduino-cli" };
+    if (!fqbn) return { error: "不知道板子型号：给 board 参数（如 arduino:avr:uno）" };
+    if (!port) return { error: "Arduino 烧录要给串口（例如 port=\"COM3\"）" };
+    return {
+      tool: arduinoCli,
+      args: ["upload", "--fqbn", fqbn, "-p", port, dir],
+      note: `arduino-cli upload · ${fqbn} · ${port}`,
+    };
   }
   if (resolved === "openocd") {
     if (!openocd) return { error: "没找到 openocd —— 装上 openocd（或改用 st-flash）" };
@@ -203,6 +233,44 @@ export function flashPlan({
   // Nothing usable: name the packages, because "不知道" is not an instruction.
   const wants = kind === "cmake" || kind === "make" ? "openocd 或 stlink-tools（st-flash）" : "一个烧录器";
   return { error: `没有可用的烧录器：需要 ${wants}；也可以用 flasher 显式指定（${FLASHERS.join(" / ")}）` };
+}
+
+/**
+ * The board, from the three places it can be stated.
+ *
+ * `sketch.yaml` is arduino-cli's own project file and wins (it is what `arduino-cli sketch new` writes); `args.board`
+ * is the person overriding it; and `arduino-cli board list --format json` is the last resort, because it can only
+ * recognise a board that is plugged in - which is exactly right for `upload` and useless for `compile`.
+ */
+export function fqbnFromSketchYaml(text) {
+  // `default_fqbn:` at the top level is the plain case; a `profiles:` block also carries `fqbn:` lines, and taking the
+  // first one is right for the common sketch with a single profile. The answer is printed in the tool's output either
+  // way, so a wrong pick is visible rather than silent.
+  const match = String(text ?? "").match(/^\s*(?:default_fqbn|fqbn)\s*:\s*["']?([\w:.\-]+)["']?\s*$/m);
+  return match ? match[1].trim() : "";
+}
+
+/** One entry of `arduino-cli board list --format json`: the port, its address and the FQBN it was recognised as. */
+export function boardFromList(json, { port = "" } = {}) {
+  let parsed;
+  try {
+    parsed = typeof json === "string" ? JSON.parse(json) : json;
+  } catch {
+    return "";
+  }
+  const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.detected_ports) ? parsed.detected_ports : [];
+  const withBoard = [];
+  for (const row of rows) {
+    const address = String(row?.port?.address ?? "").trim();
+    const fqbn = String(row?.matching_boards?.[0]?.fqbn ?? row?.boards?.[0]?.fqbn ?? "").trim();
+    if (fqbn) withBoard.push({ address, fqbn });
+  }
+  if (port) {
+    const hit = withBoard.find((row) => row.address.toLowerCase() === String(port).toLowerCase());
+    if (hit) return hit.fqbn;
+  }
+  // No port asked for (or it did not match): only answer when exactly one board was recognised.
+  return withBoard.length === 1 ? withBoard[0].fqbn : "";
 }
 
 /** Newest `.elf` / `.bin` under a build folder - what a CMake project just produced, without asking which one. */

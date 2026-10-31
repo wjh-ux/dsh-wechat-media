@@ -729,6 +729,7 @@ its `python_env` interpreter - and reported "no serial ports" when no board was 
 | `CMakeLists.txt` | `cmake --build build` | `openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c "program x.elf verify reset exit"` |
 | `Makefile` | `make -C <dir> -j` | same as CMake; `st-flash write x.bin 0x8000000` when stlink-tools is what is installed |
 | any of the above, **no debugger at all** | as above | `flasher="uart"` → `python -m stm32loader -p COMx -b 115200 -f F1 -e -w x.bin -v`, with `BOOT0=1` and a reset first |
+| `.ino` (Arduino sketch) | `arduino-cli compile --fqbn arduino:avr:uno <dir>` | `arduino-cli upload --fqbn … -p COMx <dir>` |
 
 ```text
 project_build(dir="D:\\work\\my_f4", action="build")
@@ -738,6 +739,17 @@ project_build(dir="D:\\work\\my_esp32", action="flash", port="COM3")
 
 `/prefs` takes a `build` block (`{"toolchain":"idf","flasher":"openocd","dir":"…"}`) and an unknown value is refused
 rather than silently stored as `auto`, so "which compiler does this use" has one answer a script can read.
+
+**Arduino is the fourth family, and it needs one fact the others do not: the board.** `arduino-cli` names a board with an
+FQBN (`arduino:avr:uno`), and which FQBN applies is read from, in order: `sketch.yaml` (`default_fqbn:`, which is what
+`arduino-cli sketch new` writes), the `board` argument, or `arduino-cli board list --format json` - the last one only
+answers for a board that is actually plugged in, which is exactly right for `upload` and useless for `compile`. A sketch
+is recognised the way arduino-cli recognises one: a folder containing a `.ino` of the same name.
+
+Verified here without any board: `arduino-cli compile --fqbn arduino:avr:uno` on a 220-byte Blink sketch reported
+`Sketch uses 924 bytes (2%) of program storage space` and `Global variables use 9 bytes (0%)`, with the AVR core
+(`arduino:avr@1.8.8`) installed by the tool's own instructions. The upload leg is the same `arduino-cli upload` call and
+needs a board on a COM port.
 
 **Verified on a real board (STM32F103C8T6 clone, no ST-Link):** wired PA9/PA10 to the CH340 that was already on COM3,
 `BOOT0=1` + reset, `flasher="uart"` wrote 212 bytes, `Verification OK`, the 212 bytes were read back and hashed

@@ -13,10 +13,12 @@ import {
   FLASHERS,
   OPENOCD_TARGETS,
   TOOLCHAINS,
+  boardFromList,
   buildPlan,
   detectProject,
   findFirmware,
   flashPlan,
+  fqbnFromSketchYaml,
   keilFamily,
   normalizeBuildPrefs,
   runPlan,
@@ -149,6 +151,53 @@ await test("a board with no debugger flashes over its own UART bootloader", () =
   assert.match(flashPlan({ kind: "cmake", flasher: "uart", port: "COM3", python: "p" }).error, /固件/);
   assert.match(flashPlan({ kind: "cmake", flasher: "uart", file: "a.bin", python: "p" }).error, /串口/);
 });
+await test("an Arduino sketch is a folder with a matching .ino, and the board is a separate question", () => {
+  const dir = "C:\\work\\arduino-blink";
+  const found = detectProject({ dir, ...fakeDir({ [dir]: ["arduino-blink.ino", "sketch.yaml"] }) });
+  assert.equal(found.kind, "arduino");
+  assert.equal(found.evidence, "arduino-blink.ino");
+  assert.equal(found.folderMatch, true, "the name matches the folder, which is arduino-cli's rule");
+
+  // arduino-cli's own project file is the first place the board can be stated.
+  assert.equal(fqbnFromSketchYaml("default_fqbn: arduino:avr:uno\n"), "arduino:avr:uno");
+  // A profiles block carries the fqbn too; one profile is the common case, and the choice is printed.
+  assert.equal(fqbnFromSketchYaml('profiles:\n  fqbn: "esp32:esp32:esp32"\n'), "esp32:esp32:esp32");
+  assert.equal(fqbnFromSketchYaml(""), "");
+
+  // Building needs the board; a missing FQBN is a sentence, not a spawn of "undefined".
+  const plan = buildPlan({ kind: "arduino", dir, arduinoCli: "arduino-cli.exe", fqbn: "arduino:avr:uno" });
+  assert.deepEqual(plan.args, ["compile", "--fqbn", "arduino:avr:uno", dir]);
+  assert.match(buildPlan({ kind: "arduino", dir, arduinoCli: "arduino-cli.exe" }).error, /板子型号/);
+  assert.match(buildPlan({ kind: "arduino", dir, fqbn: "arduino:avr:uno" }).error, /arduino-cli/);
+
+  // Uploading needs the port as well.
+  const flash = flashPlan({ kind: "arduino", dir, arduinoCli: "arduino-cli.exe", fqbn: "arduino:avr:uno", port: "COM3" });
+  assert.deepEqual(flash.args, ["upload", "--fqbn", "arduino:avr:uno", "-p", "COM3", dir]);
+  assert.match(flashPlan({ kind: "arduino", dir, arduinoCli: "a", fqbn: "arduino:avr:uno" }).error, /串口/);
+  // auto: an arduino project goes to arduino-cli, not to openocd or uart.
+  assert.equal(flashPlan({ kind: "arduino", dir, arduinoCli: "a", fqbn: "f", port: "COM3" }).tool, "a");
+});
+
+await test("the plugged-in board names itself when nobody else did", () => {
+  const listed = JSON.stringify({
+    detected_ports: [
+      { port: { address: "COM3" }, matching_boards: [{ fqbn: "arduino:avr:uno", name: "Arduino Uno" }] },
+      { port: { address: "COM7" }, matching_boards: [] },
+    ],
+  });
+  assert.equal(boardFromList(listed, { port: "COM3" }), "arduino:avr:uno");
+  assert.equal(boardFromList(listed), "arduino:avr:uno", "only one board was recognised, so it is unambiguous");
+  // Two recognised boards and no port is a question, not a guess.
+  const two = JSON.stringify({
+    detected_ports: [
+      { port: { address: "COM3" }, matching_boards: [{ fqbn: "arduino:avr:uno" }] },
+      { port: { address: "COM7" }, matching_boards: [{ fqbn: "esp32:esp32:esp32" }] },
+    ],
+  });
+  assert.equal(boardFromList(two), "");
+  assert.equal(boardFromList(two, { port: "COM7" }), "esp32:esp32:esp32");
+  assert.equal(boardFromList("not json"), "");
+});
 await test("the newest ELF is the one it picks, not the first one it sees", () => {
   const files = {
     "C:\\w\\build": [{ name: "app.elf", isDirectory: () => false }, { name: "boot.bin", isDirectory: () => false }],
@@ -201,8 +250,8 @@ await test("runPlan hands back the output and the exit code the caller must judg
 });
 
 await test("the vocabularies are declared, so a typo is caught rather than passed through", () => {
-  assert.deepEqual(TOOLCHAINS, ["keil", "idf", "cmake", "make"]);
-  assert.deepEqual(FLASHERS, ["uv4", "stcgal", "idf", "openocd", "stflash", "esptool", "uart"]);
+  assert.deepEqual(TOOLCHAINS, ["keil", "idf", "arduino", "cmake", "make"]);
+  assert.deepEqual(FLASHERS, ["uv4", "stcgal", "idf", "arduino", "openocd", "stflash", "esptool", "uart"]);
 });
 
 await test("the override is stored only when it is a real choice", () => {

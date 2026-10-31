@@ -9919,23 +9919,45 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
         const forced = String(args.toolchain ?? prefs?.build?.toolchain ?? "auto").trim().toLowerCase();
         const detected = firmware.detectProject({ dir });
         const kind = forced && forced !== "auto" ? forced : detected.kind;
+
+        // Arduino needs one more fact than "which folder": the board (FQBN). Three places can state it - sketch.yaml
+        // wins (it is what arduino-cli itself writes), then the argument, then whatever is actually plugged in.
+        const arduinoCli = serial.which("arduino-cli", {}) || "";
+        let fqbn = String(args?.board ?? args?.fqbn ?? "").trim();
+        if (kind === "arduino" && !fqbn) {
+          const sketchYaml = join(dir, "sketch.yaml");
+          if (existsSync(sketchYaml)) {
+            try {
+              fqbn = firmware.fqbnFromSketchYaml(readFileSync(sketchYaml, "utf8"));
+            } catch {
+              fqbn = "";
+            }
+          }
+          if (!fqbn && arduinoCli) {
+            const listed = await firmware.runPlan(
+              { tool: arduinoCli, args: ["board", "list", "--format", "json"], note: "arduino-cli board list" },
+              { timeoutMs: 30000 },
+            );
+            fqbn = firmware.boardFromList(listed.output, { port: String(args?.port ?? "").trim() });
+          }
+        }
         const support = serial.serialSupport();
         const idfPy = support.idf?.idfPy ?? "";
         const openocd = serial.which("openocd", {}) || serial.which("openocd.exe", {}) || "";
         const stflash = serial.which("st-flash", {}) || serial.which("st-flash.exe", {}) || "";
         const project = detected.kind === "keil" ? detected.project : "";
         const xml = project ? readFileSync(project, "utf8") : "";
-        return { prefs, dir, kind, detected, support, idfPy, openocd, stflash, project, xml };
+        return { prefs, dir, kind, detected, support, idfPy, openocd, stflash, project, xml, arduinoCli, fqbn };
       };
 
       const projectBuildTool = define({
         name: "project_build",
         description:
-          "Build or flash a firmware project, whichever family it belongs to: a Keil uVision project (.uvprojx - C51 through UV4, or MDK-ARM), an ESP-IDF project (sdkconfig -> idf.py build/flash), or a plain CMake/Make project built with arm-none-eabi-gcc and downloaded through openocd or st-flash. It detects the project from the folder and prints what it picked; toolchain=keil|idf|cmake|make and flasher=uv4|stcgal|idf|openocd|stflash override that. Off until /keil on.",
+          "Build or flash a firmware project, whichever family it belongs to: a Keil uVision project (.uvprojx - C51 through UV4, or MDK-ARM), an ESP-IDF project (sdkconfig -> idf.py build/flash), an Arduino sketch (.ino -> arduino-cli compile/upload), or a plain CMake/Make project built with arm-none-eabi-gcc and downloaded through openocd or st-flash. It detects the project from the folder and prints what it picked; toolchain=keil|idf|cmake|make and flasher=uv4|stcgal|idf|openocd|stflash override that. Off until /keil on.",
         parameters: {
           dir: { type: "string", description: "Project folder. Omit to use the one /keil project remembered." },
           action: { type: "string", description: "build (default) | flash." },
-          toolchain: { type: "string", description: "keil | idf | cmake | make (default: detect from the folder)." },
+          toolchain: { type: "string", description: "keil | idf | arduino | cmake | make (default: detect from the folder)." },
           flasher: { type: "string", description: "uv4 | stcgal | idf | openocd | stflash | esptool (default: by family)." },
           file: { type: "string", description: "Firmware to download (.elf/.bin/.hex). Omit to use the newest one under build\\." },
           target: { type: "string", description: "openocd target, e.g. stm32f4 (default stm32f1)." },
@@ -9953,7 +9975,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
             }
             const plan = await firmwarePlan(args);
             if (plan.error) return `project_build 失败：${plan.error}`;
-            const { dir, kind, detected, idfPy, openocd, stflash, project, xml } = plan;
+            const { dir, kind, detected, idfPy, openocd, stflash, project, xml, arduinoCli, fqbn } = plan;
 
             // A Keil project goes to keil_build, always: it passes `-o` and parses the log, and without that a bare
             // `UV4 -b` exits 0 with an empty console - which is indistinguishable from a successful build. One
@@ -10003,7 +10025,7 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
                 }
               }
 
-              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make, uv4 });
+              const built = firmware.buildPlan({ kind, dir, project, idfPy, cmake, make, uv4, arduinoCli, fqbn });
               const ran = await firmware.runPlan(built, {
                 timeoutMs: Number(args?.timeoutMs) > 0 ? Number(args.timeoutMs) : firmware.BUILD_TIMEOUT_MS,
               });
@@ -10037,6 +10059,8 @@ async function recordInterjection({ chatId, platform, decision, reason, error })
               target: String(args?.target ?? "").trim() || "stm32f1",
               port: String(args?.port ?? "").trim(),
               python: serial.which("python", {}) || serial.which("python3", {}) || "",
+              arduinoCli,
+              fqbn,
               baud: Number(args?.baud) || 0,
               family: String(args?.chip ?? "").trim() || "F1",
               stc,
