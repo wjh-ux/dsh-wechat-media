@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.24.12
+
+- **`scripts/repair-profile-json.ps1`**: the recovery path for a profile that DSH refuses to load. It reports every JSON in the
+  profile with its first three bytes (a BOM shows up as `239,187,191`), validates each one, strips the BOM, lists the
+  `.bak-*` backups the deploy script left behind, and can restore one (`-RestoreBackup`, which does drop the plugin entry -
+  re-run the deploy afterwards). `-CheckOnly` reports without touching anything.
+- Tested against three deliberately broken profiles: a valid JSON with a BOM (`已去掉 BOM（头3字节现在是 123,34,110）`), a
+  file with a stray comma (`Invalid object passed in, ':' or '}' expected` plus its backup listed), and the restore path
+  (`已从 extra.json.bak-… 恢复，内容可解析`).
+- Written with a BOM itself, because Windows PowerShell 5.1 reads a BOM-less file as ANSI and mangles the Chinese text - it
+  failed to even parse until the BOM was added.
 ## 1.24.11
 
 - **The deploy script crashed DSH by writing a UTF-8 BOM into the profile's `package.json`.** Windows PowerShell 5.1's

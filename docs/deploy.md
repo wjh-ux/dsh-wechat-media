@@ -402,6 +402,15 @@ if ($t.Length -gt 0 -and [int][char]$t[0] -eq 0xFEFF) { $t = $t.Substring(1) }
 
 （v1.24.11 起脚本自己就不会写 BOM，并在写之前校验 JSON、写之后检查头三字节。）
 
+来不及记命令的话，仓库里有个专门的修复脚本，它会报告每个 JSON 的头三字节、去掉 BOM、必要时列出 `.bak-*` 备份：
+
+```powershell
+irm https://github.com/wjh-ux/dsh-wechat-media/releases/download/v1.24.12/repair-profile-json.ps1 -OutFile repair-profile-json.ps1
+.\repair-profile-json.ps1 -CheckOnly      # 先看
+.\repair-profile-json.ps1                 # 再修
+.\repair-profile-json.ps1 -RestoreBackup  # 内容本身坏了才用（会丢掉插件入口）
+```
+
 ## 七、出问题怎么查
 
 | 现象 | 原因 | 怎么办 |
