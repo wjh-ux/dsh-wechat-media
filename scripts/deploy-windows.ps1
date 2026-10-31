@@ -794,6 +794,53 @@ if ($CheckOnly) {
     Info "这几项只影响对应功能（没有 stcgal 就烧不了 STC），不影响插件启动和聊天"
   }
 
+  # 光有 --version 不算"能用"：用仓库里的 STM32 模板真编一个固件出来。
+  # 这条是我自己吃亏换来的 —— 之前装完工具链、版本号都对，结果第一次真编译才发现问题是别的。
+  $template = Join-Path $checkout "scripts\stm32-template"
+  $gcc = Get-ChildItem $ToolsRoot -Filter "arm-none-eabi-gcc.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  $cmake = Get-ChildItem $ToolsRoot -Filter "cmake.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ((Test-Path $template) -and $gcc -and $cmake) {
+    Info "用 scripts\stm32-template 真编一个固件（这是'工具链能用'的证据）"
+    $buildDir = Join-Path $env:TEMP ("dsh-toolchain-check-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+    # 工具链得在这个子进程的 PATH 上：把它们各自的 bin 目录拼进来
+    $before = $env:PATH
+    foreach ($tool in @($gcc, $cmake)) {
+      $bin = Split-Path $tool.FullName -Parent
+      if ($env:PATH -notlike "*$bin*") { $env:PATH = "$bin;$env:PATH" }
+    }
+    try {
+      $configure = & $cmake.FullName -S $template -B $buildDir -G Ninja -DCMAKE_TOOLCHAIN_FILE="$template\cmake\arm-none-eabi.cmake" 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        $build = & $cmake.FullName --build $buildDir 2>&1
+        $sizeLine = ($build | Select-String -Pattern '^\s*\d+\s+\d+\s+\d+\s+\d+\s+\w+\s+.*stm32_template\.elf' | Select-Object -Last 1)
+        $elf = Join-Path $buildDir "stm32_template.elf"
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $elf)) {
+          # 只报 text/data/bss 三个数，别把临时路径塞进结果里（那对读的人没用）
+          $summary = ""
+          if ($sizeLine) {
+            $nums = [regex]::Matches($sizeLine.Line.Trim(), '^\s*(\d+)\s+(\d+)\s+(\d+)')
+            if ($nums.Count -gt 0) {
+              $g = $nums[0].Groups
+              $summary = "（text $($g[1].Value) · data $($g[2].Value) · bss $($g[3].Value)）"
+            }
+          }
+          Ok "工具链真能编：$(Format-Bytes (Get-Item $elf).Length) 的 .elf 已生成$summary"
+        } else {
+          Bad "工具链在，但模板编不过（最后几行）"
+          ($build | Select-Object -Last 6) | ForEach-Object { Info $_ }
+        }
+      } else {
+        Bad "cmake 配置失败"
+        ($configure | Select-Object -Last 6) | ForEach-Object { Info $_ }
+      }
+    } finally {
+      $env:PATH = $before
+      Remove-Item $buildDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } elseif (-not $SkipToolchain -and -not $CheckOnly) {
+    Miss "没有 arm-none-eabi-gcc / cmake，跳过'真编一个'的检查"
+  }
+
   if (-not $NoSelfTest -and (Test-Path (Join-Path $checkout "test\smoke.test.mjs"))) {
     Info "跑冒烟测试（不需要硬件、不需要网络）"
     Push-Location $checkout

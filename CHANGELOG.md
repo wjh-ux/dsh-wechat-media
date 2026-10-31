@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.23.9
+
+- **The self-check now compiles a real firmware.** Step 10 builds `scripts/stm32-template` with the just-installed
+  toolchain and reports `✔ 工具链真能编：6 KB 的 .elf 已生成（text 212 · data 0 · bss 0）`. Every `--version` can be
+  green while the thing still cannot compile - that is not hypothetical, it is what made the first version of this
+  script feel finished while it was not. The check is skipped when the toolchain is absent (or by `-SkipToolchain`), and
+  the temporary build directory is removed afterwards.
 ## 1.23.8
 
 - **`-SkipToolchain`**: skips the ARM toolchain (arm-none-eabi-gcc alone is 320 MB). For "I only want to see whether the
