@@ -60,6 +60,8 @@ param(
   [switch]$SkipTools,
   [switch]$SkipArduino,
   [switch]$SkipToolchain,
+  [switch]$SkipCh340,
+  [string]$Ch340Installer = "",
   [switch]$WithEsp32Core,
   [switch]$NoSelfTest,
   [switch]$Offline,
@@ -341,7 +343,7 @@ Info "工具目录 : $ToolsRoot"
 Info "插件目录 : $InstallDir"
 Info "目标 profile : $Profile"
 
-$total = 10
+$total = 11
 $failures = 0
 
 # ── -ResolveOnly：只解析地址 ──────────────────────────────────────────────────
@@ -561,8 +563,58 @@ if ($code) {
   Info "插件自带的 vsix 在第 9 步装（那一步不依赖扩展市场）"
 }
 
-# ── 5. Arduino ────────────────────────────────────────────────────────────────
-Step 5 $total "Arduino（arduino-cli + 核心）"
+# ── 5. 串口驱动（CH340 / CH343 / CP210x）────────────────────────────────────
+Step 5 $total "串口驱动（CH340）"
+if ($SkipCh340) {
+  Miss "按 -SkipCh340 跳过"
+} else {
+  # CH340 的驱动来源只有两个靠谱的：Windows Update（插上设备自动装），或 WCH 官网的安装包。
+  # WCH 的下载页是 JS 单页，没有稳定直链（三个候选 URL 都只返回 text/html），
+  # 所以脚本不替你从第三方镜像下驱动 —— 那玩意儿能伪造签名。这里做的是：
+  #   有 → 报告（并说明来源）
+  #   没有但插着设备 → 告诉你去重插/联网，Windows Update 会装
+  #   你手上有安装包 → -Ch340Installer 指给它，脚本静默装
+  $driverDump = (pnputil /enum-drivers 2>&1 | Out-String)
+  $wchBlocks = ($driverDump -split "(`r?`n){2,}") | Where-Object { $_ -match '(?i)(ch34[0-9a-z]*ser\.inf|provider name:\s*wch)' }
+  $devices = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '(?i)CH34[0-9]|USB-SERIAL CH34|CP210' }
+  $deviceNames = @($devices | ForEach-Object { $_.Name })
+
+  if ($wchBlocks) {
+    $infNames = [regex]::Matches(($wchBlocks -join "`n"), '(?im)^Original Name:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+    $signed = [bool](($wchBlocks -join "`n") -match 'Microsoft Windows Hardware Compatibility Publisher')
+    Ok "CH34x 驱动已装：$($infNames -join ', ')$(if ($signed) { '（签名者 Microsoft，来自 Windows Update）' })"
+  } elseif ($CheckOnly -or $Offline) {
+    Miss "没装 CH340 驱动$(if ($Offline) { '（离线模式不装）' } else { '' })"
+    Info "插上 CH340 设备并联网，Windows 10/11 会自动从 Windows Update 装（本机就是这么来的）"
+  } elseif ($Ch340Installer) {
+    if (-not (Test-Path $Ch340Installer)) { Bad "找不到安装包：$Ch340Installer"; $failures++ }
+    elseif ($Ch340Installer -match '\.inf$') {
+      Info "用 pnputil 装 INF：$Ch340Installer"
+      $out = pnputil /add-driver $Ch340Installer /install 2>&1 | Out-String
+      if ($LASTEXITCODE -eq 0) { Ok "INF 已提交" } else { Bad "pnputil 失败"; ($out -split "`n" | Select-Object -Last 4) | ForEach-Object { Info $_.Trim() }; $failures++ }
+    } else {
+      Info "静默运行安装包：$Ch340Installer /S"
+      $proc = Start-Process $Ch340Installer -ArgumentList @("/S") -Wait -PassThru
+      if ($proc.ExitCode -eq 0) { Ok "安装包退出码 0" } else { Miss "安装包退出码 $($proc.ExitCode)（有的版本不支持 /S，需要图形界面点一下）" }
+    }
+  } else {
+    Miss "没装 CH340 驱动"
+    Info "最省事的办法：插上设备并联网，Windows Update 会自动装（用 -Ch340Installer 也能指定本地安装包）"
+    Info "官方下载页：https://www.wch.cn/downloads/CH341SER_EXE.html"
+  }
+
+  if ($deviceNames.Count -gt 0) {
+    Ok "已识别串口设备：$($deviceNames -join ' / ')"
+    $ports = [System.IO.Ports.SerialPort]::GetPortNames()
+    if ($ports) { Info "当前串口：$($ports -join ', ')" }
+  } else {
+    Info "现在没插着 CH34x / CP210x 设备（不影响安装，插上就能用）"
+  }
+}
+
+# ── 6. Arduino ────────────────────────────────────────────────────────────────
+Step 6 $total "Arduino（arduino-cli + 核心）"
 if ($SkipArduino) {
   Miss "按 -SkipArduino 跳过"
 } else {
@@ -606,8 +658,8 @@ if ($SkipArduino) {
   }
 }
 
-# ── 6. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
-Step 6 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
+# ── 7. ARM 工具链（GCC / CMake / Ninja / OpenOCD）─────────────────────────────
+Step 7 $total "ARM 工具链（arm-none-eabi-gcc / cmake / ninja / openocd）"
 if ($SkipToolchain) {
   Miss "按 -SkipToolchain 跳过（去掉这个开关会装 arm-none-eabi-gcc 320 MB + cmake / ninja / openocd）"
 } else {
@@ -635,8 +687,8 @@ if ($SkipToolchain) {
   }
 
 }
-# ── 7. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
-Step 7 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
+# ── 8. Keil 与 ESP-IDF（只检测，不安装）──────────────────────────────────────
+Step 8 $total "Keil 与 ESP-IDF（只检测；这两个要你自己装）"
 $uv4 = @(
   "$env:LOCALAPPDATA\Keil_v5\UV4\UV4.exe",
   "D:\Keil_v5\UV4\UV4.exe",
@@ -664,8 +716,8 @@ else {
   Info "装法：Espressif 的 IDF 安装器，或 git clone + install.bat"
 }
 
-# ── 8. 插件部署 ───────────────────────────────────────────────────────────────
-Step 8 $total "插件部署（源码 → profile）"
+# ── 9. 插件部署 ───────────────────────────────────────────────────────────────
+Step 9 $total "插件部署（源码 → profile）"
 if ($SkipTools -eq $false -and $CheckOnly) { Info "环境检查模式下不改插件；去掉 -CheckOnly 才会动" }
 
 # 源码位置：显式 -LocalPath > 已存在的 profile 联接 > 默认安装目录（不存在就 clone 一个）
@@ -760,8 +812,8 @@ if ($CheckOnly) {
   Ok "profile 已配置：$profilePkg（bundles 含 dsh-wechat-media）"
 }
 
-# ── 9. 插件自带的 VS Code 扩展（vsix）────────────────────────────────────────
-Step 9 $total "插件自带的 VS Code 扩展"
+# ── 10. 插件自带的 VS Code 扩展（vsix）────────────────────────────────────────
+Step 10 $total "插件自带的 VS Code 扩展"
 if (-not $code) {
   Miss "没有 VS Code，跳过 vsix"
 } else {
@@ -815,8 +867,8 @@ if (-not $code) {
   }
 }
 
-# ── 10. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
-Step 10 $total "自检"
+# ── 11. 自检（让插件自己回答，不靠猜）────────────────────────────────────────
+Step 11 $total "自检"
 if ($CheckOnly) {
   Info "体检模式不跑测试；去掉 -CheckOnly 才会验证"
 } elseif (-not (Test-Path (Join-Path $checkout "scripts\probe-tools.mjs"))) {

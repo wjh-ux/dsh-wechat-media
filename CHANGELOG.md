@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.24.0
+
+- **A serial-driver step, and a decision not to download a driver from the internet.** Step 5 reports the CH340/CH343 state
+  from `pnputil /enum-drivers` (it recognises the Windows-Update copies too - `ch341ser.inf`, `ch343ser.inf`,
+  `Signer Name: Microsoft Windows Hardware Compatibility Publisher`), names any CH34x / CP210x device that is plugged in and
+  the COM ports currently present, and when the driver is missing it says the two things that actually work: plug the
+  board in with a network so Windows Update installs it, or hand the script your own installer
+  (`-Ch340Installer CH341SER.EXE` -> `/S`, or a `.inf` -> `pnputil /add-driver`).
+- Why no automatic download: WCH's page is a JavaScript single-page app. Three candidate URLs all answer `text/html`, and
+  winget has no package. Pulling a driver from a mirror is the one thing worth refusing - a driver is signed code, and a
+  tampered copy is worse than a missing driver.
+- Steps are now 1..11 (numbering verified continuous), `-SkipCh340` skips the new one, and the manual has a section on it.
 ## 1.23.10
 
 - **`stcgal` was never installed on a fresh machine.** Its check had been deferred to the plugin's own resolver (step 10),

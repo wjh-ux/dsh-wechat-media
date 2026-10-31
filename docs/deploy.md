@@ -40,16 +40,17 @@
 ## 二、一条命令做的十件事
 
 ```
-[1/10] 前置条件        Windows / Node.js（缺则装）/ DSH 本体 / ~/.dsh / profile
-[2/10] Python 本体     没有就用 winget 装 Python 3.12
-[3/10] Python 包       pyserial / stcgal / stm32loader（串口烧录用）
-[4/10] VS Code         没有就用 winget 装 VS Code，再装 ms-python.python 扩展
-[5/10] Arduino         arduino-cli + arduino:avr 核心（-WithEsp32Core 才装 esp32 核心）
-[6/10] ARM 工具链       arm-none-eabi-gcc / cmake / ninja / openocd（xpack 便携版）
-[7/10] Keil / ESP-IDF  只检测，不安装
-[8/10] 插件部署         源码 → profile 的目录联接 + package.json
-[9/10] 自带 VS Code 扩展 仓库里的 dsh-wechat-media-vscode-*.vsix
-[10/10] 自检            插件的解析器 + **真编一个 STM32 固件** + 冒烟测试
+[1/11] 前置条件        Windows / Node.js（缺则装）/ DSH 本体 / ~/.dsh / profile
+[2/11] Python 本体     没有就用 winget 或官方安装包装 Python 3.12
+[3/11] Python 包       pyserial / stcgal / stm32loader（并把 pip 的 Scripts 目录加进 PATH）
+[4/11] VS Code         装 VS Code + ms-python.python 扩展
+[5/11] 串口驱动        CH340/CH343：检测（Windows Update 装的也认），缺了给办法
+[6/11] Arduino         arduino-cli + arduino:avr 核心（-WithEsp32Core 才装 esp32 核心）
+[7/11] ARM 工具链       arm-none-eabi-gcc / cmake / ninja / openocd（xpack 便携版）
+[8/11] Keil / ESP-IDF  只检测，不安装
+[9/11] 插件部署         源码 → profile 的目录联接 + package.json
+[10/11] 自带 VS Code 扩展 仓库里的 dsh-wechat-media-vscode-*.vsix
+[11/11] 自检            插件的解析器 + **真编一个 STM32 固件** + 冒烟测试
 ```
 
 下载时会显示**进度条、已下载/总大小、实时速度、剩余时间**，结束再给一行统计：
@@ -187,6 +188,24 @@ irm https://raw.githubusercontent.com/wjh-ux/dsh-wechat-media/main/scripts/deplo
 缺的逐条报出来（`–` 行），不会卡在下载上。
 
 ---
+
+## 四·补、CH340 串口驱动
+
+STC / STM32 的板子大多用 CH340（或 CH343）做 USB 转串口。**这个驱动不用买、也不要从第三方镜像下**
+（驱动能伪造签名）。两条正路：
+
+1. **插上设备并联网**，Windows 10/11 会自动从 Windows Update 装。第 5 步会报告它看到的驱动，
+   例如 `✔ CH34x 驱动已装：ch341ser.inf, ch343ser.inf（签名者 Microsoft，来自 Windows Update）`。
+2. **你手上已经有 WCH 的安装包**时，交给脚本静默装：
+
+```powershell
+.\deploy.ps1 -Ch340Installer D:\CH341SER.EXE   # EXE，用 /S 静默
+.\deploy.ps1 -Ch340Installer D:\ch341ser.inf   # INF，用 pnputil 装
+```
+
+官方下载页：<https://www.wch.cn/downloads/CH341SER_EXE.html>（是 JS 单页，没有稳定直链，所以脚本不去抓）。
+
+不想管这块可以跳过（不影响插件本身）：`.\deploy.ps1 -SkipCh340`。
 
 ## 五、装完做什么
 
